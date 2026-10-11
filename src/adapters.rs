@@ -9,6 +9,23 @@ pub trait FormatAdapter {
     fn name(&self) -> &str;
     fn extract(&self, context: &mut ContextData, input: &Path, extension: &str) -> Result<()>;
 }
+/// Remove ANSI SGR escape sequences (`ESC [ ... m`) from provider output.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('\u{1b}') {
+        out.push_str(&rest[..i]);
+        rest = &rest[i + 1..];
+        if let Some(stripped) = rest.strip_prefix('[') {
+            rest = stripped
+                .split_once(|c: char| c.is_ascii_alphabetic())
+                .map(|(_, tail)| tail)
+                .unwrap_or("");
+        }
+    }
+    out.push_str(rest);
+    out
+}
 pub struct Xberg;
 impl FormatAdapter for Xberg {
     fn name(&self) -> &str {
@@ -18,8 +35,16 @@ impl FormatAdapter for Xberg {
         let executable = std::env::var("DOC_XBERG")
             .context("dependency_unavailable: provision Xberg 1.3.8 and set DOC_XBERG")?;
         let version = providers::command(&executable, &["version"])?;
-        if String::from_utf8_lossy(&version).trim() != "xberg-cli 1.3.8" {
-            bail!("unsupported: Xberg adapter requires evaluated version 1.3.8");
+        // Accept decoration around the version token (e.g. "xberg-cli 1.3.8" or ANSI color,
+        // which older builds may emit despite NO_COLOR).
+        let plain = strip_ansi(String::from_utf8_lossy(&version).trim());
+        let observed = plain
+            .split_whitespace()
+            .last()
+            .unwrap_or("")
+            .trim_start_matches('v');
+        if observed != "1.3.8" {
+            bail!("unsupported: Xberg adapter requires evaluated version 1.3.8 (found {plain:?})");
         }
         if !extension.chars().all(|c| c.is_ascii_alphanumeric()) {
             bail!("unsupported extension");

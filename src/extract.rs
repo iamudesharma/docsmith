@@ -261,10 +261,14 @@ pub fn extract(
             }
         }
     }
-    let result = route(&mut c, input, &bytes, &ext);
-    if let Err(e) = result {
-        c.document.errors.push(failure(&e, None));
-    }
+    let parser_error = match route(&mut c, input, &bytes, &ext) {
+        Ok(()) => None,
+        Err(e) => {
+            let f = failure(&e, None);
+            c.document.errors.push(f.clone());
+            Some(f)
+        }
+    };
     let needs_ocr = c.document.units.iter().any(|u| u.status == "needs_ocr");
     let partial = !c.document.errors.is_empty()
         || !c.document.warnings.is_empty()
@@ -286,6 +290,14 @@ pub fn extract(
         "complete"
     }
     .into();
+    // Attach the engine's reason after status/strictness decisions: a bare `unsupported`
+    // result without the actual message is not actionable, but the diagnostic must not
+    // change the status semantics of the extraction itself.
+    if let Some(f) = parser_error {
+        c.document
+            .warnings
+            .push(format!("parser error: {}", f.message));
+    }
     c.document.elapsed_ms = c.start.elapsed().as_millis();
     atomic_json(&dir.join("result.json"), &c.document)?;
     c.write_manifests(true)?;

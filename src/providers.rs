@@ -5,8 +5,11 @@ use serde_json::{json, Value};
 use std::{path::Path, process::Command};
 
 pub fn command(program: &str, args: &[&str]) -> Result<Vec<u8>> {
+    // Upstream tools (observed: Xberg 1.3.8) colorize even non-TTY stdout, which breaks
+    // exact-match parsing. NO_COLOR is a cross-tool convention and safe for all providers.
     let output = Command::new(program)
         .args(args)
+        .env("NO_COLOR", "1")
         .output()
         .with_context(|| format!("dependency_unavailable: {program}"))?;
     if !output.status.success() {

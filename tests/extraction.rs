@@ -168,6 +168,126 @@ fn resource_limits() {
     )
     .is_err());
 }
+// The Xberg adapter consults the process environment, so tests that set DOC_XBERG and
+// tests that assert its absence must not overlap. These are the only tests touching it.
+static XBERG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn xberg_env_guard(value: Option<&str>) -> impl Drop {
+    let previous = std::env::var("DOC_XBERG").ok();
+    match value {
+        Some(v) => std::env::set_var("DOC_XBERG", v),
+        None => std::env::remove_var("DOC_XBERG"),
+    }
+    struct Restore(Option<String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => std::env::set_var("DOC_XBERG", v),
+                None => std::env::remove_var("DOC_XBERG"),
+            }
+        }
+    }
+    Restore(previous)
+}
+fn provisioned_xberg() -> Option<PathBuf> {
+    let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target/providers/xberg-cli-aarch64-apple-darwin/xberg");
+    candidate.is_file().then_some(candidate)
+}
+#[test]
+fn xberg_missing_cli_is_explicit() {
+    let _lock = XBERG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = xberg_env_guard(None);
+    let d = fixture(
+        "quoted.csv",
+        Options {
+            parser: "xberg".into(),
+            ..Default::default()
+        },
+    );
+    // A missing provisioned engine is a dependency failure, not an unsupported document.
+    assert_eq!(d.status, "failed", "{:?}", d.errors);
+    assert_eq!(d.errors[0].code, "dependency_unavailable");
+    assert!(
+        d.warnings.iter().any(|w| w.contains("DOC_XBERG")),
+        "adapter reason must be surfaced: {:?}",
+        d.warnings
+    );
+}
+#[test]
+fn xberg_rejects_unexpected_version() {
+    let _lock = XBERG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // /bin/echo prints its version argument, which is not 1.3.8; the adapter must refuse
+    // rather than run an unevaluated engine. ANSI-colored upstream output is covered by
+    // the NO_COLOR env and tolerant parse in adapters.rs.
+    let _guard = xberg_env_guard(Some("/bin/echo"));
+    let d = fixture(
+        "quoted.csv",
+        Options {
+            parser: "xberg".into(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(d.status, "unsupported", "{:?}", d.errors);
+    assert!(
+        d.errors[0].message.contains("1.3.8"),
+        "{:?}",
+        d.errors[0].message
+    );
+}
+#[test]
+fn xberg_adapter_maps_units_when_provisioned() {
+    let Some(executable) = provisioned_xberg() else {
+        return;
+    };
+    let _lock = XBERG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = xberg_env_guard(Some(executable.to_str().unwrap()));
+    let d = fixture(
+        "digital.pdf",
+        Options {
+            parser: "xberg".into(),
+            ..Default::default()
+        },
+    );
+    assert!(
+        d.status == "complete" || d.status == "partial",
+        "status {} errors {:?}",
+        d.status,
+        d.errors
+    );
+    assert_eq!(d.units.len(), 2);
+    assert_eq!(d.units[0].kind, "page");
+    assert!(d.units[0].blocks.iter().any(|b| b.text.contains("ONE")));
+    assert_eq!(d.versions["adapter"], "xberg/1.3.8");
+    assert!(
+        d.assets.iter().any(|a| a.mime == "application/json"),
+        "full upstream JSON must be retained"
+    );
+    assert!(
+        d.units[0]
+            .warnings
+            .iter()
+            .any(|w| w.contains("canonical mapping is partial")),
+        "mapping limits must be stated: {:?}",
+        d.units[0].warnings
+    );
+}
+#[test]
+fn direct_parser_is_unaffected_by_doc_xberg() {
+    let Some(executable) = provisioned_xberg() else {
+        return;
+    };
+    let _lock = XBERG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = xberg_env_guard(Some(executable.to_str().unwrap()));
+    let d = fixture("quoted.csv", Options::default());
+    assert_eq!(d.status, "complete", "{:?}", d.errors);
+    let cells = &d.units[0].blocks[0].table.as_ref().unwrap().cells;
+    assert!(
+        cells.iter().any(|c| c.raw == "0012"),
+        "leading zeros must survive: {:?}",
+        cells.iter().map(|c| &c.raw).collect::<Vec<_>>()
+    );
+    assert!(matches!(cells[5].value, serde_json::Value::String(_)));
+}
 #[test]
 fn pdf_native_pages_geometry_without_ocr() {
     if !doc_extractor::providers::available("pdftotext") {

@@ -21,6 +21,8 @@ enum Commands {
         input: PathBuf,
         #[arg(long, default_value = "data/cli-result")]
         output: PathBuf,
+        #[arg(long, value_parser = ["direct", "xberg"])]
+        parser: Option<String>,
         #[arg(long)]
         ocr: bool,
         #[arg(long, default_value = "eng")]
@@ -69,6 +71,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Extract {
             input,
             output,
+            parser,
             ocr,
             languages,
             vision,
@@ -79,6 +82,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::from_slice(&std::fs::read(path)?)?
             } else {
                 Options {
+                    parser: parser.unwrap_or_else(|| Options::default().parser),
                     ocr,
                     languages,
                     vision,
