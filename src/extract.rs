@@ -1,0 +1,1440 @@
+use crate::{diagrams, model::*, providers};
+use anyhow::{bail, Context, Result};
+use calamine::{Data, Reader};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+    time::Instant,
+};
+
+pub const ENGINE_VERSION: &str = concat!("doc-extractor/", env!("CARGO_PKG_VERSION"), "-schema1");
+pub fn parser_fingerprint() -> String {
+    hash(
+        concat!(
+            include_str!("extract.rs"),
+            include_str!("diagrams.rs"),
+            include_str!("providers.rs"),
+            include_str!("adapters.rs"),
+            include_str!("pdf_source.rs"),
+            include_str!("layout.rs"),
+            include_str!("model.rs"),
+            include_str!("charts.rs"),
+            include_str!("markup.rs"),
+            include_str!("../Cargo.lock")
+        )
+        .as_bytes(),
+    )
+}
+pub struct ContextData {
+    pub dir: PathBuf,
+    pub options: Options,
+    pub limits: Limits,
+    pub document: Document,
+    start: Instant,
+    retained: u64,
+}
+pub fn hash(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+pub fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
+    let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+    let bytes = serde_json::to_vec(value)?;
+    let mut file = fs::File::create(&tmp)?;
+    use std::io::Write;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    fs::rename(tmp, path)?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+impl ContextData {
+    pub(crate) fn checkpoint(&mut self, mut u: Unit) -> Result<()> {
+        if self.document.units.len() >= self.limits.units {
+            bail!("limit_exceeded: units");
+        }
+        if !u.errors.is_empty() || !u.warnings.is_empty() {
+            u.status = "partial".into();
+        }
+        let path = self.dir.join("units").join(format!("{}.json", u.id));
+        // Re-extract on resume using deterministic IDs. Atomic replacement retains each successful unit on crashes.
+        atomic_json(&path, &u)?;
+        self.document.units.push(u);
+        let bytes = serde_json::to_vec(&self.document)?;
+        if bytes.len() as u64 + self.retained > self.limits.output_bytes {
+            bail!("limit_exceeded: output bytes");
+        }
+        atomic_json(&self.dir.join("checkpoint.json"), &self.document)?;
+        self.write_manifests(false)?;
+        Ok(())
+    }
+    fn write_manifests(&self, final_result: bool) -> Result<()> {
+        atomic_json(&self.dir.join("assets.json"), &self.document.assets)?;
+        let warnings = self
+            .document
+            .warnings
+            .iter()
+            .chain(self.document.units.iter().flat_map(|u| u.warnings.iter()))
+            .cloned()
+            .collect();
+        let errors = self
+            .document
+            .errors
+            .iter()
+            .chain(self.document.units.iter().flat_map(|u| u.errors.iter()))
+            .cloned()
+            .collect();
+        atomic_json(
+            &self.dir.join("progress.json"),
+            &Progress {
+                units: self.document.units.len(),
+                result_status: if final_result {
+                    Some(self.document.status.clone())
+                } else {
+                    None
+                },
+                warnings,
+                errors,
+            },
+        )
+    }
+    pub(crate) fn asset(&mut self, bytes: &[u8], name: &str, u: &mut Unit) -> Result<String> {
+        let h = hash(bytes);
+        let id = format!("a{}", &h[..24]);
+        if self.document.assets.iter().any(|a| a.id == id) {
+            return Ok(id);
+        }
+        self.retained = self
+            .retained
+            .checked_add(bytes.len() as u64)
+            .context("asset overflow")?;
+        if self.retained > self.limits.output_bytes {
+            bail!("limit_exceeded: asset bytes");
+        }
+        fs::write(self.dir.join("assets").join(&id), bytes)?;
+        let dimensions = image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()
+            .and_then(|r| r.into_dimensions().ok());
+        if dimensions.is_some_and(|(w, h)| w as u64 * h as u64 > self.limits.page_pixels) {
+            bail!("limit_exceeded: image pixels");
+        }
+        let ext = name.rsplit('.').next().unwrap_or("");
+        let provenance = Provenance {
+            unit_id: u.id.clone(),
+            method: "native".into(),
+            source: name.into(),
+            bounds: None,
+            cell_range: None,
+            evidence: vec![],
+        };
+        self.document.assets.push(Asset {
+            id: id.clone(),
+            mime: providers::mime_for(ext).into(),
+            hash: h,
+            bytes: bytes.len() as u64,
+            width: dimensions.map(|d| d.0),
+            height: dimensions.map(|d| d.1),
+            provenance,
+        });
+        Ok(id)
+    }
+    pub(crate) fn figure(&mut self, bytes: &[u8], name: &str, u: &mut Unit) -> Result<()> {
+        let id = self.asset(bytes, name, u)?;
+        u.text("figure", "", name).asset_id = Some(id.clone());
+        let path = self.dir.join("assets").join(&id);
+        if self.options.ocr {
+            let before = u.blocks.len();
+            if let Err(e) = providers::ocr(&path, u, &self.options, &self.limits) {
+                u.errors.push(failure(&e, Some(u.id.clone())));
+            }
+            for b in &mut u.blocks[before..] {
+                b.asset_id = Some(id.clone());
+            }
+        }
+        if self.options.vision {
+            match providers::vision(&path, &self.options) {
+                Ok(v) => {
+                    let b = u.text(
+                        "caption",
+                        v["choices"][0]["message"]["content"].as_str().unwrap_or(""),
+                        "local vision",
+                    );
+                    b.provenance.method = "inferred".into();
+                    b.asset_id = Some(id);
+                    b.attributes = json!({"raw_response":v,"confidence_calibrated":false});
+                    if self.options.interpret_diagrams {
+                        match crate::diagrams::vision_graph(&b.text) {
+                            Ok(graph) => {
+                                b.kind = "diagram".into();
+                                let warnings = graph.warnings.clone();
+                                b.diagram = Some(graph);
+                                u.warnings.extend(warnings);
+                            }
+                            Err(e) => u.warnings.push(format!(
+                                "Vision graph JSON invalid; raw inferred description retained: {e}"
+                            )),
+                        }
+                    }
+                }
+                Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
+            }
+        }
+        Ok(())
+    }
+}
+pub fn failure(e: &anyhow::Error, unit_id: Option<String>) -> Failure {
+    let message = format!("{e:#}");
+    let code = [
+        "limit_exceeded",
+        "unsupported",
+        "dependency_unavailable",
+        "unsafe_xml",
+        "unsafe_endpoint",
+        "password_required",
+        "corrupt",
+        "provider_error",
+    ]
+    .iter()
+    .find(|c| message.contains(**c))
+    .copied()
+    .unwrap_or("extraction_failed");
+    Failure {
+        code: code.into(),
+        message,
+        unit_id,
+    }
+}
+pub fn extract(
+    input: &Path,
+    filename: &str,
+    dir: &Path,
+    options: Options,
+    limits: Limits,
+    id: &str,
+) -> Result<Document> {
+    fs::create_dir_all(dir.join("assets"))?;
+    fs::create_dir_all(dir.join("units"))?;
+    let bytes = fs::read(input)?;
+    if bytes.len() as u64 > limits.upload_bytes {
+        bail!("limit_exceeded: upload bytes");
+    }
+    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+    let mut c = ContextData {
+        dir: dir.to_owned(),
+        options: options.clone(),
+        limits,
+        document: Document {
+            schema_version: "1.0".into(),
+            id: id.into(),
+            hash: hash(&bytes),
+            mime: providers::mime_for(&ext).into(),
+            filename: filename.into(),
+            versions: json!({"engine":ENGINE_VERSION,"parser_fingerprint":parser_fingerprint(),"providers":providers::identity(),"calamine":"0.36.1","pdf":"Poppler CLI (runtime)","ocr":"Tesseract TSV (runtime)"}),
+            options,
+            status: "complete".into(),
+            metadata: json!({}),
+            units: vec![],
+            assets: vec![],
+            warnings: vec![],
+            errors: vec![],
+            elapsed_ms: 0,
+        },
+        start: Instant::now(),
+        retained: 0,
+    };
+    if ext == "pdf" {
+        if let Ok(previous) = fs::read(dir.join("checkpoint.json")) {
+            if let Ok(previous) = serde_json::from_slice::<Document>(&previous) {
+                if previous.hash == c.document.hash
+                    && previous.versions == c.document.versions
+                    && serde_json::to_value(&previous.options)? == serde_json::to_value(&c.options)?
+                {
+                    c.retained = previous.assets.iter().map(|a| a.bytes).sum();
+                    c.document.assets = previous.assets;
+                }
+            }
+        }
+    }
+    let result = route(&mut c, input, &bytes, &ext);
+    if let Err(e) = result {
+        c.document.errors.push(failure(&e, None));
+    }
+    let needs_ocr = c.document.units.iter().any(|u| u.status == "needs_ocr");
+    let partial = !c.document.errors.is_empty()
+        || !c.document.warnings.is_empty()
+        || c.document
+            .units
+            .iter()
+            .any(|u| !u.warnings.is_empty() || !u.errors.is_empty());
+    c.document.status = if c.document.units.is_empty() && !c.document.errors.is_empty() {
+        if c.document.errors.iter().any(|e| e.code == "unsupported") {
+            "unsupported"
+        } else {
+            "failed"
+        }
+    } else if partial {
+        "partial"
+    } else if needs_ocr {
+        "needs_ocr"
+    } else {
+        "complete"
+    }
+    .into();
+    c.document.elapsed_ms = c.start.elapsed().as_millis();
+    atomic_json(&dir.join("result.json"), &c.document)?;
+    c.write_manifests(true)?;
+    fs::write(dir.join("result.md"), markdown(&c.document))?;
+    fs::write(dir.join("result.txt"), crate::model::plaintext(&c.document))?;
+    Ok(c.document)
+}
+fn route(c: &mut ContextData, input: &Path, bytes: &[u8], ext: &str) -> Result<()> {
+    if c.options.parser == "xberg" {
+        use crate::adapters::FormatAdapter;
+        return crate::adapters::Xberg.extract(c, input, ext);
+    }
+    if c.options.parser != "direct" {
+        bail!("unsupported parser");
+    }
+    match ext {
+        "csv" | "tsv" => delimited(c, bytes, ext),
+        "xlsx" | "xls" | "xlsm" | "xlsb" | "ods" => spreadsheet(c, input, bytes, ext),
+        "docx" | "pptx" | "odt" | "odp" | "epub" | "vsdx" => office(c, bytes, ext),
+        "pdf" => pdf(c, input),
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp" | "gif" | "webp" => {
+            let (w, h) = image::ImageReader::open(input)?
+                .with_guessed_format()?
+                .into_dimensions()?;
+            if w as u64 * h as u64 > c.limits.page_pixels {
+                bail!("limit_exceeded: image pixels");
+            }
+            let mut u = Unit::new(0, "image", "Image");
+            c.figure(bytes, &format!("original.{ext}"), &mut u)?;
+            if ext == "png" {
+                if let Some(source) = diagrams::embedded_png(bytes, c.limits.archive_bytes)? {
+                    for (_, g) in diagrams::drawio(&source, c.limits.archive_bytes)? {
+                        u.text("diagram", "", "embedded PNG mxfile").diagram = Some(g);
+                    }
+                }
+            }
+            if !c.options.ocr {
+                u.status = "needs_ocr".into();
+            }
+            c.checkpoint(u)
+        }
+        "drawio" => drawio(c, std::str::from_utf8(bytes)?),
+        "mmd" | "mermaid" | "dot" | "gv" | "puml" | "plantuml" | "dbml" => {
+            let f = match ext {
+                "mmd" => "mermaid",
+                "gv" => "dot",
+                "puml" => "plantuml",
+                v => v,
+            };
+            let g = diagrams::source(std::str::from_utf8(bytes)?, f)?;
+            let mut u = Unit::new(0, "diagram", "Source diagram");
+            u.warnings.extend(g.warnings.clone());
+            let id = c.asset(bytes, &format!("source.{ext}"), &mut u)?;
+            let b = u.text("diagram", std::str::from_utf8(bytes)?, "source");
+            b.diagram = Some(g);
+            b.asset_id = Some(id);
+            c.checkpoint(u)
+        }
+        "svg" => svg(c, std::str::from_utf8(bytes)?, bytes),
+        "eml" => email(c, bytes),
+        "rtf" => rtf(c, bytes),
+        "txt" | "md" | "markdown" | "json" | "xml" | "html" | "htm" => text_document(c, bytes, ext),
+        _ => bail!("unsupported: format {ext}; native extraction adapter not provisioned"),
+    }
+}
+fn drawio(c: &mut ContextData, s: &str) -> Result<()> {
+    for (i, (name, g)) in diagrams::drawio(s, c.limits.archive_bytes)?
+        .into_iter()
+        .enumerate()
+    {
+        let mut u = Unit::new(i, "diagram", name);
+        u.text("diagram", "", "mxGraphModel").diagram = Some(g);
+        let id = c.asset(s.as_bytes(), "source.drawio", &mut u)?;
+        u.blocks[0].asset_id = Some(id);
+        c.checkpoint(u)?;
+    }
+    Ok(())
+}
+fn delimited(c: &mut ContextData, bytes: &[u8], ext: &str) -> Result<()> {
+    std::str::from_utf8(bytes).context("unsupported: CSV encoding must be UTF-8")?;
+    let delimiter = c
+        .options
+        .delimiter
+        .unwrap_or(if ext == "tsv" { '\t' } else { ',' });
+    if !delimiter.is_ascii() || delimiter == '\n' || delimiter == '\r' {
+        bail!("unsupported delimiter");
+    }
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .delimiter(delimiter as u8)
+        .flexible(c.options.flexible_rows)
+        .from_reader(bytes);
+    let mut table = Table {
+        cells: vec![],
+        rows: 0,
+        columns: 0,
+        headers: vec![],
+    };
+    for (r, row) in reader.records().enumerate() {
+        let row = row.context("corrupt CSV")?;
+        table.columns = table.columns.max(row.len());
+        table.rows = r + 1;
+        for (col, raw) in row.iter().enumerate() {
+            table.cells.push(Cell {
+                row: r as u32,
+                column: col as u32,
+                raw: raw.into(),
+                value: json!(raw),
+                formula: None,
+                cached_value: None,
+                row_span: 1,
+                column_span: 1,
+            });
+        }
+        if table.cells.len() > 1_000_000 {
+            bail!("limit_exceeded: cells");
+        }
+    }
+    let mut u = Unit::new(0, "sheet", "Records");
+    u.text("table", "", "records").table = Some(table);
+    c.document.metadata = json!({"encoding":"UTF-8","delimiter":delimiter.to_string(),"header_inference":false,"flexible_rows":c.options.flexible_rows});
+    c.checkpoint(u)
+}
+fn data_value(d: &Data) -> Value {
+    match d {
+        Data::Empty => Value::Null,
+        Data::Int(v) => json!(v),
+        Data::Float(v) => json!(v),
+        Data::Bool(v) => json!(v),
+        Data::DateTime(v) => json!({"type":"excel_datetime","serial":v.as_f64()}),
+        Data::DateTimeIso(v) => json!({"type":"datetime","value":v}),
+        Data::DurationIso(v) => json!({"type":"duration","value":v}),
+        Data::Error(v) => json!({"type":"error","value":v.to_string()}),
+        _ => json!(d.to_string()),
+    }
+}
+fn spreadsheet(c: &mut ContextData, input: &Path, bytes: &[u8], ext: &str) -> Result<()> {
+    let archive = if bytes.starts_with(b"PK") {
+        Some(archive(bytes, &c.limits)?)
+    } else {
+        None
+    };
+    let mut book = calamine::open_workbook_auto(input).context("corrupt spreadsheet")?;
+    let mut sheet_paths = std::collections::HashMap::new();
+    if let Some(entries) = &archive {
+        if let Some(workbook) = entries.get("xl/workbook.xml") {
+            let doc = diagrams::xml(std::str::from_utf8(workbook)?)?;
+            let relationships = relationship_map(entries, "xl/_rels/workbook.xml.rels")?;
+            for sheet in doc.descendants().filter(|n| n.has_tag_name("sheet")) {
+                if let (Some(name), Some(id)) = (
+                    sheet.attribute("name"),
+                    sheet
+                        .attributes()
+                        .find(|a| a.name() == "id" && a.namespace().is_some())
+                        .map(|a| a.value()),
+                ) {
+                    if let Some(target) = relationships.get(id) {
+                        sheet_paths
+                            .insert(name.to_owned(), package_target("xl/workbook.xml", target)?);
+                    }
+                }
+            }
+        }
+    }
+
+    for (i, name) in book.sheet_names().to_vec().into_iter().enumerate() {
+        let mut u = Unit::new(i, "sheet", &name);
+        match book.worksheet_range(&name) {
+            Err(e) => {
+                u.errors.push(Failure {
+                    code: "corrupt".into(),
+                    message: e.to_string(),
+                    unit_id: Some(u.id.clone()),
+                });
+            }
+            Ok(range) => {
+                let formulas = book.worksheet_formula(&name).ok();
+                let (row_offset, col_offset) = range.start().unwrap_or((0, 0));
+                let mut table = Table {
+                    cells: vec![],
+                    rows: range.height(),
+                    columns: range.width(),
+                    headers: vec![],
+                };
+                for (r, col, d) in range.cells() {
+                    let formula = formulas
+                        .as_ref()
+                        .and_then(|f| f.get_value((r as u32 + row_offset, col as u32 + col_offset)))
+                        .filter(|s| !s.is_empty())
+                        .cloned();
+                    let value = data_value(d);
+                    table.cells.push(Cell {
+                        row: r as u32,
+                        column: col as u32,
+                        raw: d.to_string(),
+                        cached_value: formula.as_ref().map(|_| value.clone()),
+                        value,
+                        formula,
+                        row_span: 1,
+                        column_span: 1,
+                    });
+                    if table.cells.len() > 1_000_000 {
+                        bail!("limit_exceeded: cells");
+                    }
+                }
+                if let Some(entries) = &archive {
+                    if ext == "xlsx" || ext == "xlsm" {
+                        if let Some(b) =
+                            entries.get(sheet_paths.get(&name).map(String::as_str).unwrap_or(""))
+                        {
+                            let s = std::str::from_utf8(b)?;
+                            let doc = diagrams::xml(s)?;
+                            let cell_index = table
+                                .cells
+                                .iter()
+                                .enumerate()
+                                .map(|(i, cell)| {
+                                    ((cell.row + row_offset, cell.column + col_offset), i)
+                                })
+                                .collect::<std::collections::HashMap<_, _>>();
+                            for node in doc.descendants().filter(|n| n.has_tag_name("c")) {
+                                if ![Some("s"), Some("inlineStr")].contains(&node.attribute("t")) {
+                                    if let Some((r, col)) = node.attribute("r").and_then(cell_coord)
+                                    {
+                                        if let Some(&index) = cell_index.get(&(r, col)) {
+                                            let cell = &mut table.cells[index];
+                                            if let Some(raw) = node
+                                                .children()
+                                                .find(|n| n.has_tag_name("v"))
+                                                .and_then(|n| n.text())
+                                            {
+                                                cell.raw = raw.to_owned();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            for n in doc.descendants().filter(|n| n.has_tag_name("mergeCell")) {
+                                if let Some(reference) = n.attribute("ref") {
+                                    let coords: Vec<_> =
+                                        reference.split(':').map(cell_coord).collect();
+                                    if coords.len() == 2 {
+                                        if let (Some((r1, c1)), Some((r2, c2))) =
+                                            (coords[0], coords[1])
+                                        {
+                                            if let Some(&index) = cell_index.get(&(r1, c1)) {
+                                                let cell = &mut table.cells[index];
+                                                cell.row_span = r2 - r1 + 1;
+                                                cell.column_span = c2 - c1 + 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let block = u.text("table", "", format!("sheet:{name}"));
+                block.provenance.cell_range = range.end().map(|(r, col)| {
+                    format!(
+                        "{}:{}",
+                        cell_address(row_offset, col_offset),
+                        cell_address(r, col)
+                    )
+                });
+                block.table = Some(table);
+            }
+        }
+        if i == 0 {
+            let id = c.asset(bytes, &format!("original.{ext}"), &mut u)?;
+            u.text("unknown", "Original workbook", "source").asset_id = Some(id);
+            if let Some(entries) = &archive {
+                preserve_package(c, entries, &mut u)?;
+            }
+        }
+        c.checkpoint(u)?;
+    }
+    c.document.metadata = json!({"formula_recalculation":false,"sheet_xml_paths":sheet_paths});
+    Ok(())
+}
+fn cell_coord(s: &str) -> Option<(u32, u32)> {
+    let mut column = 0u32;
+    let mut digits = String::new();
+    for ch in s.chars().filter(|c| *c != '$') {
+        if ch.is_ascii_alphabetic() {
+            column = column
+                .checked_mul(26)?
+                .checked_add(ch.to_ascii_uppercase() as u32 - 'A' as u32 + 1)?;
+        } else if ch.is_ascii_digit() {
+            digits.push(ch);
+        } else {
+            return None;
+        }
+    }
+    Some((
+        digits.parse::<u32>().ok()?.checked_sub(1)?,
+        column.checked_sub(1)?,
+    ))
+}
+fn archive(bytes: &[u8], limits: &Limits) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut zip =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("corrupt ZIP package")?;
+    if zip.len() > limits.archive_entries {
+        bail!("limit_exceeded: archive entries");
+    }
+    let mut total = 0u64;
+    let mut entries = BTreeMap::new();
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).map_err(|e| {
+            if e.to_string().to_lowercase().contains("password") {
+                anyhow::anyhow!("password_required: {e}")
+            } else {
+                anyhow::anyhow!("corrupt archive: {e}")
+            }
+        })?;
+        let name = f.name().to_owned();
+        if f.enclosed_name().is_none()
+            || name.contains('\\')
+            || name.split('/').any(|p| p == "..")
+            || f.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000)
+        {
+            bail!("unsafe archive path");
+        }
+        total = total.checked_add(f.size()).context("archive overflow")?;
+        if total > limits.archive_bytes {
+            bail!("limit_exceeded: archive bytes");
+        }
+        if f.is_dir() {
+            continue;
+        }
+        let mut b = vec![];
+        f.by_ref()
+            .take(limits.archive_bytes + 1)
+            .read_to_end(&mut b)?;
+        if b.len() as u64 > limits.archive_bytes {
+            bail!("limit_exceeded: archive entry");
+        }
+        if entries.insert(name, b).is_some() {
+            bail!("corrupt: duplicate ZIP entry");
+        }
+    }
+    Ok(entries)
+}
+fn preserve_package(
+    c: &mut ContextData,
+    entries: &BTreeMap<String, Vec<u8>>,
+    u: &mut Unit,
+) -> Result<()> {
+    for (name, b) in entries {
+        if name.contains("/media/")
+            || name.starts_with("Pictures/")
+            || name.contains("/embeddings/")
+        {
+            c.figure(b, name, u)?;
+        } else if name.contains("/diagrams/")
+            || name.contains("/charts/")
+            || name.ends_with(".rels")
+            || name.starts_with("visio/")
+            || name == "docProps/core.xml"
+        {
+            let id = c.asset(b, name, u)?;
+            u.text("unknown", "", name).asset_id = Some(id);
+            if name.contains("/charts/") && name.ends_with(".xml") && !name.contains("/_rels/") {
+                crate::charts::extract(b, name, u)?;
+            }
+        }
+    }
+    Ok(())
+}
+fn node_text(n: roxmltree::Node<'_, '_>) -> String {
+    n.descendants()
+        .filter(|v| v.is_text())
+        .filter_map(|v| v.text())
+        .collect::<Vec<_>>()
+        .join("")
+}
+fn office(c: &mut ContextData, bytes: &[u8], ext: &str) -> Result<()> {
+    let entries = archive(bytes, &c.limits)?;
+    if let Some(b) = entries.get("docProps/core.xml") {
+        let doc = diagrams::xml(std::str::from_utf8(b)?)?;
+        let metadata = doc
+            .root_element()
+            .children()
+            .filter(|n| n.is_element())
+            .map(|n| (n.tag_name().name().to_owned(), node_text(n)))
+            .collect::<BTreeMap<_, _>>();
+        c.document.metadata = json!(metadata);
+    }
+    match ext {
+        "docx" => {
+            let s = std::str::from_utf8(
+                entries
+                    .get("word/document.xml")
+                    .context("corrupt DOCX: missing document.xml")?,
+            )?;
+            let doc = diagrams::xml(s)?;
+            let mut u = Unit::new(0, "section", "Logical section 1");
+            let body = doc
+                .descendants()
+                .find(|n| n.has_tag_name("body"))
+                .context("corrupt DOCX body")?;
+            for n in body.children().filter(|n| n.is_element()) {
+                if n.has_tag_name("p") {
+                    word_paragraph(&mut u, n, "word/document.xml");
+                    if n.descendants().any(|n| n.has_tag_name("sectPr")) {
+                        c.checkpoint(u)?;
+                        u = Unit::new(
+                            c.document.units.len(),
+                            "section",
+                            format!("Logical section {}", c.document.units.len() + 1),
+                        );
+                    }
+                } else if n.has_tag_name("tbl") {
+                    word_table(&mut u, n, "word/document.xml");
+                }
+            }
+            for (name, b) in &entries {
+                if name.starts_with("word/")
+                    && (name.contains("footnotes")
+                        || name.contains("endnotes")
+                        || name.contains("header")
+                        || name.contains("footer")
+                        || name.contains("comments"))
+                    && name.ends_with(".xml")
+                {
+                    let d = diagrams::xml(std::str::from_utf8(b)?)?;
+                    for p in d.descendants().filter(|n| n.has_tag_name("p")) {
+                        let block = u.text("footnote", node_text(p), name);
+                        block.attributes = json!({"logical_auxiliary":true});
+                    }
+                }
+            }
+            preserve_package(c, &entries, &mut u)?;
+            u.warnings.push("Word units are logical sections; drawings retain relationship XML, without rendered placement or SmartArt semantics".into());
+            c.checkpoint(u)?;
+        }
+        "pptx" => {
+            let presentation = entries
+                .get("ppt/presentation.xml")
+                .context("corrupt PPTX presentation")?;
+            let doc = diagrams::xml(std::str::from_utf8(presentation)?)?;
+            let rels = relationship_map(&entries, "ppt/_rels/presentation.xml.rels")?;
+            let paths = doc
+                .descendants()
+                .filter(|n| n.has_tag_name("sldId"))
+                .filter_map(|n| {
+                    n.attributes()
+                        .find(|a| a.name() == "id" && a.namespace().is_some())
+                        .and_then(|a| rels.get(a.value()).cloned())
+                })
+                .collect::<Vec<_>>();
+            for (i, path) in paths.iter().enumerate() {
+                let name = package_target("ppt/presentation.xml", path)?;
+                let b = entries.get(&name).context("corrupt PPTX missing slide")?;
+                let d = diagrams::xml(std::str::from_utf8(b)?)?;
+                let mut u = Unit::new(i, "slide", format!("Slide {}", i + 1));
+                for n in d
+                    .descendants()
+                    .filter(|n| n.has_tag_name("sp") || n.has_tag_name("graphicFrame"))
+                {
+                    if n.descendants().any(|n| n.has_tag_name("tbl")) {
+                        if let Some(t) = n.descendants().find(|n| n.has_tag_name("tbl")) {
+                            word_table(&mut u, t, &name);
+                        }
+                    } else {
+                        let text = n
+                            .descendants()
+                            .filter(|n| n.has_tag_name("t"))
+                            .map(node_text)
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let block = u.text("text", text, &name);
+                        block.attributes =
+                            json!({"source_xml":&std::str::from_utf8(b)?[n.range()]});
+                    }
+                }
+                let relationship_path =
+                    format!("ppt/slides/_rels/{}.rels", name.rsplit('/').next().unwrap());
+                for target in relationship_map(&entries, &relationship_path)?.values() {
+                    let target = package_target(&name, target)?;
+                    if let Some(b) = entries.get(&target) {
+                        if target.contains("/media/") {
+                            c.figure(b, &target, &mut u)?;
+                        } else if target.contains("notesSlides/") {
+                            let notes = diagrams::xml(std::str::from_utf8(b)?)?;
+                            u.text(
+                                "footnote",
+                                notes
+                                    .descendants()
+                                    .filter(|n| n.has_tag_name("t"))
+                                    .map(node_text)
+                                    .collect::<Vec<_>>()
+                                    .join(" "),
+                                &target,
+                            );
+                        }
+                    }
+                }
+                c.checkpoint(u)?;
+            }
+            let mut u = Unit::new(
+                c.document.units.len(),
+                "assets",
+                "Presentation source assets",
+            );
+            preserve_package(c, &entries, &mut u)?;
+            if !u.blocks.is_empty() {
+                c.checkpoint(u)?;
+            }
+        }
+        "odt" | "odp" => {
+            let b = entries.get("content.xml").context("corrupt ODF content")?;
+            let d = diagrams::xml(std::str::from_utf8(b)?)?;
+            let roots = if ext == "odp" {
+                d.descendants()
+                    .filter(|n| n.has_tag_name("page"))
+                    .collect::<Vec<_>>()
+            } else {
+                vec![d.root_element()]
+            };
+            for (i, root) in roots.into_iter().enumerate() {
+                let mut u = Unit::new(
+                    i,
+                    if ext == "odp" { "slide" } else { "section" },
+                    format!("Logical unit {}", i + 1),
+                );
+                for n in root
+                    .descendants()
+                    .filter(|n| n.has_tag_name("p") || n.has_tag_name("h"))
+                {
+                    if n.ancestors().any(|p| p.has_tag_name("table-cell")) {
+                        continue;
+                    }
+                    u.text(
+                        if n.has_tag_name("h") {
+                            "heading"
+                        } else {
+                            "text"
+                        },
+                        node_text(n),
+                        "content.xml",
+                    );
+                }
+                for n in root.descendants().filter(|n| n.has_tag_name("table")) {
+                    word_table(&mut u, n, "content.xml");
+                }
+                preserve_package(c, &entries, &mut u)?;
+                u.warnings.push("ODF source order retained; rendered layout and repeated table cells may require a dedicated adapter".into());
+                c.checkpoint(u)?;
+            }
+        }
+        "epub" => {
+            let container = entries
+                .get("META-INF/container.xml")
+                .context("corrupt EPUB container")?;
+            let d = diagrams::xml(std::str::from_utf8(container)?)?;
+            let root = d
+                .descendants()
+                .find(|n| n.has_tag_name("rootfile"))
+                .and_then(|n| n.attribute("full-path"))
+                .context("corrupt EPUB rootfile")?;
+            let opf = diagrams::xml(std::str::from_utf8(
+                entries.get(root).context("missing EPUB OPF")?,
+            )?)?;
+            let manifest = opf
+                .descendants()
+                .filter(|n| n.has_tag_name("item"))
+                .filter_map(|n| Some((n.attribute("id")?, n.attribute("href")?)))
+                .collect::<BTreeMap<_, _>>();
+            for (i, n) in opf
+                .descendants()
+                .filter(|n| n.has_tag_name("itemref"))
+                .enumerate()
+            {
+                let href = manifest
+                    .get(n.attribute("idref").unwrap_or(""))
+                    .context("missing EPUB spine item")?;
+                let path = package_target(root, href)?;
+                let bytes = entries.get(&path).context("missing EPUB chapter")?;
+                let mut u = Unit::new(i, "section", format!("Chapter {}", i + 1));
+                html_blocks(&mut u, std::str::from_utf8(bytes)?, &path);
+                c.checkpoint(u)?;
+            }
+            let mut u = Unit::new(c.document.units.len(), "assets", "EPUB media");
+            for (name, b) in &entries {
+                if ["png", "jpg", "jpeg", "svg", "gif"]
+                    .iter()
+                    .any(|ext| name.ends_with(&format!(".{ext}")))
+                {
+                    let id = c.asset(b, name, &mut u)?;
+                    u.text("figure", "", name).asset_id = Some(id);
+                }
+            }
+            if !u.blocks.is_empty() {
+                c.checkpoint(u)?;
+            }
+        }
+        "vsdx" => {
+            let mut u = Unit::new(0, "source", "Visio source");
+            preserve_package(c, &entries, &mut u)?;
+            u.warnings.push(
+                "Visio source XML preserved; relationship graph interpretation is unsupported"
+                    .into(),
+            );
+            c.checkpoint(u)?;
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+fn relationship_map(
+    entries: &BTreeMap<String, Vec<u8>>,
+    path: &str,
+) -> Result<BTreeMap<String, String>> {
+    let mut map = BTreeMap::new();
+    if let Some(b) = entries.get(path) {
+        let doc = diagrams::xml(std::str::from_utf8(b)?)?;
+        for n in doc.descendants().filter(|n| n.has_tag_name("Relationship")) {
+            if n.attribute("TargetMode") == Some("External") {
+                continue;
+            }
+            if let (Some(id), Some(target)) = (n.attribute("Id"), n.attribute("Target")) {
+                map.insert(id.into(), target.into());
+            }
+        }
+    }
+    Ok(map)
+}
+fn package_target(base: &str, target: &str) -> Result<String> {
+    if target.contains(':') || target.contains('\\') {
+        bail!("unsupported external relationship");
+    }
+    let mut parts = if target.starts_with('/') {
+        vec![]
+    } else {
+        base.split('/').map(str::to_owned).collect::<Vec<_>>()
+    };
+    if !target.starts_with('/') {
+        parts.pop();
+    }
+    for p in target.split('/') {
+        match p {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    bail!("unsafe relationship traversal");
+                }
+            }
+            _ => parts.push(p.into()),
+        }
+    }
+    Ok(parts.join("/"))
+}
+fn word_paragraph(u: &mut Unit, n: roxmltree::Node<'_, '_>, source: &str) {
+    let mut text = String::new();
+    for t in n.descendants() {
+        if t.has_tag_name("t") {
+            text.push_str(&node_text(t));
+        } else if t.has_tag_name("tab") {
+            text.push('\t');
+        } else if t.has_tag_name("br") {
+            text.push('\n');
+        }
+    }
+    let style = n
+        .descendants()
+        .find(|n| n.has_tag_name("pStyle"))
+        .and_then(|n| {
+            n.attributes()
+                .find(|a| a.name() == "val")
+                .map(|a| a.value())
+        });
+    let kind = if n.descendants().any(|n| n.has_tag_name("numPr")) {
+        "list"
+    } else if style.is_some_and(|s| s.to_lowercase().starts_with("heading")) {
+        "heading"
+    } else {
+        "text"
+    };
+    let block = u.text(kind, text, source);
+    block.attributes = json!({"style":style,"hyperlinks":n.descendants().filter(|n|n.has_tag_name("hyperlink")).map(|n|json!({"text":node_text(n),"relationship_id":n.attributes().find(|a|a.name()=="id").map(|a|a.value())})).collect::<Vec<_>>()});
+}
+fn word_table(u: &mut Unit, n: roxmltree::Node<'_, '_>, source: &str) {
+    let mut table = Table {
+        cells: vec![],
+        rows: 0,
+        columns: 0,
+        headers: vec![],
+    };
+    let mut vertical = std::collections::HashMap::<u32, usize>::new();
+    for (r, row) in n
+        .children()
+        .filter(|n| n.has_tag_name("tr") || n.has_tag_name("table-row"))
+        .enumerate()
+    {
+        let mut col = 0;
+        for cell in row
+            .children()
+            .filter(|n| n.has_tag_name("tc") || n.has_tag_name("table-cell"))
+        {
+            let span = cell
+                .descendants()
+                .find(|n| n.has_tag_name("gridSpan"))
+                .and_then(|n| n.attributes().find(|a| a.name() == "val"))
+                .and_then(|a| a.value().parse().ok())
+                .or_else(|| {
+                    cell.attributes()
+                        .find(|a| a.name() == "number-columns-spanned")
+                        .and_then(|a| a.value().parse().ok())
+                })
+                .or_else(|| cell.attribute("gridSpan").and_then(|v| v.parse().ok()))
+                .unwrap_or(1);
+            let merge = cell.descendants().find(|n| n.has_tag_name("vMerge"));
+            if let Some(merge) = merge {
+                let restart = merge
+                    .attributes()
+                    .find(|a| a.name() == "val")
+                    .is_some_and(|a| a.value() == "restart");
+                if restart {
+                    vertical.insert(col, table.cells.len());
+                } else if let Some(index) = vertical.get(&col) {
+                    table.cells[*index].row_span += 1;
+                }
+            } else {
+                vertical.remove(&col);
+            }
+            let raw = node_text(cell);
+            table.cells.push(Cell {
+                row: r as u32,
+                column: col,
+                raw: raw.clone(),
+                value: json!(raw),
+                formula: cell
+                    .attributes()
+                    .find(|a| a.name() == "formula")
+                    .map(|a| a.value().into()),
+                cached_value: None,
+                row_span: cell
+                    .attributes()
+                    .find(|a| a.name() == "number-rows-spanned" || a.name() == "rowSpan")
+                    .and_then(|a| a.value().parse().ok())
+                    .unwrap_or(1),
+                column_span: span,
+            });
+            col += span;
+        }
+        table.rows = r + 1;
+        table.columns = table.columns.max(col as usize);
+        if row.descendants().any(|n| n.has_tag_name("tblHeader")) {
+            table.headers.push(r);
+        }
+    }
+    let b = u.text("table", "", source);
+    b.table = Some(table);
+    b.attributes = json!({"source_xml":&n.document().input_text()[n.range()]});
+}
+fn html_blocks(u: &mut Unit, s: &str, source: &str) {
+    let doc = scraper::Html::parse_document(s);
+    let sel = scraper::Selector::parse("h1,h2,h3,h4,h5,h6,p,li,table,a,img").unwrap();
+    for n in doc.select(&sel) {
+        let tag = n.value().name();
+        if n.ancestors()
+            .filter_map(scraper::ElementRef::wrap)
+            .any(|p| {
+                p.value().name() == "table" || p.value().name() == "li" || p.value().name() == "p"
+            })
+        {
+            continue;
+        }
+        if tag == "table" {
+            let mut table = Table {
+                cells: vec![],
+                rows: 0,
+                columns: 0,
+                headers: vec![],
+            };
+            let rows = scraper::Selector::parse("tr").unwrap();
+            let cells = scraper::Selector::parse("th,td").unwrap();
+            for (r, row) in n.select(&rows).enumerate() {
+                let mut col = 0;
+                for cell in row.select(&cells) {
+                    let raw = cell.text().collect::<Vec<_>>().join(" ");
+                    let span = cell
+                        .value()
+                        .attr("colspan")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1);
+                    table.cells.push(Cell {
+                        row: r as u32,
+                        column: col,
+                        raw: raw.clone(),
+                        value: json!(raw),
+                        formula: None,
+                        cached_value: None,
+                        row_span: cell
+                            .value()
+                            .attr("rowspan")
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(1),
+                        column_span: span,
+                    });
+                    col += span;
+                }
+                table.rows = r + 1;
+                table.columns = table.columns.max(col as usize);
+            }
+            u.text("table", "", source).table = Some(table);
+        } else {
+            let kind = if tag.starts_with('h') {
+                "heading"
+            } else if tag == "li" {
+                "list"
+            } else if tag == "img" {
+                "figure"
+            } else {
+                "text"
+            };
+            let block = u.text(kind, n.text().collect::<Vec<_>>().join(" "), source);
+            block.attributes = json!({"href":n.value().attr("href"),"src":n.value().attr("src"),"alt":n.value().attr("alt")});
+        }
+    }
+    if u.blocks.is_empty() {
+        let body = scraper::Selector::parse("body").unwrap();
+        for n in doc.select(&body) {
+            u.text("text", n.text().collect::<Vec<_>>().join(" "), source);
+        }
+    }
+}
+fn text_document(c: &mut ContextData, bytes: &[u8], ext: &str) -> Result<()> {
+    let s = std::str::from_utf8(bytes).context("unsupported: text encoding must be UTF-8")?;
+    if ext == "xml" && (s.contains("<mxfile") || s.contains("<mxGraphModel")) {
+        return drawio(c, s);
+    }
+    let mut u = Unit::new(0, "section", "Document");
+    match ext {
+        "html" | "htm" => html_blocks(&mut u, s, "HTML"),
+        "json" => {
+            let v: Value = serde_json::from_str(s).context("corrupt JSON")?;
+            let pretty = serde_json::to_string_pretty(&v)?;
+            u.text("text", pretty, "JSON").attributes = v;
+        }
+        "xml" => {
+            let d = diagrams::xml(s)?;
+            u.text("text", node_text(d.root_element()), "XML")
+                .attributes = json!({"source_xml":s});
+        }
+        "md" | "markdown" => {
+            crate::markup::markdown(&mut u, s);
+            let id = c.asset(bytes, "source.md", &mut u)?;
+            u.text("unknown", "Original Markdown", "source.md").asset_id = Some(id);
+        }
+        _ => {
+            u.text("text", s, "UTF-8");
+        }
+    }
+    c.checkpoint(u)
+}
+fn svg(c: &mut ContextData, s: &str, bytes: &[u8]) -> Result<()> {
+    let doc = diagrams::xml(s)?;
+    let mut u = Unit::new(0, "figure", "SVG");
+    let id = c.asset(bytes, "source.svg", &mut u)?;
+    u.text("figure", "", "SVG").asset_id = Some(id);
+    if let Some(content) = doc.root_element().attribute("content") {
+        for (_, g) in diagrams::drawio(content, c.limits.archive_bytes)? {
+            u.text("diagram", "", "SVG content mxfile").diagram = Some(g);
+        }
+    }
+    for n in doc.descendants().filter(|n| {
+        n.has_tag_name("text")
+            || n.has_tag_name("path")
+            || n.has_tag_name("rect")
+            || n.has_tag_name("line")
+            || n.has_tag_name("polygon")
+    }) {
+        let b = u.text(
+            if n.has_tag_name("text") {
+                "text"
+            } else {
+                "unknown"
+            },
+            node_text(n),
+            "SVG",
+        );
+        b.attributes = json!({"tag":n.tag_name().name(),"attributes":n.attributes().map(|a|(a.name(),a.value())).collect::<BTreeMap<_,_>>(),"ancestor_transforms":n.ancestors().filter_map(|p|p.attribute("transform")).collect::<Vec<_>>()});
+    }
+    u.warnings.push(
+        "SVG geometry retained; arbitrary paths do not establish verified graph relationships"
+            .into(),
+    );
+    c.checkpoint(u)
+}
+fn email(c: &mut ContextData, bytes: &[u8]) -> Result<()> {
+    use mailparse::MailHeaderMap;
+    let mail = mailparse::parse_mail(bytes).context("corrupt email")?;
+    c.document.metadata = json!({"subject":mail.headers.get_first_value("Subject"),"from":mail.headers.get_first_value("From"),"to":mail.headers.get_first_value("To"),"date":mail.headers.get_first_value("Date")});
+    let mut u = Unit::new(0, "message", "Email");
+    email_parts(c, &mail, &mut u, 0)?;
+    c.checkpoint(u)
+}
+fn email_parts(
+    c: &mut ContextData,
+    mail: &mailparse::ParsedMail<'_>,
+    u: &mut Unit,
+    depth: usize,
+) -> Result<()> {
+    if depth > 16 {
+        bail!("limit_exceeded: email nesting");
+    }
+    if mail.subparts.is_empty() {
+        if mail.ctype.mimetype == "text/plain" {
+            u.text("text", mail.get_body()?, "email MIME part");
+        } else if mail.ctype.mimetype == "text/html" {
+            html_blocks(u, &mail.get_body()?, "email HTML part");
+        } else {
+            let b = mail.get_body_raw()?;
+            let disposition = mail.get_content_disposition();
+            let filename = disposition
+                .params
+                .get("filename")
+                .map(String::as_str)
+                .unwrap_or("attachment.bin");
+            let id = c.asset(&b, filename, u)?;
+            if let Some(asset) = c.document.assets.iter_mut().find(|a| a.id == id) {
+                asset.mime = mail.ctype.mimetype.clone();
+            }
+            let block = u.text("figure", "", "email attachment");
+            block.asset_id = Some(id);
+            block.attributes = json!({"filename":filename,"mime":mail.ctype.mimetype});
+        }
+    } else {
+        for part in &mail.subparts {
+            email_parts(c, part, u, depth + 1)?;
+        }
+    }
+    Ok(())
+}
+fn rtf(c: &mut ContextData, bytes: &[u8]) -> Result<()> {
+    let s = std::str::from_utf8(bytes).context("unsupported RTF encoding")?;
+    if !s.starts_with("{\\rtf") {
+        bail!("corrupt RTF");
+    }
+    let mut u = Unit::new(0, "section", "RTF logical document");
+    #[cfg(target_os = "macos")]
+    {
+        let path = c.dir.join("source.rtf");
+        fs::write(&path, bytes)?;
+        let output = providers::command(
+            "/usr/bin/textutil",
+            &["-convert", "txt", "-stdout", path.to_str().unwrap()],
+        )?;
+        u.text("text", String::from_utf8_lossy(&output), "macOS textutil");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let re = regex::Regex::new(r"\\[a-zA-Z]+-?\d* ?|[{}]")?;
+        u.text("text", re.replace_all(s, ""), "RTF subset");
+    }
+    let id = c.asset(bytes, "source.rtf", &mut u)?;
+    u.text("unknown", "Original RTF", "source.rtf").asset_id = Some(id);
+    u.warnings.push("RTF text extraction only; original formatting, tables and objects preserved in source asset".into());
+    c.checkpoint(u)
+}
+fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
+    let path = input.to_str().context("invalid PDF path")?;
+    let info = providers::command("pdfinfo", &[path]).map_err(|e| {
+        if format!("{e:#}").contains("password") {
+            anyhow::anyhow!("password_required: PDF is encrypted")
+        } else {
+            e
+        }
+    })?;
+    let info = String::from_utf8_lossy(&info);
+    c.document.metadata = json!({"pdfinfo":info});
+    let pages = info
+        .lines()
+        .find(|l| l.starts_with("Pages:"))
+        .and_then(|l| l.split_whitespace().last())
+        .and_then(|s| s.parse::<usize>().ok())
+        .context("corrupt PDF: page count")?;
+    if pages > c.limits.units {
+        bail!("limit_exceeded: PDF pages");
+    }
+    let doctype = regex::Regex::new(r"(?s)<!DOCTYPE[^>]*>")?;
+    let dimensions =
+        regex::Regex::new(r"(?:Page\s+\d+\s+size:|Page size:)\s*([\d.]+)\s+x\s+([\d.]+)")?;
+    for i in 0..pages {
+        if let Ok(bytes) = fs::read(c.dir.join("units").join(format!("u{}.json", i + 1))) {
+            if let Ok(unit) = serde_json::from_slice::<Unit>(&bytes) {
+                if !c.document.assets.is_empty() && unit.kind == "page" && unit.index == i {
+                    c.document.units.push(unit);
+                    continue;
+                }
+            }
+        }
+        let mut u = Unit::new(i, "page", format!("Page {}", i + 1));
+        if i == 0 {
+            let original = fs::read(input)?;
+            let id = c.asset(&original, "original.pdf", &mut u)?;
+            u.text(
+                "figure",
+                "Original PDF preserves vector content",
+                "original.pdf",
+            )
+            .asset_id = Some(id);
+            if let Err(e) = crate::pdf_source::embedded(c, input, &mut u) {
+                u.errors.push(failure(&e, Some(u.id.clone())));
+            }
+        }
+        let page = (i + 1).to_string();
+        let output = providers::command(
+            "pdftotext",
+            &["-f", &page, "-l", &page, "-bbox-layout", path, "-"],
+        );
+        match output {
+            Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
+            Ok(b) => {
+                let raw = String::from_utf8_lossy(&b); // Poppler emits a fixed XHTML doctype; remove it before safe parsing.
+                let s = doctype.replace_all(&raw, "");
+                let doc = diagrams::xml(&s)?;
+                let words = doc
+                    .descendants()
+                    .filter(|n| n.has_tag_name("word"))
+                    .map(|n| {
+                        let num = |a| {
+                            n.attribute(a)
+                                .and_then(|v| v.parse::<f64>().ok())
+                                .unwrap_or(0.)
+                        };
+                        crate::layout::Word {
+                            text: node_text(n),
+                            x: num("xMin"),
+                            y: num("yMin"),
+                            width: num("xMax") - num("xMin"),
+                            height: num("yMax") - num("yMin"),
+                        }
+                    })
+                    .collect();
+                for n in doc.descendants().filter(|n| n.has_tag_name("line")) {
+                    let words = n
+                        .children()
+                        .filter(|n| n.has_tag_name("word"))
+                        .map(node_text)
+                        .collect::<Vec<_>>();
+                    let b = u.text("text", words.join(" "), format!("PDF page {}", i + 1));
+                    let num = |a| {
+                        n.attribute(a)
+                            .and_then(|v| v.parse::<f64>().ok())
+                            .unwrap_or(0.)
+                    };
+                    b.provenance.bounds = Some(Bounds {
+                        x: num("xMin"),
+                        y: num("yMin"),
+                        width: num("xMax") - num("xMin"),
+                        height: num("yMax") - num("yMin"),
+                        coordinate_space: "pdf_points_top_left".into(),
+                    });
+                }
+                crate::layout::pdf_tables(&mut u, words);
+            }
+        }
+        let image_dir = c.dir.join(format!("page-{}-images", i + 1));
+        fs::create_dir_all(&image_dir)?;
+        let prefix = image_dir.join("image");
+        match providers::command(
+            "pdfimages",
+            &[
+                "-f",
+                &page,
+                "-l",
+                &page,
+                "-png",
+                path,
+                prefix.to_str().unwrap(),
+            ],
+        ) {
+            Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
+            Ok(_) => {
+                let mut paths = fs::read_dir(&image_dir)?
+                    .map(|p| p.map(|p| p.path()))
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                paths.sort();
+                for image in paths {
+                    let bytes = fs::read(&image)?;
+                    if let Err(e) =
+                        c.figure(&bytes, image.file_name().unwrap().to_str().unwrap(), &mut u)
+                    {
+                        u.errors.push(failure(&e, Some(u.id.clone())));
+                    }
+                }
+            }
+        }
+        if !u.blocks.iter().any(|b| b.kind == "text") {
+            if c.options.ocr {
+                // Render only a single page, and enforce dimensions before rendering.
+                let page_info = providers::command("pdfinfo", &["-f", &page, "-l", &page, path])?;
+                let page_info = String::from_utf8_lossy(&page_info);
+                let size = dimensions
+                    .captures(&page_info)
+                    .context("unsupported: PDF page dimensions unavailable")?;
+                let w = size[1].parse::<f64>()?;
+                let h = size[2].parse::<f64>()?;
+                if (w * 150. / 72.).ceil() * (h * 150. / 72.).ceil() > c.limits.page_pixels as f64 {
+                    bail!("limit_exceeded: PDF render pixels");
+                }
+                let prefix = c.dir.join(format!("render-{}", i + 1));
+                providers::command(
+                    "pdftoppm",
+                    &[
+                        "-f",
+                        &page,
+                        "-l",
+                        &page,
+                        "-singlefile",
+                        "-r",
+                        "150",
+                        "-png",
+                        path,
+                        prefix.to_str().unwrap(),
+                    ],
+                )?;
+                let image = prefix.with_extension("png");
+                let bytes = fs::read(&image)?;
+                c.figure(&bytes, "page-render.png", &mut u)?;
+            } else {
+                u.status = "needs_ocr".into();
+            }
+        }
+        if u.blocks.iter().any(|b| b.kind == "figure") {
+            u.warnings.push("Embedded images retained; OCR coordinates refer to each asset, with PDF placement unresolved. Word-level native/OCR duplicates suppressed conservatively".into());
+        }
+        if c.options.interpret_diagrams {
+            crate::layout::figure_graph(&mut u);
+            u.warnings.push("Flattened PDF diagrams expose geometry-based label candidates; connector interpretation remains unknown".into());
+        }
+        u.warnings.push("Poppler reading order and text geometry retained; PDF table grids are conservative geometric proposals".into());
+        c.checkpoint(u)?;
+        fs::remove_dir_all(&image_dir)?;
+    }
+    Ok(())
+}
+
+fn cell_address(row: u32, column: u32) -> String {
+    let mut column = column + 1;
+    let mut letters = vec![];
+    while column > 0 {
+        column -= 1;
+        letters.push((b'A' + (column % 26) as u8) as char);
+        column /= 26;
+    }
+    letters.reverse();
+    format!("{}{}", letters.into_iter().collect::<String>(), row + 1)
+}

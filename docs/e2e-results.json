@@ -1,0 +1,30 @@
+{
+  "checks": [
+    "health readiness",
+    "unauthorized upload rejected",
+    "multipart 202",
+    "durable complete {'id': '9f024862-06cd-41a9-b5d5-826464b1588d', 'state': 'completed', 'filename': 'quoted.csv', 'created_at': 1791734751, 'updated_at': 1791734751, 'progress': 1, 'result_status': 'complete', 'error': None, 'warnings': [], 'unit_failures': []}",
+    "canonical cells",
+    "unit endpoint",
+    "derived markdown",
+    "plain text includes cells",
+    "tenant isolation",
+    "tenant-specific cache hit",
+    "cache does not cross tenants",
+    "invalid options rejected",
+    "streamed upload limit returns 413",
+    "body limit returns 413",
+    "asset endpoint",
+    "traversal rejected",
+    "queued cancellation",
+    "running cancellation",
+    "cancel remains cancelled",
+    "enforced process timeout",
+    "crash restart recovers job",
+    "delete removes job and data",
+    "openapi routes"
+  ],
+  "count": 23,
+  "date": "2026-10-11",
+  "platform": "darwin"
+}

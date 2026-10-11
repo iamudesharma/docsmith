@@ -1,0 +1,76 @@
+Process:         llama-server [28978]
+Path:            /opt/homebrew/*/llama-server
+Load Address:    0x10008c000
+Identifier:      llama-server
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  codex [83137]
+Target Type:     live task
+
+Date/Time:       2026-10-11 21:22:44.008 +0530
+Launch Time:     2026-10-11 20:57:03.596 +0530
+OS Version:      macOS 27.0.1 (26A434)
+Report Version:  7
+Analysis Tool:   /usr/bin/vmmap
+
+Physical footprint:         1.1G
+Physical footprint (peak):  1.1G
+Idle exit:                  untracked
+----
+
+ReadOnly portion of Libraries: Total=2.0G resident=132.5M(7%) swapped_out_or_unallocated=1.8G(93%)
+Writable regions: Total=1.6G written=148.2M(9%) resident=2546K(0%) swapped_out=1.1G(69%) unallocated=494.1M(31%)
+
+                                VIRTUAL RESIDENT    DIRTY  SWAPPED VOLATILE   NONVOL    EMPTY   REGION 
+REGION TYPE                        SIZE     SIZE     SIZE     SIZE     SIZE     SIZE     SIZE    COUNT (non-coalesced) 
+===========                     ======= ========    =====  ======= ========   ======    =====  ======= 
+Activity Tracing                   256K      32K       0K      32K       0K      32K       0K        1 
+Deferred Reclaim                  64.0M      16K      16K       0K       0K       0K       0K        1 
+Dispatch Continuations            64.0M       0K       0K     112K       0K       0K       0K        1 
+Guard                            385.0G       0K       0K       0K       0K       0K       0K        1 
+IOAccelerator                       64K      64K      64K       0K       0K       0K       0K        2 
+IOAccelerator (graphics)          6352K     768K       0K     768K       0K     768K    5584K      183 
+IOKit                               64K      64K      64K       0K       0K      16K       0K        4 
+IOSurface                           16K       0K       0K       0K       0K       0K       0K        1 
+Malloc Guard Page                 3616K       0K       0K       0K       0K       0K       0K        4         see MALLOC ZONE table below
+Malloc Large                     257.1M       0K       0K    94.9M       0K       0K       0K        6         see MALLOC ZONE table below
+Malloc Large (empty)              2784K       0K       0K    2592K       0K       0K       0K        1         see MALLOC ZONE table below
+Malloc Large (reserved)           29.9M       0K       0K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+Malloc Metadata                    160K       0K       0K     160K       0K       0K       0K        3         see MALLOC ZONE table below
+Malloc Metadata metadata          1680K       0K       0K     784K       0K       0K       0K        3         see MALLOC ZONE table below
+Malloc Small                      80.0M      16K      16K    43.1M       0K       0K       0K       22         see MALLOC ZONE table below
+Malloc Small (empty)              28.0M       0K       0K      48K       0K       0K       0K        7         see MALLOC ZONE table below
+Malloc Tiny                       4096K       0K       0K     272K       0K       0K       0K        1         see MALLOC ZONE table below
+OS Alloc Once                       32K       0K       0K      16K       0K       0K       0K        1 
+Stack                             15.4M       0K       0K     480K       0K       0K       0K       15 
+Stack Guard                       56.2M       0K       0K       0K       0K       0K       0K       15 
+Untagged                          12.4M       0K       0K    3792K       0K       0K       0K        7 
+__AUTH                            1993K     702K       0K      70K       0K       0K       0K      221 
+__AUTH_CONST                      34.0M    8511K       0K       0K       0K       0K       0K      399 
+__CTF                               824      824       0K       0K       0K       0K       0K        1 
+__DATA                            9639K    2000K       0K    1035K       0K       0K       0K      419 
+__DATA_CONST                      24.5M    6927K      16K      59K       0K       0K       0K      409 
+__DATA_DIRTY                      2141K     550K      48K     509K       0K       0K       0K      351 
+__FONT_DATA                        2352     2352       0K       0K       0K       0K       0K        1 
+__LINKEDIT                         1.6G    16.2M       0K       0K       0K       0K       0K       14 
+__OBJC_RO                        118.0M    36.0M       0K       0K       0K       0K       0K        1 
+__OBJC_RW                         2735K    2256K       0K      47K       0K       0K       0K        1 
+__TEXT                           397.2M   116.3M       0K       0K       0K       0K       0K      482 
+__TPRO_CONST                       132K      20K      16K      32K       0K       0K       0K        4 
+mapped file                        1.1G       0K       0K       0K       0K       0K       0K       12 
+owned unmapped (graphics)           16K      16K      16K       0K       0K       0K       0K        1 
+page table in kernel              1666K    1666K    1666K       0K       0K       0K       0K        1 
+shared memory                      1.0G      32K      32K   952.4M       0K       0K       0K       23 
+unused but dirty shlib __DATA      355K      42K      16K     232K       0K       0K       0K      121 
+===========                     ======= ========    =====  ======= ========   ======    =====  ======= 
+TOTAL                            389.8G   191.6M    1970K     1.1G       0K     816K    5584K     2741 
+
+                                 VIRTUAL   RESIDENT      DIRTY    SWAPPED ALLOCATION      BYTES DIRTY+SWAP          REGION
+MALLOC ZONE                         SIZE       SIZE       SIZE       SIZE      COUNT  ALLOCATED  FRAG SIZE  % FRAG   COUNT
+===========                      =======  =========  =========  =========  =========  =========  =========  ======  ======
+DefaultMallocZone_0x1013c4000     370.7M        16K        16K     139.0M     118384     331.4M         0K      0%      37
+objc-class_rw_t_0x10146c000          32K         0K         0K        32K        702        16K        16K     49%       2
+===========                      =======  =========  =========  =========  =========  =========  =========  ======  ======
+TOTAL                             370.8M        16K        16K     139.0M     119086     331.4M         0K      0%      39
+

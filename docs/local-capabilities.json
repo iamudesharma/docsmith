@@ -1,0 +1,66 @@
+{
+  "engine": "doc-extractor/0.1.0-schema1",
+  "limitations": [
+    "Logical Word/ODT sections are not physical pages",
+    "Legacy DOC/PPT/VSD are unsupported",
+    "Visio/SmartArt source preserved; semantics unsupported",
+    "Text diagram parsers implement documented subsets",
+    "Spreadsheet formulas are not recalculated"
+  ],
+  "native_formats": [
+    "txt",
+    "md",
+    "json",
+    "xml",
+    "html",
+    "csv",
+    "tsv",
+    "xlsx",
+    "xls",
+    "xlsm",
+    "xlsb",
+    "ods",
+    "docx",
+    "pptx",
+    "odt",
+    "odp",
+    "epub",
+    "eml",
+    "rtf",
+    "drawio",
+    "svg",
+    "mermaid",
+    "dot",
+    "plantuml",
+    "dbml",
+    "vsdx"
+  ],
+  "ocr": {
+    "apple_vision": false,
+    "languages": [
+      "eng",
+      "osd",
+      "snum"
+    ],
+    "paddle_onnx": false,
+    "tesseract": true
+  },
+  "offline_default": true,
+  "pdf": {
+    "available": true,
+    "backend": "poppler",
+    "page_geometry": true,
+    "tables": "unvalidated",
+    "vector_source_preserved": true
+  },
+  "vision": {
+    "automatic_downloads": false,
+    "configured": false,
+    "model": null
+  },
+  "xberg": {
+    "configured": false,
+    "mapping": "partial",
+    "required_version": "1.3.8"
+  }
+}

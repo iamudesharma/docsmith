@@ -1,0 +1,37 @@
+{
+  "result": {
+    "content": "Native RTF\n\nSecond paragraph",
+    "mime_type": "application/rtf",
+    "metadata": {
+      "output_format": "plain",
+      "ocr_used": false,
+      "additional": {
+        "character_count": 28,
+        "extraction_method": "native",
+        "source_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/document.rtf",
+        "source_index": 0,
+        "line_count": 3,
+        "paragraph_count": 2,
+        "word_count": 4,
+        "final_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/document.rtf",
+        "source_kind": "uri"
+      }
+    },
+    "extraction_method": "native",
+    "tables": [],
+    "counts": {
+      "pages": 0,
+      "tables": 0,
+      "images": 0
+    },
+    "quality_score": 1.0,
+    "extraction_confidence": {
+      "text_coverage": 1.0,
+      "ocr_aggregate": null,
+      "schema_compliance": "all_valid",
+      "combined": 1.0
+    }
+  },
+  "extraction_time_ms": 6.176374999999999,
+  "peak_memory_bytes": 21282816
+}

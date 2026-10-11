@@ -1,0 +1,77 @@
+{
+  "result": {
+    "content": "name notes number\nAda first, second 0012\nLin two\nlines 3.5",
+    "mime_type": "text/csv",
+    "metadata": {
+      "format": {
+        "format_type": "csv",
+        "row_count": 3,
+        "column_count": 3,
+        "has_header": true,
+        "column_types": [
+          "text",
+          "text",
+          "numeric"
+        ]
+      },
+      "output_format": "plain",
+      "ocr_used": false,
+      "additional": {
+        "final_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/quoted.csv",
+        "source_kind": "uri",
+        "extraction_method": "native",
+        "source_index": 0,
+        "source_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/quoted.csv"
+      }
+    },
+    "extraction_method": "native",
+    "tables": [
+      {
+        "cells": [
+          [
+            "name",
+            "notes",
+            "number"
+          ],
+          [
+            "Ada",
+            "first, second",
+            "0012"
+          ],
+          [
+            "Lin",
+            "two\nlines",
+            "3.5"
+          ]
+        ],
+        "markdown": "| name | notes | number |\n| --- | --- | --- |\n| Ada | first, second | 0012 |\n| Lin | two\nlines | 3.5 |\n",
+        "page_number": 1,
+        "columns": [
+          "name",
+          "notes",
+          "number"
+        ]
+      }
+    ],
+    "counts": {
+      "pages": 0,
+      "tables": 1,
+      "images": 0
+    },
+    "quality_score": 1.0,
+    "processing_warnings": [
+      {
+        "source": "csv",
+        "message": "A cell contains a '|' or newline character, which is not escaped in the generated Markdown table; the rendered table may have misaligned or split columns even though the underlying cell data is intact"
+      }
+    ],
+    "extraction_confidence": {
+      "text_coverage": 1.0,
+      "ocr_aggregate": null,
+      "schema_compliance": "all_valid",
+      "combined": 1.0
+    }
+  },
+  "extraction_time_ms": 6.477166,
+  "peak_memory_bytes": 21626880
+}

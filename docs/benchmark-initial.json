@@ -1,0 +1,227 @@
+{
+  "date": "2026-10-11",
+  "hardware": "hw.model: MacBookAir10,1\nhw.memsize: 8589934592\n",
+  "synthetic_fixtures": true,
+  "runs": [
+    {
+      "fixture": "quoted.csv",
+      "options": {},
+      "elapsed_ms": 329,
+      "process_tree_peak_rss_bytes_sampled": 16711680,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "complete",
+      "errors": [],
+      "ocr_text": "",
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "digital.pdf",
+      "options": {},
+      "elapsed_ms": 238,
+      "process_tree_peak_rss_bytes_sampled": 19709952,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "partial",
+      "errors": [],
+      "ocr_text": "",
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "workbook.xlsx",
+      "options": {},
+      "elapsed_ms": 246,
+      "process_tree_peak_rss_bytes_sampled": 5570560,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "complete",
+      "errors": [],
+      "ocr_text": "",
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "document.docx",
+      "options": {},
+      "elapsed_ms": 252,
+      "process_tree_peak_rss_bytes_sampled": 5570560,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "partial",
+      "errors": [],
+      "ocr_text": "",
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "diagram.drawio",
+      "options": {},
+      "elapsed_ms": 244,
+      "process_tree_peak_rss_bytes_sampled": 5586944,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "complete",
+      "errors": [],
+      "ocr_text": "",
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "scan.png",
+      "options": {
+        "ocr": true,
+        "ocr_provider": "tesseract"
+      },
+      "elapsed_ms": 836,
+      "process_tree_peak_rss_bytes_sampled": 63455232,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "complete",
+      "errors": [],
+      "ocr_text": "",
+      "character_error_rate": 1.0,
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "noisy.png",
+      "options": {
+        "ocr": true,
+        "ocr_provider": "tesseract"
+      },
+      "elapsed_ms": 1072,
+      "process_tree_peak_rss_bytes_sampled": 61997056,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "complete",
+      "errors": [],
+      "ocr_text": "",
+      "character_error_rate": 1.0,
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "rotated.png",
+      "options": {
+        "ocr": true,
+        "ocr_provider": "tesseract"
+      },
+      "elapsed_ms": 720,
+      "process_tree_peak_rss_bytes_sampled": 59817984,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "complete",
+      "errors": [],
+      "ocr_text": "",
+      "character_error_rate": 1.0,
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "scan.png",
+      "options": {
+        "ocr": true,
+        "ocr_provider": "apple_vision"
+      },
+      "elapsed_ms": 858,
+      "process_tree_peak_rss_bytes_sampled": 66781184,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "complete",
+      "errors": [],
+      "ocr_text": "Invoice TOTAL 12345",
+      "character_error_rate": 0.0,
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "noisy.png",
+      "options": {
+        "ocr": true,
+        "ocr_provider": "apple_vision"
+      },
+      "elapsed_ms": 363,
+      "process_tree_peak_rss_bytes_sampled": 52461568,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "complete",
+      "errors": [],
+      "ocr_text": "Invoice TOTAL 12345",
+      "character_error_rate": 0.0,
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "rotated.png",
+      "options": {
+        "ocr": true,
+        "ocr_provider": "apple_vision"
+      },
+      "elapsed_ms": 370,
+      "process_tree_peak_rss_bytes_sampled": 57294848,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "complete",
+      "errors": [],
+      "ocr_text": "Invoice TOTAL 12345",
+      "character_error_rate": 0.0,
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "hindi.png",
+      "options": {
+        "ocr": true,
+        "languages": "hin"
+      },
+      "elapsed_ms": 483,
+      "process_tree_peak_rss_bytes_sampled": 36208640,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "status": "complete",
+      "errors": [],
+      "ocr_text": "",
+      "character_error_rate": 1.0,
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "hindi.png",
+      "options": {
+        "ocr": true,
+        "ocr_provider": "apple_vision",
+        "languages": "hi-IN"
+      },
+      "elapsed_ms": 32345,
+      "process_tree_peak_rss_bytes_sampled": 60391424,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3431.00M  free = 1689.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3423.00M  free = 1697.00M  (encrypted)",
+      "status": "complete",
+      "errors": [],
+      "ocr_text": "\u0928\u092e\u0938\u094d\u0924\u0947 \u092d\u093e\u0930\u0924",
+      "character_error_rate": 0.0,
+      "inferred_descriptions": []
+    },
+    {
+      "fixture": "scan.png",
+      "options": {
+        "vision": true
+      },
+      "elapsed_ms": 7975,
+      "process_tree_peak_rss_bytes_sampled": 23478272,
+      "exit": 0,
+      "swap_before": "vm.swapusage: total = 5120.00M  used = 3423.00M  free = 1697.00M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 5120.00M  used = 3455.56M  free = 1664.44M  (encrypted)",
+      "status": "needs_ocr",
+      "errors": [],
+      "ocr_text": "",
+      "inferred_descriptions": [
+        " Invoice TOTAL 12345"
+      ],
+      "vlm_server_rss_bytes_after": 38174720
+    }
+  ]
+}

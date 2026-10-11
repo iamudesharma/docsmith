@@ -1,0 +1,543 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Document",
+  "type": "object",
+  "properties": {
+    "assets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Asset"
+      }
+    },
+    "elapsed_ms": {
+      "type": "integer",
+      "format": "uint128",
+      "minimum": 0
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Failure"
+      }
+    },
+    "filename": {
+      "type": "string"
+    },
+    "hash": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "metadata": true,
+    "mime": {
+      "type": "string"
+    },
+    "options": {
+      "$ref": "#/$defs/Options"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "units": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Unit"
+      }
+    },
+    "versions": true,
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "hash",
+    "mime",
+    "filename",
+    "versions",
+    "options",
+    "status",
+    "metadata",
+    "units",
+    "assets",
+    "warnings",
+    "errors",
+    "elapsed_ms"
+  ],
+  "$defs": {
+    "Asset": {
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "hash": {
+          "type": "string"
+        },
+        "height": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "id": {
+          "type": "string"
+        },
+        "mime": {
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "mime",
+        "hash",
+        "bytes",
+        "provenance"
+      ]
+    },
+    "Block": {
+      "type": "object",
+      "properties": {
+        "asset_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attributes": true,
+        "diagram": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Diagram"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "table": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Table"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "text",
+        "provenance",
+        "attributes"
+      ]
+    },
+    "Bounds": {
+      "type": "object",
+      "properties": {
+        "coordinate_space": {
+          "type": "string"
+        },
+        "height": {
+          "type": "number",
+          "format": "double"
+        },
+        "width": {
+          "type": "number",
+          "format": "double"
+        },
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height",
+        "coordinate_space"
+      ]
+    },
+    "Cell": {
+      "type": "object",
+      "properties": {
+        "cached_value": true,
+        "column": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "column_span": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "formula": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "raw": {
+          "type": "string"
+        },
+        "row": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "row_span": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "value": true
+      },
+      "required": [
+        "row",
+        "column",
+        "raw",
+        "value",
+        "row_span",
+        "column_span"
+      ]
+    },
+    "Diagram": {
+      "type": "object",
+      "properties": {
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DiagramEdge"
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DiagramNode"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "nodes",
+        "edges",
+        "warnings"
+      ]
+    },
+    "DiagramEdge": {
+      "type": "object",
+      "properties": {
+        "attributes": true,
+        "cardinality": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "method",
+        "attributes"
+      ]
+    },
+    "DiagramNode": {
+      "type": "object",
+      "properties": {
+        "attributes": true,
+        "bounds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Bounds"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "attributes"
+      ]
+    },
+    "Failure": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "unit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "Options": {
+      "type": "object",
+      "properties": {
+        "delimiter": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "flexible_rows": {
+          "type": "boolean",
+          "default": true
+        },
+        "interpret_diagrams": {
+          "type": "boolean",
+          "default": false
+        },
+        "languages": {
+          "type": "string",
+          "default": "eng"
+        },
+        "ocr": {
+          "type": "boolean",
+          "default": false
+        },
+        "ocr_auto_rotate": {
+          "type": "boolean",
+          "default": true
+        },
+        "ocr_provider": {
+          "type": "string",
+          "default": "tesseract"
+        },
+        "parser": {
+          "type": "string",
+          "default": "direct"
+        },
+        "vision": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "Provenance": {
+      "type": "object",
+      "properties": {
+        "bounds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Bounds"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cell_range": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "unit_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "unit_id",
+        "method",
+        "source",
+        "evidence"
+      ]
+    },
+    "Table": {
+      "type": "object",
+      "properties": {
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Cell"
+          }
+        },
+        "columns": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "headers": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "cells",
+        "rows",
+        "columns",
+        "headers"
+      ]
+    },
+    "Unit": {
+      "type": "object",
+      "properties": {
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Block"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Failure"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "index": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "index",
+        "name",
+        "status",
+        "blocks",
+        "warnings",
+        "errors"
+      ]
+    }
+  }
+}

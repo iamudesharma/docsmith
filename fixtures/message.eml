@@ -1,0 +1,16 @@
+From: ada@example.test
+To: lin@example.test
+Subject: Fixture
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=test
+
+--test
+Content-Type: text/plain; charset=utf-8
+
+Email text
+--test
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+
+YWJj
+--test--

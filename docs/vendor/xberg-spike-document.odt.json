@@ -1,0 +1,33 @@
+{
+  "result": {
+    "content": "ODT heading\nODT paragraph",
+    "mime_type": "application/vnd.oasis.opendocument.text",
+    "metadata": {
+      "output_format": "plain",
+      "ocr_used": false,
+      "additional": {
+        "source_index": 0,
+        "source_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/document.odt",
+        "extraction_method": "native",
+        "final_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/document.odt",
+        "source_kind": "uri"
+      }
+    },
+    "extraction_method": "native",
+    "tables": [],
+    "counts": {
+      "pages": 0,
+      "tables": 0,
+      "images": 0
+    },
+    "quality_score": 1.0,
+    "extraction_confidence": {
+      "text_coverage": 1.0,
+      "ocr_aggregate": null,
+      "schema_compliance": "all_valid",
+      "combined": 1.0
+    }
+  },
+  "extraction_time_ms": 5.832125,
+  "peak_memory_bytes": 21856256
+}

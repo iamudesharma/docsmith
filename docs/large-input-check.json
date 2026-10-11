@@ -1,0 +1,10 @@
+{
+  "fixture": "generated 10000 data rows + header; 3 columns",
+  "status": "complete",
+  "rows": 10001,
+  "cells": 30003,
+  "extractor_elapsed_ms": 510,
+  "result_bytes": 3814176,
+  "time_output": "        1.10 real         0.74 user         0.10 sys\n            26279936  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                8300  page reclaims\n                 291  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   6  messages sent\n                   6  messages received\n                   6  signals received\n                  84  voluntary context switches\n                1617  involuntary context switches\n           116245620  instructions retired\n            62094296  cycles elapsed\n             3408304  peak memory footprint\n",
+  "note": "time RSS covers CLI supervisor; not whole process tree. Large real documents remain untested."
+}

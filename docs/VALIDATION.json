@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-11",
+  "platform": "aarch64-apple-darwin",
+  "rust": "1.88.0",
+  "tests_passed": 28,
+  "live_api_checks": 23,
+  "build": "passed (--locked)",
+  "format": "passed",
+  "clippy": "passed (--all-targets -D warnings)",
+  "binary_sha256": "0c20a0ee3cc31d0c5c2ee05f9012d075b5c7e442a6e70f3474d97375c66ce8f2",
+  "cargo_lock_sha256": "9fb27866413ee67bb4114a6852ebfcf042ab79c36bb70135ea6b6f6612633866",
+  "fixture_files": 40,
+  "unrun": [
+    "Linux/Docker runtime (daemon unavailable)",
+    "M1 Pro 16 GB benchmark (host is M1 Air 8 GB)",
+    "Real customer scan/handwriting corpus",
+    "Long soak / backup restoration",
+    "PaddleOCR / ONNX full pipeline",
+    "Full legacy / Visio / SmartArt semantics"
+  ],
+  "optional_validation": [
+    "Tesseract synthetic English/Hindi/rotation/noise CER 0 in benchmark-results.json",
+    "Apple Vision intermittent runtime errors/timeouts",
+    "SmolVLM2 generated valid constrained JSON but wrong ER entities/endpoints; all inferred"
+  ]
+}

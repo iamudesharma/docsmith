@@ -1,0 +1,19 @@
+{
+  "scan.png": "Invoice TOTAL 12345",
+  "noisy.png": "Invoice TOTAL 12345",
+  "rotated.png": "Invoice TOTAL 12345",
+  "diagram": {
+    "nodes": [
+      "users",
+      "orders"
+    ],
+    "edges": [
+      [
+        "orders",
+        "users"
+      ]
+    ]
+  },
+  "synthetic": true,
+  "hindi.png": "\u0928\u092e\u0938\u094d\u0924\u0947 \u092d\u093e\u0930\u0924"
+}

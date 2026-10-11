@@ -1,0 +1,4 @@
+digraph G {
+A [label="Start"];
+A -> B;
+}

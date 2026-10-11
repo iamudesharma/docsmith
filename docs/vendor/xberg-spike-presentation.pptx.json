@@ -1,0 +1,40 @@
+{
+  "result": {
+    "content": "",
+    "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "metadata": {
+      "format": {
+        "format_type": "pptx",
+        "slide_count": 0,
+        "slide_names": [],
+        "image_count": 0,
+        "table_count": 0
+      },
+      "output_format": "plain",
+      "ocr_used": false,
+      "additional": {
+        "source_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/presentation.pptx",
+        "source_index": 0,
+        "final_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/presentation.pptx",
+        "extraction_method": "native",
+        "source_kind": "uri"
+      }
+    },
+    "extraction_method": "native",
+    "tables": [],
+    "counts": {
+      "pages": 0,
+      "tables": 0,
+      "images": 0
+    },
+    "quality_score": 0.0,
+    "extraction_confidence": {
+      "text_coverage": 0.0,
+      "ocr_aggregate": null,
+      "schema_compliance": "all_valid",
+      "combined": 0.4
+    }
+  },
+  "extraction_time_ms": 4.361458000000001,
+  "peak_memory_bytes": 19529728
+}

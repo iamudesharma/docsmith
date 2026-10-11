@@ -1,0 +1,111 @@
+{
+  "result": {
+    "content": "Native page ONE\n\nNative page TWO",
+    "mime_type": "application/pdf",
+    "metadata": {
+      "pages": {
+        "total_count": 2,
+        "unit_type": "page",
+        "boundaries": [
+          {
+            "byte_start": 0,
+            "byte_end": 15,
+            "page_number": 1
+          },
+          {
+            "byte_start": 17,
+            "byte_end": 32,
+            "page_number": 2
+          }
+        ],
+        "pages": [
+          {
+            "number": 1,
+            "dimensions": {
+              "width": 612.0,
+              "height": 792.0
+            },
+            "is_blank": false
+          },
+          {
+            "number": 2,
+            "dimensions": {
+              "width": 612.0,
+              "height": 792.0
+            },
+            "is_blank": false
+          }
+        ]
+      },
+      "format": {
+        "format_type": "pdf",
+        "pdf_version": "1.4",
+        "is_encrypted": false,
+        "width": 612,
+        "height": 792,
+        "page_count": 2,
+        "scanned_confidence": 0.0,
+        "scanned_pages": [],
+        "fabricated_text_pages": [],
+        "implausible_text_pages": []
+      },
+      "output_format": "plain",
+      "ocr_used": false,
+      "additional": {
+        "source_index": 0,
+        "source_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/digital.pdf",
+        "final_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/digital.pdf",
+        "extraction_method": "native",
+        "source_kind": "uri"
+      }
+    },
+    "extraction_method": "native",
+    "tables": [],
+    "counts": {
+      "pages": 2,
+      "tables": 0,
+      "images": 0
+    },
+    "pages": [
+      {
+        "page_number": 1,
+        "content": "Native page ONE",
+        "hierarchy": {
+          "block_count": 1,
+          "blocks": [
+            {
+              "text": "Native page ONE",
+              "font_size": 12.0,
+              "level": "body"
+            }
+          ]
+        },
+        "is_blank": false
+      },
+      {
+        "page_number": 2,
+        "content": "Native page TWO",
+        "hierarchy": {
+          "block_count": 1,
+          "blocks": [
+            {
+              "text": "Native page TWO",
+              "font_size": 12.0,
+              "level": "body"
+            }
+          ]
+        },
+        "is_blank": false
+      }
+    ],
+    "quality_score": 1.0,
+    "extraction_confidence": {
+      "text_coverage": 1.0,
+      "ocr_aggregate": null,
+      "schema_compliance": "all_valid",
+      "combined": 1.0
+    }
+  },
+  "extraction_time_ms": 93.37375,
+  "peak_memory_bytes": 24887296
+}

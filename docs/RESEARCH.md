@@ -1,0 +1,35 @@
+# Research and implemented decisions — 11 October 2026
+
+The supplied brief is retained as BRIEF.md. Its proposals were evaluated against the empty repository and actual installed toolchain. This document records decisions and proof boundaries; advertisements are not measured fidelity.
+
+## Toolchain and engine spike
+
+Observed target: aarch64-apple-darwin, Rust 1.88, MacBookAir10,1 M1 with 8 GB RAM. The installed Poppler/Tesseract/llama.cpp tools were used locally. Xberg 1.3.8 and 1.1.0 both declare Rust 1.92, so neither crate compiles under this toolchain. The pinned 1.3.8 ARM64 CLI distribution ran on seven small fixtures, with OCR, caches, discovery and layout/model downloads disabled. See xberg-spike.json and the exact result snapshots in vendor/.
+
+Xberg is MIT at the engine level. Its native distribution includes separately licensed third-party libraries, including copyleft components; THIRD_PARTY_LICENSES is retained. It is an optional process adapter, not a mandatory linked dependency. Baseline extraction uses direct Rust adapters and preprovisioned local tools.
+
+Direct Calamine 0.36.1 preserves typed values, formulas/cached values and OOXML merge evidence. The Xberg spreadsheet spike's `formulas_Data` reports an address inconsistent with the fixture's A3 formula location; this is a fixture observation, not an exhaustive upstream assessment. DOCX physical pages are not adopted from upstream output: the direct adapter uses logical sections. Early PPTX samples lacked complete package wrappers; the final spike was rerun with the corrected package and its results replace those preliminary samples. Direct CSV retains strings, quoted separators, leading zeros, multiline values and explicit dialect configuration.
+
+pdfium-render 0.9.3 was researched from its official source documentation. PDFium's dynamic library is not provisioned here. Poppler is already installed and supplies native page geometry, embedded images and bounded one-page rendering; it was selected as the working PDF process adapter. Original PDF bytes preserve vectors, and lopdf 0.38 reads embedded source metadata/attachments without unsafe filename extraction. PDF geometric tables are proposals marked inferred; complex reading order/table topology still needs a real corpus. Poppler is GPL-licensed and installed as a separate system tool; distribution obligations remain relevant to container packaging.
+
+## OCR and model choices
+
+Tesseract is the portable baseline. TSV is enabled through an explicit variable rather than depending on a `configs/tsv` file, allowing isolated traineddata directories. Right-angle candidates are evaluated with relative OCR scores, sparse text retried when needed, and geometry mapped back to the original. Scores are not calibrated probabilities. English and Hindi traineddata were separately provisioned for experiments.
+
+Apple Vision reports supported languages at runtime. The actual runtime includes `hi-IN`; no assumption of universal Hindi support is made. GPU requests intermittently failed with e5rt execution errors. The helper uses CPU recognition and a decoded CGImage and was tested separately. This is a platform adapter with an Apple SDK/native Swift helper, not a Python production service.
+
+SmolVLM2 Q4_K_M with the matching Q8 projector was downloaded explicitly for a development benchmark at pinned Hugging Face revision 1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91. Its server runs on literal loopback and admits one request. The adapter emits descriptions and, when requested, JSON graph proposals with inferred provenance. Node IDs/endpoints are validated and raw model output is retained. A model's success at reading an invoice label is not proof of dense-table or ER-relationship fidelity. The original model experiment failed JSON-format adherence on the raster ER fixture. Constraints subsequently produced valid JSON, but the model misidentified Users/Orders as PK/FK nodes and produced incorrect edge endpoints (entity recall 0/2, correct endpoint edges 0/1). This is failed semantic acceptance, despite successful inference plumbing. See the recorded output rather than extrapolating from model size.
+
+PaddleOCR/ONNX remains an optional later experiment. A recognition-only model would not satisfy the required detector/recognizer/preprocessing/postprocessing pipeline. No tested ARM64 detection+recognition bundle was provisioned during this run; the service reports it unavailable. Qwen2.5-VL 3B was not downloaded/benchmarked: the actual 8 GB machine already exhibited significant swap with the small model, and there is no measured stronger-model comparison to report. The requested M1 Pro 16 GB benchmark remains a hardware gate.
+
+## Grammar and source fidelity
+
+The draw.io format snapshot documents Base64 → raw DEFLATE → URI decoding and exported PNG/SVG/PDF source retention. The implementation handles uncompressed/compressed pages, nodes, source/target edges, parent groups, labels, geometry and raw edge/style XML. PNG tEXt/zTXt and SVG content source are supported; PDF metadata/embedded source streams are retained and searched for XML.
+
+Mermaid, Graphviz DOT, PlantUML and DBML official grammar pages were consulted. The implementation is original code for explicit documented subsets, not copied grammar/parser code. Unsupported statements generate warnings. Source ER attributes mark PK/FK only when explicit key evidence is present. Cardinality markers are preserved from the source statement; no missing foreign key is constructed. Visio/SmartArt relationship interpretation remains a separate validation gate; source XML/assets are preserved.
+
+## Snapshots, pinning and licenses
+
+vendor/manifest.json records official URL, retrieval date, release/snapshot identity, SHA-256 and licensing notes. Cargo.lock pins compiled Rust dependencies. vendor/rust-dependencies.json records package versions and declared SPDX licenses from Cargo metadata. Snapshot documentation retains its upstream copyright; the project's MIT license does not relicense third-party files. Models and binaries are ignored, with provisioning identities/checksums recorded instead of committed large artifacts.
+
+Sources: [Xberg](https://github.com/xberg-io/xberg), [Calamine](https://github.com/tafia/calamine), [PDFium wrapper](https://github.com/ajrcarey/pdfium-render), [draw.io file format](https://github.com/jgraph/drawio/wiki/File-Format), [Tesseract](https://github.com/tesseract-ocr/tesseract), [Apple Vision](https://developer.apple.com/documentation/vision/vnrecognizetextrequest), [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR), [llama.cpp multimodal](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal.md), [SmolVLM2 GGUF](https://huggingface.co/ggml-org/SmolVLM2-2.2B-Instruct-GGUF), [Mermaid ER](https://mermaid.js.org/syntax/entityRelationshipDiagram.html), [DOT grammar](https://graphviz.org/doc/info/lang.html), [PlantUML IE](https://plantuml.com/ie-diagram), [DBML](https://dbml.dbdiagram.io/docs/).

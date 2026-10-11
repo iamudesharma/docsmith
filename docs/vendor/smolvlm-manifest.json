@@ -1,0 +1,13 @@
+{
+  "repo": "ggml-org/SmolVLM2-2.2B-Instruct-GGUF",
+  "revision": "1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91",
+  "files": [
+    ".gitattributes",
+    "README.md",
+    "SmolVLM2-2.2B-Instruct-Q4_K_M.gguf",
+    "SmolVLM2-2.2B-Instruct-Q8_0.gguf",
+    "SmolVLM2-2.2B-Instruct-f16.gguf",
+    "mmproj-SmolVLM2-2.2B-Instruct-Q8_0.gguf",
+    "mmproj-SmolVLM2-2.2B-Instruct-f16.gguf"
+  ]
+}

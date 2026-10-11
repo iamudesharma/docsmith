@@ -1,0 +1,86 @@
+[
+  {
+    "fixture": "digital.pdf",
+    "fixture_sha256": "c5004e848e96f3ce25e728b4587230d7a0b0667a0889fe0281c445f5f14e80f7",
+    "elapsed_ms": 218,
+    "exit": 0,
+    "keys": [
+      "result",
+      "extraction_time_ms",
+      "peak_memory_bytes"
+    ],
+    "stderr": ""
+  },
+  {
+    "fixture": "quoted.csv",
+    "fixture_sha256": "6ef8a7a2f0d8b47af82ec542346a75439914eae9aea76349d4a037fa642d14d3",
+    "elapsed_ms": 39,
+    "exit": 0,
+    "keys": [
+      "result",
+      "extraction_time_ms",
+      "peak_memory_bytes"
+    ],
+    "stderr": ""
+  },
+  {
+    "fixture": "workbook.xlsx",
+    "fixture_sha256": "a693a3bdc0d63b272953e3f116e4592cc91a5412a66a5e5fca8575869e770c5d",
+    "elapsed_ms": 39,
+    "exit": 0,
+    "keys": [
+      "result",
+      "extraction_time_ms",
+      "peak_memory_bytes"
+    ],
+    "stderr": ""
+  },
+  {
+    "fixture": "document.docx",
+    "fixture_sha256": "b3c3c86e96ef17c3749dc4d63490ac059219cc74c2d8708507a84b3a405ebbf7",
+    "elapsed_ms": 36,
+    "exit": 0,
+    "keys": [
+      "result",
+      "extraction_time_ms",
+      "peak_memory_bytes"
+    ],
+    "stderr": ""
+  },
+  {
+    "fixture": "presentation.pptx",
+    "fixture_sha256": "789e3f3365896150992b51e5cd9b4d9d29520bc28a164008a739389f0884560a",
+    "elapsed_ms": 32,
+    "exit": 0,
+    "keys": [
+      "result",
+      "extraction_time_ms",
+      "peak_memory_bytes"
+    ],
+    "stderr": ""
+  },
+  {
+    "fixture": "document.odt",
+    "fixture_sha256": "c388f9b1be4986a0aa4c35c02c6b032843dee04149012e41d10efaedaecc517f",
+    "elapsed_ms": 33,
+    "exit": 0,
+    "keys": [
+      "result",
+      "extraction_time_ms",
+      "peak_memory_bytes"
+    ],
+    "stderr": ""
+  },
+  {
+    "fixture": "document.rtf",
+    "fixture_sha256": "4fe7deed19115ceba02caf73a6cf1b963faa702da962bc9f2bc0726bd7da1e7b",
+    "elapsed_ms": 35,
+    "exit": 0,
+    "keys": [
+      "result",
+      "extraction_time_ms",
+      "peak_memory_bytes"
+    ],
+    "stderr": ""
+  }
+]

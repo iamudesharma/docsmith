@@ -1,0 +1,60 @@
+# Build, provision and run
+
+## macOS ARM64
+
+Rust 1.88+ and a compatible Xcode/Command Line Tools SDK are required. The observed host has Xcode's clang 17 plus SDK 27; their linker combination fails on the new `arm64e.x1` architecture in libSystem.tbd. `scripts/cargo-local.sh` selects installed SDK 26.5 per command and was used for local builds/tests. It does not change xcode-select, shell files or system SDKs.
+
+Provision native programs once, e.g. `brew install poppler tesseract`. These downloads are provisioning operations, never document-request behavior. English language data must be present. `TESSDATA_PREFIX=/absolute/local/tessdata` can select an isolated installation; provision `eng.traineddata`, `osd.traineddata` and `hin.traineddata` as needed. Training data licensing and checksums are listed in the vendor manifest.
+
+Build Apple Vision with `scripts/build-apple-vision.sh`, then export its absolute executable path as `DOC_APPLE_VISION`. The helper queries supported languages and rejects unsupported selections. It uses a CPU request and a decoded CGImage, avoiding observed local Vision GPU execution errors. Apple SDK/platform terms apply; this helper is unavailable on Linux.
+
+Xberg's evaluated release is 1.3.8. Its Rust crate requires Rust 1.92; the direct backend builds on 1.88. The 1.3.8 ARM64 CLI release was evaluated as a standalone process; set `DOC_XBERG=/absolute/path/to/xberg` while keeping its bundled dylibs together. It is optional. The upstream bundle includes third-party libraries with separate licensing obligations; do not assume the MIT engine license covers all bundled libraries. The downloaded bundle is ignored under target/, and attribution files are retained under docs/vendor/.
+
+## Local vision
+
+Use a provisioned llama.cpp server. The measured installation reports build 11146, commit 7fe450e19. Use `scripts/run-vision.sh` after separately placing the GGUF files in models/:
+
+- repository: `ggml-org/SmolVLM2-2.2B-Instruct-GGUF`
+- evaluated revision: `1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91`
+- `SmolVLM2-2.2B-Instruct-Q4_K_M.gguf`
+- matching `mmproj-SmolVLM2-2.2B-Instruct-Q8_0.gguf`
+
+The helper script does not download files. Weights are ignored by Git. Set `DOC_VLM_URL=http://127.0.0.1:8799`, `DOC_VLM_MODEL=SmolVLM2`, and an immutable `DOC_VLM_REVISION` (weights/projector/context/quantization identity) if enabling VLM result caching. A server-owned file lock admits one model request at a time across workers. Request cancellation closes the HTTP call; the external llama.cpp server owns its inference cancellation behavior. Server-side memory is outside the extraction worker memory quota.
+
+The actual test host is **MacBookAir10,1, M1, 8 GB**, not the brief's M1 Pro 16 GB. See measured RSS and swap snapshots in benchmark-results.json. GGUF size, worker RSS and model-server RSS are distinct; Metal allocations and compressed memory need whole-system monitoring. Do not increase concurrency from this small synthetic experiment.
+
+## Configuration and authentication
+
+```json
+{
+  "bind": "127.0.0.1:8787",
+  "data_dir": "data/service",
+  "tokens": {"replace-with-secret-token": "tenant-a"},
+  "limits": {
+    "workers": 2,
+    "queued_jobs": 100,
+    "upload_bytes": 33554432,
+    "archive_bytes": 134217728,
+    "archive_entries": 4096,
+    "units": 1000,
+    "page_pixels": 20000000,
+    "output_bytes": 67108864,
+    "timeout_seconds": 120,
+    "memory_bytes": 2147483648
+  }
+}
+```
+
+`doc-extractor serve --config configuration.json` reads this file. Unspecified fields use defaults. `DOC_TOKENS` can provide the token-to-tenant JSON mapping through the environment. Keep secrets outside source control; protect the data directory with service-user filesystem permissions. All resource endpoints enforce the mapped tenant. Liveness, readiness, capabilities and OpenAPI expose no document content and do not require authentication. Readiness confirms the job database; missing optional parsers are reported separately in capabilities.
+
+The server defaults to loopback. A non-loopback bind requires bearer tokens. Place a TLS reverse proxy in front for network deployment and apply connection/body/rate limits there. Do not share one SQLite directory across multiple servers. Run as an unprivileged service user. A container/cgroup or OS sandbox adds a strict memory and filesystem/network security boundary; process isolation here contains parser crashes but is not a security sandbox.
+
+Job state, input, checkpoints, logs and assets are retained until DELETE. Back up the SQLite database and its job directories as one consistent snapshot while stopped, or use SQLite's backup API and matching immutable job snapshots. Restore into a private stopped directory, then restart. Interrupted jobs requeue and PDF checkpoints can resume completed pages; other formats safely reparse retained input. Long-soak, backup restoration and multi-host deployments have not been validated.
+
+## Linux
+
+The Dockerfile and CI workflow install Poppler and English/Hindi Tesseract data. Apple Vision is unavailable. Linux adds RLIMIT_AS to the sampled process-tree RSS guard. The image includes GPL-licensed system tools through the distribution package manager; comply with redistribution obligations. Local macOS tests do not establish Linux/container compatibility; CI execution is a remaining gate unless its results are available.
+
+## API status semantics
+
+POST `/v1/extractions` uses multipart `file` plus JSON-encoded `options`; success returns 202 `{id,cached}`. Poll GET job for `queued`, `running`, `completed`, `failed` or `cancelled`. GET result returns 409 until the job completes. Unit checkpoints can be retrieved earlier. A completed job can have partial/unsupported/failed document coverage. GET assets returns original bytes as an attachment. POST cancel is idempotent. DELETE cancels, waits for worker termination, removes retained files/DB row and returns 204; if termination is still pending it returns retryable 409. Error responses have `{error:{code,message}}`. Limits produce 413 for upload bytes and 429 for queue saturation; document/unit failures retain successful units.

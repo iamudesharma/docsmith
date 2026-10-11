@@ -1,0 +1,8 @@
+Table users {
+ id int [pk]
+ name varchar
+}
+Table orders {
+ user_id int [ref: > users.id]
+}
+Ref: orders.user_id > users.id

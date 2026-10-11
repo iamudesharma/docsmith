@@ -1,0 +1,3 @@
+hw.model: MacBookAir10,1
+hw.memsize: 8589934592
+vm.swapusage: total = 4096.00M  used = 3547.12M  free = 548.88M  (encrypted)

@@ -1,0 +1,90 @@
+{
+  "result": {
+    "content": "  Data\nHeader \n2 3\n5",
+    "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "metadata": {
+      "format": {
+        "format_type": "excel",
+        "sheet_count": 1,
+        "sheet_names": [
+          "Data"
+        ]
+      },
+      "output_format": "plain",
+      "ocr_used": false,
+      "additional": {
+        "extraction_method": "native",
+        "final_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/workbook.xlsx",
+        "formulas_Data": "A1=SUM(A2:B2)",
+        "sheet_count": "1",
+        "source_kind": "uri",
+        "source_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/workbook.xlsx",
+        "source_index": 0,
+        "sheet_names": "Data"
+      }
+    },
+    "extraction_method": "native",
+    "tables": [
+      {
+        "cells": [
+          [
+            "Header",
+            ""
+          ],
+          [
+            "2",
+            "3"
+          ],
+          [
+            "5",
+            ""
+          ]
+        ],
+        "markdown": "| Header |  |\n| --- | --- |\n| 2 | 3 |\n| 5 |  |\n",
+        "page_number": 1
+      }
+    ],
+    "counts": {
+      "pages": 1,
+      "tables": 1,
+      "images": 0
+    },
+    "pages": [
+      {
+        "page_number": 1,
+        "content": "## Data\n\n## Data\n\n| Header |  |\n| --- | --- |\n| 2 | 3 |\n| 5 |  |\n",
+        "tables": [
+          {
+            "cells": [
+              [
+                "Header",
+                ""
+              ],
+              [
+                "2",
+                "3"
+              ],
+              [
+                "5",
+                ""
+              ]
+            ],
+            "markdown": "## Data\n\n| Header |  |\n| --- | --- |\n| 2 | 3 |\n| 5 |  |\n",
+            "page_number": 1
+          }
+        ],
+        "is_blank": false,
+        "sheet_name": "Data"
+      }
+    ],
+    "quality_score": 1.0,
+    "extraction_confidence": {
+      "text_coverage": 1.0,
+      "ocr_aggregate": null,
+      "schema_compliance": "all_valid",
+      "combined": 1.0
+    }
+  },
+  "extraction_time_ms": 11.215708,
+  "peak_memory_bytes": 22675456
+}

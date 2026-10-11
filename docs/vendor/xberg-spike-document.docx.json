@@ -1,0 +1,127 @@
+{
+  "result": {
+    "content": "Word heading\nMerged cell \nA B\n\nSection one\n\nSection two",
+    "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "metadata": {
+      "title": "Fixture Word",
+      "pages": {
+        "total_count": 1,
+        "unit_type": "page",
+        "boundaries": [
+          {
+            "byte_start": 0,
+            "byte_end": 107,
+            "page_number": 1
+          }
+        ],
+        "pages": [
+          {
+            "number": 1
+          }
+        ]
+      },
+      "format": {
+        "format_type": "docx",
+        "core_properties": {
+          "title": "Fixture Word",
+          "subject": null,
+          "creator": null,
+          "keywords": null,
+          "description": null,
+          "last_modified_by": null,
+          "revision": null,
+          "created": null,
+          "modified": null,
+          "category": null,
+          "content_status": null,
+          "language": null,
+          "identifier": null,
+          "version": null,
+          "last_printed": null
+        },
+        "app_properties": {
+          "application": null,
+          "app_version": null,
+          "template": null,
+          "total_time": null,
+          "pages": null,
+          "words": null,
+          "characters": null,
+          "characters_with_spaces": null,
+          "lines": null,
+          "paragraphs": null,
+          "company": null,
+          "doc_security": null,
+          "scale_crop": null,
+          "links_up_to_date": null,
+          "shared_doc": null,
+          "hyperlinks_changed": null
+        },
+        "custom_properties": {}
+      },
+      "output_format": "plain",
+      "ocr_used": false,
+      "additional": {
+        "source_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/document.docx",
+        "extraction_method": "native",
+        "source_index": 0,
+        "final_uri": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/document.docx",
+        "source_kind": "uri"
+      }
+    },
+    "extraction_method": "native",
+    "tables": [
+      {
+        "cells": [
+          [
+            "Merged cell",
+            ""
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "markdown": "| Merged cell |  |\n| --- | --- |\n| A | B |\n",
+        "page_number": 1
+      }
+    ],
+    "counts": {
+      "pages": 1,
+      "tables": 1,
+      "images": 0
+    },
+    "pages": [
+      {
+        "page_number": 1,
+        "content": "# Word heading\n\n| Merged cell |     |\n| ----------- | --- |\n| A           | B   |\n\nSection one\n\nSection two",
+        "tables": [
+          {
+            "cells": [
+              [
+                "Merged cell",
+                ""
+              ],
+              [
+                "A",
+                "B"
+              ]
+            ],
+            "markdown": "| Merged cell |  |\n| --- | --- |\n| A | B |\n",
+            "page_number": 1
+          }
+        ],
+        "is_blank": false
+      }
+    ],
+    "quality_score": 1.0,
+    "extraction_confidence": {
+      "text_coverage": 1.0,
+      "ocr_aggregate": null,
+      "schema_compliance": "all_valid",
+      "combined": 1.0
+    }
+  },
+  "extraction_time_ms": 8.341667000000001,
+  "peak_memory_bytes": 22347776
+}
