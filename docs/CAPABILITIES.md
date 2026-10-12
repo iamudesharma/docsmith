@@ -35,4 +35,4 @@ Status is about actual extraction coverage, not advertised file extensions. All 
 
 `GET /v1/capabilities` reports installed native/OCR languages and configured optional engines. A provisioned language/model is distinct from tested accuracy. Document statuses are `complete`, `partial`, `needs_ocr`, `unsupported` and `failed`; successful units and structured failures survive incomplete extraction.
 
-Unrun gates: real customer scanned/handwritten documents, long-soak and adversarial corpus, complex PDF topology, full legacy/Visio/SmartArt syntax, PaddleOCR/ONNX pipeline, stronger VLM comparison, M1 Pro 16 GB benchmark, Linux CI/container runtime and backup restoration.
+Unrun gates: real customer scanned/handwritten documents, long-soak and adversarial corpus, complex PDF topology, full legacy/Visio/SmartArt syntax, PaddleOCR/ONNX pipeline, stronger VLM comparison, M1 Pro 16 GB benchmark, container runtime and backup restoration. Linux execution is provided by the GitHub Actions workflow (`.github/workflows/benchmark.yml`, manual or weekly); local macOS runs cannot substitute for its results.

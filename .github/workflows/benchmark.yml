@@ -1,0 +1,33 @@
+name: benchmark-linux
+# Runs the synthetic CLI benchmark on a Linux runner. Timings are shared-runner smoke
+# signals, not target-hardware evidence; Apple Vision and the optional VLM are not
+# exercised here. Results are uploaded as an artifact and rendered into the job summary.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * 1'
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88'
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin
+      - run: cargo build --locked
+      - name: Run benchmark
+        env:
+          DOC_BENCHMARK_OUTPUT: ${{ runner.temp }}/benchmark-results.json
+          DOC_BENCHMARK_STRICT: '1'
+        run: python3 scripts/benchmark.py
+      - name: Write job summary
+        run: python3 scripts/benchmark-summary.py "${{ runner.temp }}/benchmark-results.json" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-linux
+          path: ${{ runner.temp }}/benchmark-results.json
+          if-no-files-found: error

@@ -4,7 +4,7 @@ All eight phases have implementation artifacts. This does **not** mean all resea
 
 | Phase | Delivered | Acceptance remaining |
 |---|---|---|
-| 0 | Official snapshots/checksums, locked compiling direct dependencies, seven-fixture Xberg process spike, adapter-level Xberg verification, dependency/license decisions | Rust 1.92 linked Xberg/PDFium comparison; Linux execution |
+| 0 | Official snapshots/checksums, locked compiling direct dependencies, seven-fixture Xberg process spike, adapter-level Xberg verification, dependency/license decisions | Rust 1.92 linked Xberg/PDFium comparison; Linux execution via the GitHub Actions benchmark workflow |
 | 1 | Cargo workspace, canonical types/JSON schema, adapter boundary, isolated CLI, deterministic fixture generator | Wider real-document oracle corpus |
 | 2 | PDF/CSV/Excel/Word text, tables/formulas/assets and source unit mapping; BIFF8 XLS and macro-enabled XLSM fixtures | Complex sheets/layout/date formats, XLSB and large-workbook corpus; exact rendered placements |
 | 3 | PPTX/ODT/ODP/RTF/HTML/Markdown/JSON/XML/email/EPUB/Visio source, chart caches, inferred PDF table proposals | Exhaustive rich format fidelity and complex table/layout topology |

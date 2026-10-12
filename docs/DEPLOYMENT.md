@@ -57,7 +57,9 @@ Job state, input, checkpoints, logs and assets are retained until DELETE, expiry
 
 ## Linux
 
-The Dockerfile and CI workflow install Poppler and English/Hindi Tesseract data. Apple Vision is unavailable. Linux adds RLIMIT_AS to the sampled process-tree RSS guard. The image includes GPL-licensed system tools through the distribution package manager; comply with redistribution obligations. Local macOS tests do not establish Linux/container compatibility; CI execution is a remaining gate unless its results are available.
+The Dockerfile and CI workflow install Poppler and English/Hindi Tesseract data. Apple Vision is unavailable. Linux adds RLIMIT_AS to the sampled process-tree RSS guard. The image includes GPL-licensed system tools through the distribution package manager; comply with redistribution obligations. Local macOS tests do not establish Linux/container compatibility.
+
+`.github/workflows/benchmark.yml` runs the synthetic benchmark on `ubuntu-latest` (manual `workflow_dispatch` or the weekly schedule) with the same Poppler/Tesseract packages, asserts every case produced a result, renders a table into the job summary and uploads `benchmark-results.json` as an artifact. `DOC_BENCHMARK_OUTPUT` overrides the output path so CI runs never rewrite `docs/benchmark-results.json`, and `DOC_BENCHMARK_STRICT=1` turns a missing result or nonzero extractor exit into a job failure. Runner timings are shared-VM smoke signals, not target-hardware performance evidence; the optional VLM and Apple Vision providers are not exercised there.
 
 ## API status semantics
 

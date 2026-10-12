@@ -43,8 +43,10 @@ scripts/cargo-local.sh clippy --all-targets -- -D warnings
 python3 scripts/e2e.py
 # Pillow is used only to regenerate development fixtures:
 python3 scripts/generate-fixtures.py
-# Optional measured OCR/model experiments:
+# Optional measured OCR/model experiments (set DOC_BENCHMARK_OUTPUT to avoid rewriting docs/):
 DOC_APPLE_VISION="$PWD/target/helpers/apple-vision" python3 scripts/benchmark.py
+# The scheduled/manual Linux benchmark workflow runs the same script on ubuntu-latest:
+# .github/workflows/benchmark.yml (results land in the job summary and as an artifact)
 ```
 
 Synthetic fixtures check contract behavior; they do not establish accuracy across customer documents. Runtime limits and capability probes are configurable. There is no frontend or mandatory Python production service.

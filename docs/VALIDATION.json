@@ -11,7 +11,7 @@
   "cargo_lock_sha256": "9fb27866413ee67bb4114a6852ebfcf042ab79c36bb70135ea6b6f6612633866",
   "fixture_files": 42,
   "unrun": [
-    "Linux/Docker runtime (daemon unavailable)",
+    "Container/Docker runtime (local daemon unavailable; Linux benchmark runs in the GitHub Actions workflow)",
     "M1 Pro 16 GB benchmark (host is M1 Air 8 GB)",
     "Real customer scan/handwriting corpus",
     "Long soak / backup restoration",
