@@ -1,4 +1,4 @@
-2026-10-12 rerun: per-request sampled llama-server process-tree RSS peaked at 492 MB (invoice image) and 677 MB (ER figure) with the same pinned Q4_K_M weights plus Q8 projector; system swap stayed below 0.7 GB used. The 2026-10-11 vmmap snapshot below remains the physical-footprint reference (1.1 GB) for these weights.
+2026-10-12 reruns: per-request sampled llama-server process-tree RSS peaked at 0.49–0.89 GB across identical reruns (492/677 MB and 708/892 MB for the invoice image and ER figure) with the same pinned Q4_K_M weights plus Q8 projector; system swap stayed below 0.75 GB used. The 2026-10-11 vmmap snapshot below remains the physical-footprint reference (1.1 GB) for these weights.
 
 Process:         llama-server [28978]
 Path:            /opt/homebrew/*/llama-server

@@ -4,6 +4,10 @@ hw.memsize: 8589934592
 vm.swapusage before run: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)
 vm.swapusage after run:  total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)
 
+2026-10-12 (same-day repeat with VLM server)
+vm.swapusage before run: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)
+vm.swapusage after run:  total = 2048.00M  used = 731.25M  free = 1316.75M  (encrypted)
+
 2026-10-11
 hw.model: MacBookAir10,1
 hw.memsize: 8589934592

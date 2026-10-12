@@ -1,77 +1,79 @@
 {
   "date": "2026-10-12",
-  "hardware": "hw.model: MacBookAir10,1\nhw.memsize: 8589934592\n",
+  "platform": "darwin",
+  "ci": false,
+  "hardware": "hw.model: MacBookAir10,1\nhw.memsize: 8589934592",
   "synthetic_fixtures": true,
   "runs": [
     {
       "fixture": "quoted.csv",
       "options": {},
-      "elapsed_ms": 1489,
-      "process_tree_peak_rss_bytes_sampled": 25903104,
+      "elapsed_ms": 1635,
+      "process_tree_peak_rss_bytes_sampled": 19415040,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "digital.pdf",
       "options": {},
-      "elapsed_ms": 483,
-      "process_tree_peak_rss_bytes_sampled": 25837568,
+      "elapsed_ms": 493,
+      "process_tree_peak_rss_bytes_sampled": 25821184,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
       "status": "partial",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "workbook.xlsx",
       "options": {},
-      "elapsed_ms": 242,
-      "process_tree_peak_rss_bytes_sampled": 22495232,
+      "elapsed_ms": 244,
+      "process_tree_peak_rss_bytes_sampled": 22282240,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "document.docx",
       "options": {},
       "elapsed_ms": 244,
-      "process_tree_peak_rss_bytes_sampled": 21708800,
+      "process_tree_peak_rss_bytes_sampled": 21577728,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
       "status": "partial",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "diagram.drawio",
       "options": {},
-      "elapsed_ms": 244,
-      "process_tree_peak_rss_bytes_sampled": 20021248,
+      "elapsed_ms": 242,
+      "process_tree_peak_rss_bytes_sampled": 19988480,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "scan.png",
@@ -79,17 +81,17 @@
         "ocr": true,
         "ocr_provider": "tesseract"
       },
-      "elapsed_ms": 474,
-      "process_tree_peak_rss_bytes_sampled": 49004544,
+      "elapsed_ms": 480,
+      "process_tree_peak_rss_bytes_sampled": 48611328,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "Invoice TOTAL 12345",
       "character_error_rate": 0.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "noisy.png",
@@ -97,17 +99,17 @@
         "ocr": true,
         "ocr_provider": "tesseract"
       },
-      "elapsed_ms": 716,
-      "process_tree_peak_rss_bytes_sampled": 52330496,
+      "elapsed_ms": 722,
+      "process_tree_peak_rss_bytes_sampled": 52756480,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "Invoice TOTAL 12345",
       "character_error_rate": 0.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "rotated.png",
@@ -115,17 +117,17 @@
         "ocr": true,
         "ocr_provider": "tesseract"
       },
-      "elapsed_ms": 716,
-      "process_tree_peak_rss_bytes_sampled": 64290816,
+      "elapsed_ms": 720,
+      "process_tree_peak_rss_bytes_sampled": 54231040,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "Invoice TOTAL 12345",
       "character_error_rate": 0.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "scan.png",
@@ -133,11 +135,11 @@
         "ocr": true,
         "ocr_provider": "apple_vision"
       },
-      "elapsed_ms": 61822,
-      "process_tree_peak_rss_bytes_sampled": 73203712,
+      "elapsed_ms": 61649,
+      "process_tree_peak_rss_bytes_sampled": 71794688,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 575.50M  free = 1472.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 544.38M  free = 1503.62M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 547.25M  free = 1500.75M  (encrypted)",
       "status": "partial",
       "errors": [
         {
@@ -149,7 +151,7 @@
       "ocr_text": "",
       "character_error_rate": 1.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "noisy.png",
@@ -157,11 +159,11 @@
         "ocr": true,
         "ocr_provider": "apple_vision"
       },
-      "elapsed_ms": 61465,
-      "process_tree_peak_rss_bytes_sampled": 73760768,
+      "elapsed_ms": 62389,
+      "process_tree_peak_rss_bytes_sampled": 72171520,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 575.50M  free = 1472.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 686.94M  free = 1361.06M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 547.25M  free = 1500.75M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 682.88M  free = 1365.12M  (encrypted)",
       "status": "partial",
       "errors": [
         {
@@ -173,7 +175,7 @@
       "ocr_text": "",
       "character_error_rate": 1.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "rotated.png",
@@ -181,11 +183,11 @@
         "ocr": true,
         "ocr_provider": "apple_vision"
       },
-      "elapsed_ms": 60944,
-      "process_tree_peak_rss_bytes_sampled": 73023488,
+      "elapsed_ms": 61891,
+      "process_tree_peak_rss_bytes_sampled": 73957376,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 686.94M  free = 1361.06M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 688.69M  free = 1359.31M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 682.88M  free = 1365.12M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 713.19M  free = 1334.81M  (encrypted)",
       "status": "partial",
       "errors": [
         {
@@ -197,7 +199,7 @@
       "ocr_text": "",
       "character_error_rate": 1.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "hindi.png",
@@ -205,17 +207,17 @@
         "ocr": true,
         "languages": "hin"
       },
-      "elapsed_ms": 718,
-      "process_tree_peak_rss_bytes_sampled": 46530560,
+      "elapsed_ms": 712,
+      "process_tree_peak_rss_bytes_sampled": 46383104,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 688.69M  free = 1359.31M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 688.69M  free = 1359.31M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 713.19M  free = 1334.81M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 713.19M  free = 1334.81M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "\u0928\u092e\u0938\u094d\u0924\u0947 \u092d\u093e\u0930\u0924",
       "character_error_rate": 0.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "hindi.png",
@@ -224,11 +226,11 @@
         "ocr_provider": "apple_vision",
         "languages": "hi-IN"
       },
-      "elapsed_ms": 61954,
-      "process_tree_peak_rss_bytes_sampled": 72318976,
+      "elapsed_ms": 61055,
+      "process_tree_peak_rss_bytes_sampled": 73121792,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 688.69M  free = 1359.31M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 713.19M  free = 1334.81M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 731.25M  free = 1316.75M  (encrypted)",
       "status": "partial",
       "errors": [
         {
@@ -240,28 +242,28 @@
       "ocr_text": "",
       "character_error_rate": 1.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "scan.png",
       "options": {
         "vision": true
       },
-      "elapsed_ms": 6918,
-      "process_tree_peak_rss_bytes_sampled": 24854528,
+      "elapsed_ms": 6658,
+      "process_tree_peak_rss_bytes_sampled": 25083904,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 731.25M  free = 1316.75M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 731.25M  free = 1316.75M  (encrypted)",
       "status": "needs_ocr",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [
         " Invoice TOTAL 12345"
       ],
-      "vlm_server_rss_bytes_after": 492371968,
-      "vlm_server_rss_bytes_before": 438059008,
-      "vlm_server_peak_rss_bytes_sampled": 492371968,
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
+      "vlm_server_rss_bytes_after": 708132864,
+      "vlm_server_rss_bytes_before": 654671872,
+      "vlm_server_peak_rss_bytes_sampled": 708132864,
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511"
     },
     {
       "fixture": "raster-er.png",
@@ -269,21 +271,21 @@
         "vision": true,
         "interpret_diagrams": true
       },
-      "elapsed_ms": 13836,
-      "process_tree_peak_rss_bytes_sampled": 25001984,
+      "elapsed_ms": 13886,
+      "process_tree_peak_rss_bytes_sampled": 25198592,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 731.25M  free = 1316.75M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 731.25M  free = 1316.75M  (encrypted)",
       "status": "partial",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [
         "{\n  \"summary\": \"\",\n  \"nodes\": [\n    {\n      \"id\": \"PK\",\n      \"label\": \"id\",\n      \"attributes\": [\n        {\n          \"name\": \"name\",\n          \"label\": \"name\"\n        }\n      ]\n    },\n    {\n      \"id\": \"FK\",\n      \"label\": \"id\",\n      \"attributes\": [\n        {\n          \"name\": \"FK\",\n          \"label\": \"FK\"\n        }\n      ]\n    }\n  ],\n  \"edges\": [\n    {\n      \"source\": \"PK\",\n      \"target\": \"FK\",\n      \"label\": \"user_id\",\n      \"cardinality\": \"1:N\",\n      \"evidence\": \"user_id FK\"\n    }\n  ]\n}"
       ],
-      "vlm_server_rss_bytes_after": 677330944,
-      "vlm_server_rss_bytes_before": 492371968,
-      "vlm_server_peak_rss_bytes_sampled": 677330944,
-      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7",
+      "vlm_server_rss_bytes_after": 891502592,
+      "vlm_server_rss_bytes_before": 708132864,
+      "vlm_server_peak_rss_bytes_sampled": 891502592,
+      "engine_binary_sha256": "721c392ed07ecba45017de1acff6609a6805577473367633882dbc2de3d26511",
       "inferred_graphs": [
         {
           "nodes": [
@@ -364,8 +366,8 @@
   ],
   "notes": [
     "Actual host is the recorded hw.model; the brief M1 Pro 16 GB target remains untested.",
-    "Sampled RSS excludes part of Metal/compressed memory; see vlm-memory-summary.txt.",
     "Apple Vision failures above are real e5rt errors, not OCR quality measurements.",
+    "Sampled VLM RSS excludes part of Metal/compressed memory; see vlm-memory-summary.txt.",
     "Synthetic fixtures are not representative document accuracy."
   ]
 }
