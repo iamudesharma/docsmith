@@ -3,7 +3,7 @@
     "health readiness",
     "unauthorized upload rejected",
     "multipart 202",
-    "durable complete {'id': 'f2b040ea-dc28-420b-8145-1dad2954537b', 'state': 'completed', 'filename': 'quoted.csv', 'created_at': 1791735414, 'updated_at': 1791735414, 'progress': 1, 'result_status': 'complete', 'error': None, 'warnings': [], 'unit_failures': []}",
+    "durable complete {'id': '3d967764-baf7-4785-a1fc-f8f2bab747e6', 'state': 'completed', 'filename': 'quoted.csv', 'created_at': 1791770476, 'updated_at': 1791770477, 'progress': 1, 'result_status': 'complete', 'error': None, 'warnings': [], 'unit_failures': []}",
     "canonical cells",
     "unit endpoint",
     "derived markdown",
@@ -19,12 +19,18 @@
     "queued cancellation",
     "running cancellation",
     "cancel remains cancelled",
+    "double cancellation is idempotent",
+    "delete while running stops worker",
     "enforced process timeout",
     "crash restart recovers job",
     "delete removes job and data",
-    "openapi routes"
+    "openapi routes",
+    "second worker completes a job while one is busy",
+    "cache hits ignore the disk quota",
+    "tenant disk quota rejects new storage",
+    "retention sweep removes terminal jobs"
   ],
-  "count": 23,
+  "count": 29,
   "date": "2026-10-11",
   "platform": "darwin"
 }

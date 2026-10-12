@@ -225,6 +225,37 @@ impl App {
         }
         Ok(job)
     }
+    /// Remove terminal jobs past the configured retention window. Active workers are never
+    /// touched; cancel/delete still own their own lifetime handling.
+    fn sweep_retention(&self) -> Result<usize> {
+        let retention = self.config.limits.retention_seconds;
+        if retention == 0 {
+            return Ok(0);
+        }
+        let cutoff = epoch() - retention as i64;
+        let active: std::collections::HashSet<String> =
+            self.running.lock().unwrap().keys().cloned().collect();
+        let db = self.db.lock().unwrap();
+        let ids: Vec<String> = db
+            .prepare(
+                "SELECT id FROM jobs WHERE state IN ('completed','failed','cancelled') AND updated_at < ?1",
+            )?
+            .query_map([cutoff], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        let mut removed = 0;
+        for id in ids {
+            if active.contains(&id) {
+                continue;
+            }
+            let dir = self.dir(&id);
+            if dir.exists() {
+                std::fs::remove_dir_all(&dir)?;
+            }
+            db.execute("DELETE FROM jobs WHERE id=?1", [&id])?;
+            removed += 1;
+        }
+        Ok(removed)
+    }
     fn set_state(&self, id: &str, state: &str, failure: Option<Failure>) -> Result<()> {
         self.db.lock().unwrap().execute("UPDATE jobs SET state=?2,updated_at=?3,error=?4 WHERE id=?1 AND state NOT IN ('cancelled','deleting')",params![id,state,epoch(),failure.map(|e|serde_json::to_string(&e)).transpose()?])?;
         Ok(())
@@ -306,6 +337,22 @@ fn kill_group(pid: u32) {
         }
     }
 }
+
+/// Bytes currently retained for a tenant across queued, running and terminal jobs.
+fn tenant_usage(data_dir: &std::path::Path, db: &Connection, tenant: &str) -> Result<u64> {
+    let ids: Vec<String> = db
+        .prepare("SELECT id FROM jobs WHERE tenant=?1")?
+        .query_map([tenant], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    let mut total = 0u64;
+    for id in ids {
+        let dir = data_dir.join("jobs").join(&id);
+        if dir.exists() {
+            total = total.saturating_add(directory_bytes(&dir)?);
+        }
+    }
+    Ok(total)
+}
 async fn upload(
     State(app): State<App>,
     headers: HeaderMap,
@@ -332,6 +379,7 @@ async fn upload_inner(
     let mut filename = None;
     let mut options = Options::default();
     let mut seen_options = false;
+    let mut uploaded = 0u64;
     let mut digest = sha2::Sha256::new();
     use sha2::Digest;
     use tokio::io::AsyncWriteExt;
@@ -381,6 +429,7 @@ async fn upload_inner(
                     out.write_all(&chunk).await?;
                 }
                 out.sync_all().await?;
+                uploaded = size;
                 filename = Some(name);
             }
             "options" => {
@@ -454,6 +503,18 @@ async fn upload_inner(
                     StatusCode::TOO_MANY_REQUESTS,
                     "queue_full",
                     "Job queue full",
+                ));
+            }
+            // Quota applies to newly stored jobs; cache hits above are free. Retained bytes
+            // include this upload plus everything already kept for the tenant.
+            let used = tenant_usage(&app.config.data_dir, &db, tenant)?;
+            if app.config.limits.disk_bytes > 0
+                && used.saturating_add(uploaded) > app.config.limits.disk_bytes
+            {
+                return Err(error(
+                    StatusCode::INSUFFICIENT_STORAGE,
+                    "quota_exceeded",
+                    "Tenant disk quota exceeded; DELETE completed jobs or raise disk_bytes",
                 ));
             }
             db.execute("INSERT INTO jobs(id,tenant,filename,cache_key,options,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'queued',?6,?6)",params![id,tenant,filename,key,options_json,epoch()])?;
@@ -867,6 +928,24 @@ pub async fn serve(config: Config) -> Result<()> {
         }
     }
     let app = App::open(config)?;
+    // Opt-in retention sweep: removes terminal jobs older than retention_seconds.
+    let sweep_interval = match app.config.limits.retention_seconds {
+        0 => Duration::from_secs(30),
+        seconds => Duration::from_secs(seconds.clamp(1, 15)),
+    };
+    let sweeper = {
+        let app = app.clone();
+        tokio::spawn(async move {
+            loop {
+                match app.sweep_retention() {
+                    Ok(0) => {}
+                    Ok(removed) => tracing::info!("retention sweep removed {removed} jobs"),
+                    Err(e) => tracing::error!("retention sweep failed: {e:#}"),
+                }
+                tokio::time::sleep(sweep_interval).await;
+            }
+        })
+    };
     let dispatcher = tokio::spawn(app.clone().dispatcher());
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Listening on {}", listener.local_addr()?);
@@ -880,6 +959,7 @@ pub async fn serve(config: Config) -> Result<()> {
         })
         .await?;
     dispatcher.abort();
+    sweeper.abort();
     drop(lock);
     Ok(())
 }

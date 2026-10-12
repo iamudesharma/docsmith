@@ -43,6 +43,10 @@ pub struct Limits {
     pub memory_bytes: u64,
     pub workers: usize,
     pub queued_jobs: usize,
+    /// Retained bytes per tenant across completed jobs; 0 disables the quota.
+    pub disk_bytes: u64,
+    /// Seconds a terminal job is retained before the sweep removes it; 0 disables the sweep.
+    pub retention_seconds: u64,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -57,6 +61,8 @@ impl Default for Limits {
             memory_bytes: 2 * 1024 * 1024 * 1024,
             workers: 2,
             queued_jobs: 100,
+            disk_bytes: 0,
+            retention_seconds: 0,
         }
     }
 }

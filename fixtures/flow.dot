@@ -1,4 +1,6 @@
 digraph G {
 A [label="Start"];
 A -> B;
+subgraph cluster_0 {
+}
 }

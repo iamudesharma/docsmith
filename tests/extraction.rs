@@ -53,6 +53,40 @@ fn ods_typed_cells() {
     );
 }
 #[test]
+fn legacy_xls_typed_values_and_formula() {
+    let d = fixture("workbook.xls", Options::default());
+    assert!(d.errors.is_empty(), "{:?}", d.errors);
+    let t = d.units[0].blocks[0].table.as_ref().unwrap();
+    let cell = |row, column| {
+        t.cells
+            .iter()
+            .find(|c| c.row == row && c.column == column)
+            .unwrap()
+    };
+    assert_eq!(cell(0, 0).raw, "Header");
+    assert_eq!(cell(1, 1).value, serde_json::json!(3.0));
+    let formula = cell(2, 0);
+    assert_eq!(formula.formula.as_deref(), Some("5"));
+    assert_eq!(formula.cached_value, Some(serde_json::json!(5.0)));
+}
+#[test]
+fn xlsm_macros_never_executed_or_extracted() {
+    let d = fixture("workbook.xlsm", Options::default());
+    assert!(d.errors.is_empty(), "{:?}", d.errors);
+    assert_eq!(d.status, "complete");
+    assert!(
+        !serde_json::to_string(&d)
+            .unwrap()
+            .contains("MACRO_SENTINEL"),
+        "VBA source must never be extracted or executed"
+    );
+    let t = d.units[0].blocks[0].table.as_ref().unwrap();
+    assert!(t
+        .cells
+        .iter()
+        .any(|c| c.formula.as_deref() == Some("SUM(A2:B2)")));
+}
+#[test]
 fn word_logical_sections_tables_media() {
     let d = fixture("document.docx", Options::default());
     assert_eq!(d.units.len(), 2);
@@ -130,6 +164,20 @@ fn subset_never_silently_drops_constructs() {
     assert!(!g.warnings.is_empty());
 }
 #[test]
+fn dot_subset_warns_instead_of_dropping() {
+    let d = fixture("flow.dot", Options::default());
+    let g = d.units[0].blocks[0].diagram.as_ref().unwrap();
+    assert_eq!(g.nodes.len(), 2);
+    assert_eq!(g.edges.len(), 1);
+    assert!(
+        g.warnings
+            .iter()
+            .any(|w| w.contains("unsupported dot construct")),
+        "{:?}",
+        g.warnings
+    );
+}
+#[test]
 fn xml_entities_and_archive_traversal_rejected() {
     let a = fixture("unsafe.xml", Options::default());
     assert_eq!(a.status, "failed");
@@ -168,9 +216,10 @@ fn resource_limits() {
     )
     .is_err());
 }
-// The Xberg adapter consults the process environment, so tests that set DOC_XBERG and
-// tests that assert its absence must not overlap. These are the only tests touching it.
-static XBERG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// Tests that mutate process-wide environment (DOC_XBERG) must hold this lock. Tests whose
+// assertions depend on environment-derived identity must also hold it: the PDF page
+// checkpoint compares provider versions, which include DOC_XBERG metadata.
+static PROCESS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn xberg_env_guard(value: Option<&str>) -> impl Drop {
     let previous = std::env::var("DOC_XBERG").ok();
     match value {
@@ -195,7 +244,7 @@ fn provisioned_xberg() -> Option<PathBuf> {
 }
 #[test]
 fn xberg_missing_cli_is_explicit() {
-    let _lock = XBERG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _guard = xberg_env_guard(None);
     let d = fixture(
         "quoted.csv",
@@ -215,7 +264,7 @@ fn xberg_missing_cli_is_explicit() {
 }
 #[test]
 fn xberg_rejects_unexpected_version() {
-    let _lock = XBERG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // /bin/echo prints its version argument, which is not 1.3.8; the adapter must refuse
     // rather than run an unevaluated engine. ANSI-colored upstream output is covered by
     // the NO_COLOR env and tolerant parse in adapters.rs.
@@ -239,7 +288,7 @@ fn xberg_adapter_maps_units_when_provisioned() {
     let Some(executable) = provisioned_xberg() else {
         return;
     };
-    let _lock = XBERG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _guard = xberg_env_guard(Some(executable.to_str().unwrap()));
     let d = fixture(
         "digital.pdf",
@@ -276,7 +325,7 @@ fn direct_parser_is_unaffected_by_doc_xberg() {
     let Some(executable) = provisioned_xberg() else {
         return;
     };
-    let _lock = XBERG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _guard = xberg_env_guard(Some(executable.to_str().unwrap()));
     let d = fixture("quoted.csv", Options::default());
     assert_eq!(d.status, "complete", "{:?}", d.errors);
@@ -548,6 +597,8 @@ fn pdf_checkpoint_reuses_complete_pages() {
     if !doc_extractor::providers::available("pdfinfo") {
         return;
     }
+    // Provider versions compared during checkpoint reuse include env-derived identity.
+    let _lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let input = std::path::Path::new("fixtures/digital.pdf");
     let first = extract::extract(
