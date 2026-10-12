@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
    time.sleep(.25)
   return False
  def check(name,condition):assert condition,name;results.append(name)
- p=None;p2=None
+ p=None;p2=None;p3=None
  try:
   p=start();check('health readiness',request('/health/ready',token=None)[0]==200)
   check('unauthorized upload rejected',upload('quoted.csv',token=None)[0]==401)
@@ -81,10 +81,10 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   p.kill();p.wait();p=start();v=wait(recover);check('crash restart recovers job',v['state']=='failed' and v['error']['code']=='limit_exceeded')
   check('delete removes job and data',request(f'/v1/extractions/{id}','DELETE')[0]==204 and request(f'/v1/extractions/{id}')[0]==404 and not (tmp/'data/jobs'/id).exists())
   spec=json.loads(request('/openapi.json')[1]);check('openapi routes',len(spec['paths'])==9)
-  # Second instance proves a two-worker pool, per-tenant quota and retention sweep.
+  # Second instance proves a two-worker pool and the retention sweep (no quota).
   with socket.socket() as s2:s2.bind(('127.0.0.1',0));port2=s2.getsockname()[1]
   base2=f'http://127.0.0.1:{port2}'
-  (tmp/'config2.json').write_text(json.dumps({'data_dir':str(tmp/'data2'),'bind':f'127.0.0.1:{port2}','limits':{'workers':2,'timeout_seconds':30,'queued_jobs':10,'upload_bytes':131072,'disk_bytes':20000,'retention_seconds':2}}))
+  (tmp/'config2.json').write_text(json.dumps({'data_dir':str(tmp/'data2'),'bind':f'127.0.0.1:{port2}','limits':{'workers':2,'timeout_seconds':30,'queued_jobs':10,'upload_bytes':131072,'retention_seconds':2}}))
   p2=subprocess.Popen([str(BIN),'serve','--config',str(tmp/'config2.json')],env=env,stdout=subprocess.DEVNULL,stderr=open(tmp/'server2.log','a'))
   for _ in range(100):
    try:
@@ -94,15 +94,29 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   _,j=upload('scan.png',{'ocr':True},token=None,root=base2);busy=j['id'];wait(busy,'running',root=base2)
   _,j=upload('quoted.csv',token=None,root=base2);fast=j['id'];v=wait(fast,root=base2)
   check('second worker completes a job while one is busy',v['state']=='completed' and status(busy,root=base2)['state'] in ('running','queued'))
-  check('cache hits ignore the disk quota',upload('quoted.csv',token=None,root=base2)[1]['cached'] is True)
-  check('tenant disk quota rejects new storage',upload('digital.pdf',token=None,root=base2)[0]==507)
   json.loads(request(f'/v1/extractions/{busy}/cancel','POST',b'',token=None,root=base2)[1])
   check('retention sweep removes terminal jobs',wait_gone(fast,root=base2))
   p2.send_signal(signal.SIGINT);p2.wait(timeout=10);p2=None
+  # Third instance proves the disk quota deterministically: one completed job already
+  # exceeds the limit, so a cache hit is still served while new storage is rejected.
+  with socket.socket() as s3:s3.bind(('127.0.0.1',0));port3=s3.getsockname()[1]
+  base3=f'http://127.0.0.1:{port3}'
+  (tmp/'config3.json').write_text(json.dumps({'data_dir':str(tmp/'data3'),'bind':f'127.0.0.1:{port3}','limits':{'workers':1,'timeout_seconds':30,'queued_jobs':10,'upload_bytes':131072,'disk_bytes':20000}}))
+  p3=subprocess.Popen([str(BIN),'serve','--config',str(tmp/'config3.json')],env=env,stdout=subprocess.DEVNULL,stderr=open(tmp/'server3.log','a'))
+  for _ in range(100):
+   try:
+    if request('/health/live',token=None,root=base3)[0]==200:break
+   except OSError:pass
+   time.sleep(.05)
+  _,j=upload('digital.pdf',token=None,root=base3);stored=j['id'];wait(stored,root=base3)
+  check('cache hits ignore the disk quota',upload('digital.pdf',token=None,root=base3)[1]['cached'] is True)
+  check('tenant disk quota rejects new storage',upload('mixed.pdf',token=None,root=base3)[0]==507)
+  p3.send_signal(signal.SIGINT);p3.wait(timeout=10);p3=None
  finally:
   if sys.exc_info()[0]:
    print((tmp/'server.log').read_text());
    for f in (tmp/'data/jobs').glob('*/worker.log'):print(f, f.read_text())
+  if p3 and p3.poll() is None:p3.send_signal(signal.SIGINT);p3.wait(timeout=10)
   if p2 and p2.poll() is None:p2.send_signal(signal.SIGINT);p2.wait(timeout=10)
   if p and p.poll() is None:p.send_signal(signal.SIGINT);p.wait(timeout=10)
  (ROOT/'docs/e2e-results.json').write_text(json.dumps({'checks':results,'count':len(results),'date':time.strftime('%Y-%m-%d'),'platform':sys.platform},indent=2))
