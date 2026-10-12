@@ -1073,6 +1073,16 @@ pub fn worker_command(
         "DOC_VLM_LOCK",
         std::env::var_os("DOC_VLM_LOCK").unwrap_or_else(|| lock_path.as_os_str().to_os_string()),
     );
+    // Machine-wide OCR budget: every worker process contends on the same slot files next to the
+    // vision lock (the service data dir), so concurrent jobs share `limits.ocr_threads`.
+    let slots = std::env::var_os("DOC_OCR_SLOTS_DIR").unwrap_or_else(|| {
+        lock_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("ocr-slots")
+            .into_os_string()
+    });
+    command.env("DOC_OCR_SLOTS_DIR", slots);
     command
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::from(std::fs::File::create(

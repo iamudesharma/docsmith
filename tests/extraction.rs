@@ -875,3 +875,90 @@ fn checkpoints_are_versioned_ordered_and_stream_result_matches() {
         .count();
     assert_eq!(leftovers, 0);
 }
+
+#[test]
+fn streamed_tables_release_blocks_but_keep_full_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let limits = Limits {
+        stream_bytes: 1,
+        ..Default::default()
+    };
+    let d = extract::extract(
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/quoted.csv"),
+        "quoted.csv",
+        dir.path(),
+        Options::default(),
+        limits,
+        "stream",
+    )
+    .unwrap();
+    // The returned document keeps stubs; payload lives in unit files and derived outputs.
+    assert!(
+        d.units.iter().all(|u| u.blocks.is_empty()),
+        "blocks released"
+    );
+    let unit: Unit =
+        serde_json::from_slice(&std::fs::read(dir.path().join("units/u1.json")).unwrap()).unwrap();
+    assert!(!unit.blocks.is_empty(), "unit file keeps payload");
+    let result: Document =
+        serde_json::from_slice(&std::fs::read(dir.path().join("result.json")).unwrap()).unwrap();
+    assert_eq!(
+        result.units[0].blocks[0].table.as_ref().unwrap().cells[5].raw,
+        "0012"
+    );
+    let markdown = std::fs::read_to_string(dir.path().join("result.md")).unwrap();
+    let plaintext = std::fs::read_to_string(dir.path().join("result.txt")).unwrap();
+    assert!(markdown.contains("0012"), "streamed markdown keeps cells");
+    assert!(plaintext.contains("0012"), "streamed plaintext keeps cells");
+}
+
+#[test]
+fn sparse_text_pages_render_for_ocr_without_duplicating_native_text() {
+    if !doc_extractor::providers::available("tesseract")
+        || !doc_extractor::providers::available("pdftoppm")
+    {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options {
+        ocr: true,
+        ..Default::default()
+    };
+    let limits = Limits {
+        ocr_threads: 1,
+        ..Default::default()
+    };
+    let d = extract::extract(
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/digital.pdf"),
+        "digital.pdf",
+        dir.path(),
+        options,
+        limits,
+        "sparse",
+    )
+    .unwrap();
+    assert_eq!(d.units.len(), 2);
+    // Pages with almost no native text (15 chars, no images) are rendered and OCR'd; the native
+    // lines must survive exactly once and the render/OCR must not corrupt or fail the page.
+    for (unit, want) in d.units.iter().zip(["Native page ONE", "Native page TWO"]) {
+        let exact = unit
+            .blocks
+            .iter()
+            .filter(|b| b.kind == "text" && b.text.trim() == want)
+            .count();
+        assert_eq!(exact, 1, "page {} keeps its native line once", unit.name);
+        assert!(unit.errors.is_empty(), "{:?}", unit.errors);
+        assert!(
+            unit.blocks.iter().any(|b| b.kind == "figure"),
+            "render asset attached on {}",
+            unit.name
+        );
+    }
+    // Every page-render temp file was cleaned up.
+    let leftovers = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("render-"))
+        .count();
+    assert_eq!(leftovers, 0);
+}

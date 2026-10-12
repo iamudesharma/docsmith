@@ -75,14 +75,28 @@ strictly in order by that thread. The coordinator merges everything in page orde
 Consequences of this design:
 
 - **Memory**: bounded per thread by one 100-page XML range plus one page unit at a time;
-  never the whole document's pages at once.
+  never the whole document's pages at once. `result.json` is assembled by streaming the
+  `units/uN.json` files, `result.md`/`result.txt` are written unit by unit, and delimited
+  inputs over `limits.stream_bytes` release each chunk's blocks after its unit file is
+  written (see §4).
 - **Resume**: completed pages are skipped before any Poppler call — a fully resumed
   500-page PDF finishes in ~0.5 s.
 - **Determinism**: parallel and sequential runs produce byte-identical results (test
-  `pdf_parallel_and_sequential_batches_match`).
-- **Checkpoints**: unit files are written by each worker as it goes; the whole-document
-  `checkpoint.json`/progress manifests refresh every 100 units and are owned by the
-  coordinator (workers never write them).
+  `pdf_parallel_and_sequential_batches_match`). Workers pull batch indices from a shared
+  atomic queue (dynamic scheduling), which only changes *when* work runs, never the merged
+  order.
+- **Failure containment**: one page's render/OCR failure marks that page partial; completed
+  pages from other workers are still merged and written before the error is reported. If
+  Poppler ever returned fewer `<page>` elements than requested, text is re-fetched per page
+  instead of shifting another page's text onto the wrong unit.
+- **Checkpoints**: unit files are written by each worker as it goes; resume needs only
+  `identity.json` (carrying a `checkpoint_format` version), the unit files and the asset
+  sidecars. Workers publish lightweight unit stubs (metadata, warnings, errors — no blocks)
+  to a shared progress board, and a coordinator writer thread turns them into complete,
+  page-ordered `checkpoint.json`, `assets.json` and `progress.json` snapshots every ~2 s or
+  100 completed pages — in both sequential and parallel modes, so a running 3000-page job
+  shows live progress instead of 0. A format-version mismatch forces clean re-extraction
+  instead of reusing files whose meaning changed.
 
 ## 3. OCR concurrency
 
@@ -113,6 +127,9 @@ ocr_threads` against available cores.
    unit 2 rows 50001-100000 → units/u2.json
    …                                        compact_tables omits redundant cell fields
    → single-threaded; memory bounded per chunk (not per file)
+   → inputs > limits.stream_bytes: blocks released after each unit file;
+     result/markdown written by streaming units/uN.json one at a time
+     (measured live heap: 107 MB peak for a 700k-row CSV vs 915 MB buffered)
 
  XLSX / ODS      one unit per sheet, sequential, formulas + cached values kept
  DOCX / PPTX     one unit per logical section / slide, sequential, source-order
@@ -125,10 +142,11 @@ ocr_threads` against available cores.
 |---|---|---|---|
 | Jobs in flight | `limits.workers` | 2 | one isolated process per job |
 | PDF batch threads | `limits.pdf_workers` | 4 | 1..8; one 100-page batch per thread |
-| Concurrent OCR | `limits.ocr_threads` | 4 | per job process; Tesseract slots |
+| Concurrent OCR | `limits.ocr_threads` | 4 | Tesseract slots; machine-wide across worker processes via `flock` slot files in the service data dir (`<data_dir>/ocr-slots`), in-process otherwise |
 | CSV chunk size | constants | 50k rows / 250k cells | per-unit memory bound |
+| Streamed tables | `limits.stream_bytes` | 16 MiB | delimited inputs above this release blocks after each unit; assembly streams unit files |
 | PDF batch size | constant | 100 pages | one Poppler range per batch |
-| Checkpoint cadence | constant | 100 units | coordinator-only manifest refresh |
+| Progress snapshots | ~2 s / 100 units | coordinator writer thread | complete, ordered, versioned; runs in both modes |
 
 ## 6. Measured wall times (this Mac, release build, synthetic inputs)
 

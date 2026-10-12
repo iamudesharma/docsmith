@@ -41,35 +41,97 @@ pub fn languages() -> Vec<String> {
 /// Global OCR concurrency limiter: `ocr_blocks` is called from parallel page workers, and each
 /// call may spawn a Tesseract process (up to four for rotation probing). Slots are configured
 /// once per extraction from `Limits.ocr_threads`.
-static OCR_SLOTS: std::sync::OnceLock<(std::sync::Mutex<usize>, std::sync::Condvar, usize)> =
-    std::sync::OnceLock::new();
-pub fn configure_ocr_threads(threads: usize) {
-    let _ = OCR_SLOTS.set((
-        std::sync::Mutex::new(0),
-        std::sync::Condvar::new(),
-        threads.max(1),
-    ));
+/// Machine-wide OCR budget. Every process enforces the same cap: when `dir` is set (worker
+/// processes get it from `DOC_OCR_SLOTS_DIR`, pointing inside the shared data dir) slots are
+/// exclusive `flock`s on slot files, so N worker processes cannot run more than the configured
+/// number of OCR subprocesses between them. Without a shared dir the classic in-process
+/// semaphore applies.
+pub struct OcrBudget {
+    cap: usize,
+    dir: Option<std::path::PathBuf>,
+    active: std::sync::Mutex<usize>,
+    cond: std::sync::Condvar,
 }
-struct OcrSlot;
+static OCR_BUDGET: std::sync::Mutex<Option<std::sync::Arc<OcrBudget>>> =
+    std::sync::Mutex::new(None);
+pub fn configure_ocr_threads(threads: usize) {
+    configure_ocr_budget(None, threads);
+}
+pub fn configure_ocr_budget(dir: Option<std::path::PathBuf>, threads: usize) {
+    if let Some(dir) = &dir {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let budget = std::sync::Arc::new(OcrBudget {
+        cap: threads.max(1),
+        dir,
+        active: std::sync::Mutex::new(0),
+        cond: std::sync::Condvar::new(),
+    });
+    *OCR_BUDGET.lock().unwrap() = Some(budget);
+}
+#[cfg(unix)]
+fn try_lock_slot(dir: &std::path::Path, cap: usize) -> Option<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    for i in 0..cap {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join(format!("ocr-slot-{i}.lock")))
+            .ok()?;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Some(file);
+        }
+    }
+    None
+}
+struct OcrSlot {
+    budget: Option<std::sync::Arc<OcrBudget>>,
+    file: Option<std::fs::File>,
+}
 impl OcrSlot {
     fn acquire() -> OcrSlot {
-        if let Some((lock, cond, max)) = OCR_SLOTS.get() {
-            let mut active = lock.lock().unwrap();
-            while *active >= *max {
-                active = cond.wait(active).unwrap();
+        let budget = OCR_BUDGET.lock().unwrap().clone();
+        let Some(budget) = budget else {
+            return OcrSlot {
+                budget: None,
+                file: None,
+            };
+        };
+        #[cfg(unix)]
+        if let Some(dir) = &budget.dir {
+            loop {
+                if let Some(file) = try_lock_slot(dir, budget.cap) {
+                    return OcrSlot {
+                        budget: Some(budget),
+                        file: Some(file),
+                    };
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
             }
-            *active += 1;
         }
-        OcrSlot
+        let mut active = budget.active.lock().unwrap();
+        while *active >= budget.cap {
+            active = budget.cond.wait(active).unwrap();
+        }
+        *active += 1;
+        drop(active);
+        OcrSlot {
+            budget: Some(budget),
+            file: None,
+        }
     }
 }
 impl Drop for OcrSlot {
     fn drop(&mut self) {
-        if let Some((lock, cond, _)) = OCR_SLOTS.get() {
-            let mut active = lock.lock().unwrap();
-            *active = active.saturating_sub(1);
-            cond.notify_one();
+        if let Some(budget) = &self.budget {
+            if self.file.is_none() {
+                let mut active = budget.active.lock().unwrap();
+                *active = active.saturating_sub(1);
+                budget.cond.notify_one();
+            }
         }
+        // Dropping the file releases the flock.
     }
 }
 pub struct OcrOutput {
@@ -440,4 +502,22 @@ pub fn identity() -> Value {
         std::env::var(key).ok().map(|path|{let meta=std::fs::metadata(&path).ok();json!({"path":path,"bytes":meta.as_ref().map(|m|m.len()),"modified":meta.and_then(|m|m.modified().ok()).and_then(|t|t.duration_since(std::time::UNIX_EPOCH).ok()).map(|t|t.as_nanos().to_string())})})
     };
     json!({"poppler":version("pdftotext"),"tesseract":version("tesseract"),"tessdata_prefix":std::env::var("TESSDATA_PREFIX").ok(),"languages":languages(),"apple_vision":executable("DOC_APPLE_VISION"),"xberg":executable("DOC_XBERG"),"vlm_model":std::env::var("DOC_VLM_MODEL").ok(),"vlm_revision":std::env::var("DOC_VLM_REVISION").ok()})
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cross_process_ocr_slots_respect_the_cap_and_release() {
+        let dir = std::env::temp_dir().join(format!("ocr-slots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = try_lock_slot(&dir, 2).expect("slot 0");
+        let second = try_lock_slot(&dir, 2).expect("slot 1");
+        assert!(try_lock_slot(&dir, 2).is_none(), "cap is enforced");
+        drop(first);
+        let replacement = try_lock_slot(&dir, 2).expect("freed slot is reusable");
+        drop(replacement);
+        drop(second);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

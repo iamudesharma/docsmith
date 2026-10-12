@@ -43,6 +43,7 @@ The actual test host is **MacBookAir10,1, M1, 8 GB**, not the brief's M1 Pro 16 
     "memory_bytes": 2147483648,
     "pdf_workers": 4,
     "ocr_threads": 4,
+    "stream_bytes": 16777216,
     "disk_bytes": 0,
     "retention_seconds": 0
   }
@@ -51,10 +52,10 @@ The actual test host is **MacBookAir10,1, M1, 8 GB**, not the brief's M1 Pro 16 
 
 ## Large inputs
 
-Measured on the recorded 8 GB M1 (synthetic inputs; see perf-large-inputs.json): a 3000-page text PDF completes in ~21 s (release, four batch workers) / ~30 s (one worker) / ~62 s (debug) with 3000 page units and no errors, and restarting an unchanged 500-page job reuses every checkpointed page in under a second. A 700k-row, 30 MB CSV completes in ~3.3 s (release) but needs ~0.9 GB of worker memory because the canonical JSON document is held in memory; its result is ~356 MB. Consequences for very large jobs:
+Measured on the recorded 8 GB M1 (synthetic inputs; see perf-large-inputs.json): a 3000-page text PDF completes in ~21 s (release, four batch workers) / ~30 s (one worker) / ~62 s (debug) with 3000 page units and no errors, and restarting an unchanged 500-page job reuses every checkpointed page in under a second. A 700k-row, 30 MB CSV completes in ~3.3 s (release). Inputs above `limits.stream_bytes` (default 16 MiB) are extracted in streamed mode: chunk blocks are released once their `units/uN.json` is written, and `result.json`/`result.md`/`result.txt` are assembled by streaming those unit files, so live heap stays near one chunk (measured 107 MB peak versus 915 MB buffered for the same 700k-row file; final live heap 0). Note that macOS `RSS`/footprint overstate steady-state usage because the system allocator keeps freed pages resident — use the Linux CI benchmark or the live-heap measurement for capacity planning. Consequences for very large jobs:
 
 - `upload_bytes` must cover the file (default 32 MiB); `timeout_seconds` (default 1800 s) must cover the whole job.
-- `pdf_workers` runs independent 100-page batches concurrently (default 4, clamped to 1..8); `ocr_threads` caps concurrent Tesseract processes across all workers (default 4), so scanned PDFs get parallel OCR bounded by that number. Results are merged in page order and are identical for any worker count.
+- `pdf_workers` runs independent 100-page batches concurrently (default 4, clamped to 1..8); batches are handed out dynamically, so slow image-heavy batches do not idle other workers. `ocr_threads` caps concurrent Tesseract processes (default 4) and is enforced machine-wide across worker processes through flock slot files in `<data_dir>/ocr-slots`, so two concurrent scanned jobs share the same OCR budget. Results are merged in page order and are identical for any worker count. On a page-count mismatch from Poppler, text is re-fetched per page rather than misattributed, and a page whose render/OCR fails only marks that page partial.
 - `compact_tables: true` (request option, `--compact-tables` on the CLI) omits redundant cell fields for delimited files: ~4x input size instead of ~12x (203 MB -> 68.5 MB for the 400k-row sample) and roughly half the peak memory. A missing `value` means "the raw string".
 - CSV result JSON is roughly 12x the input for tiny cells in the default full mode; size `disk_bytes`/`output_bytes` and backup space accordingly. The result write is streamed with a size cap, so an oversized job fails with `limit_exceeded: output bytes` instead of a truncated file.
 - Peak memory scales with total document size (about 0.9 GB per 700k rows of the measured shape; compact mode reduces this). Raise `memory_bytes` on a larger host, or split inputs; a fully streamed table mode is future work.

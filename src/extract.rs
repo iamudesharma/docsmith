@@ -374,9 +374,11 @@ impl ContextData {
             u.status = "partial".into();
         }
         let path = self.dir.join("units").join(format!("{}.json", u.id));
-        // Re-extract on resume using deterministic IDs. Atomic replacement retains each successful unit on crashes.
+        // Re-extract on resume using deterministic IDs. Atomic replacement retains each
+        // successful unit on crashes. Serialization streams straight into the temp file so a
+        // large chunk never allocates its full JSON image in memory on top of its cells.
         let started = Instant::now();
-        atomic_json(&path, &u)?;
+        atomic_json_limited(&path, &u, u64::MAX)?;
         time_stage(&STAGE_WRITE_MS, started);
         if let Some(board) = &self.progress {
             board.publish(&u);
@@ -386,6 +388,8 @@ impl ContextData {
             // streams units/uN.json. In-memory blocks would otherwise scale with the whole file.
             u.blocks.clear();
             self.document.units.push(u);
+            // Snapshots are cheap here (stubs only), so refresh progress at every chunk.
+            self.write_manifests(false)?;
             return Ok(());
         }
         self.document.units.push(u);
@@ -617,7 +621,10 @@ pub fn extract(
         progress: None,
         next_asset_seq: 0,
     };
-    providers::configure_ocr_threads(ocr_threads);
+    providers::configure_ocr_budget(
+        std::env::var_os("DOC_OCR_SLOTS_DIR").map(std::path::PathBuf::from),
+        ocr_threads,
+    );
     for counter in [
         &STAGE_TEXT_MS,
         &STAGE_IMAGES_MS,
@@ -703,9 +710,42 @@ pub fn extract(
     )?;
     c.write_manifests(true)?;
     atomic_json(&dir.join("timings.json"), &stage_timings())?;
-    fs::write(dir.join("result.md"), markdown(&c.document))?;
-    fs::write(dir.join("result.txt"), crate::model::plaintext(&c.document))?;
+    write_derived(dir, &c.document)?;
     Ok(c.document)
+}
+/// Load a unit's full payload for derivation: released units read their unit file, everything
+/// else is used from memory. One unit is materialized at a time.
+fn load_unit_payload(dir: &Path, unit: &Unit) -> Result<Unit> {
+    if unit.blocks.is_empty() {
+        let path = dir.join("units").join(format!("{}.json", unit.id));
+        if let Ok(bytes) = fs::read(&path) {
+            if let Ok(full) = serde_json::from_slice::<Unit>(&bytes) {
+                return Ok(full);
+            }
+        }
+    }
+    Ok(unit.clone())
+}
+/// Stream result.md/result.txt unit by unit so multi-million-row tables never build the whole
+/// derived text in memory. Output is byte-identical to `model::markdown`/`plaintext`.
+fn write_derived(dir: &Path, doc: &Document) -> Result<()> {
+    use std::io::{BufWriter, Write};
+    let mut md = BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.md"))?);
+    let mut txt = BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.txt"))?);
+    write!(md, "# {}\n\nStatus: {}\n\n", doc.filename, doc.status)?;
+    let mut buffer = String::new();
+    for unit in &doc.units {
+        let full = load_unit_payload(dir, unit)?;
+        buffer.clear();
+        crate::model::unit_markdown(&full, &mut buffer);
+        md.write_all(buffer.as_bytes())?;
+        buffer.clear();
+        crate::model::unit_plaintext(&full, &mut buffer);
+        txt.write_all(buffer.as_bytes())?;
+    }
+    md.flush()?;
+    txt.flush()?;
+    Ok(())
 }
 fn route(c: &mut ContextData, input: &Path, bytes: &[u8], ext: &str) -> Result<()> {
     if c.options.parser == "xberg" {
@@ -788,9 +828,12 @@ fn delimited(c: &mut ContextData, bytes: &[u8], ext: &str) -> Result<()> {
         bail!("unsupported delimiter");
     }
     // Large files are split into bounded chunk units so memory stays proportional to a chunk,
-    // not the whole file. Small files keep a single unit named "Records".
+    // not the whole file. Small files keep a single unit named "Records". Inputs above
+    // `limits.stream_bytes` additionally release block payloads after each unit file is
+    // written; result/markdown assembly then streams those files.
     const CHUNK_ROWS: usize = 50_000;
     const CHUNK_CELLS: usize = 250_000;
+    c.release_units = bytes.len() as u64 > c.limits.stream_bytes;
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .delimiter(delimiter as u8)
@@ -1713,6 +1756,86 @@ fn rtf(c: &mut ContextData, bytes: &[u8]) -> Result<()> {
 /// Runs inside a parallel worker context or the coordinator, so it only touches unit files,
 /// asset files and sidecars.
 #[allow(clippy::too_many_arguments)]
+/// Native text shorter than this on an image-free page is treated as a partial text layer: with
+/// OCR enabled the page is rendered and OCR'd too. Duplicate words are suppressed by
+/// [`providers::attach_ocr`], so a page whose OCR matches its text layer gains no blocks.
+const OCR_RENDER_MAX_NATIVE_CHARS: usize = 24;
+
+/// Resolve the `-bbox-layout` XML for one page of a batch. Poppler emits one `<page>` per
+/// requested page; if that invariant ever breaks, resolve the page individually instead of
+/// silently attributing another page's text.
+fn page_slice_for(
+    path: &str,
+    page: &str,
+    slices: &[String],
+    offset: usize,
+    fallback: bool,
+    u: &mut Unit,
+) -> Option<String> {
+    if !fallback {
+        return slices.get(offset).cloned();
+    }
+    u.warnings.push(
+        "Poppler returned a page-count mismatch for this batch; per-page text fallback used".into(),
+    );
+    match providers::command(
+        "pdftotext",
+        &["-f", page, "-l", page, "-bbox-layout", path, "-"],
+    ) {
+        Ok(bytes) => {
+            let raw = String::from_utf8_lossy(&bytes);
+            page_slices_of(&raw).into_iter().next().map(str::to_owned)
+        }
+        Err(e) => {
+            u.errors.push(failure(&e, Some(u.id.clone())));
+            None
+        }
+    }
+}
+
+/// Render one page at 150 dpi and OCR the render. Errors are returned to the caller so a render
+/// failure marks the page partial instead of aborting the whole document.
+fn render_page_and_ocr(
+    c: &mut ContextData,
+    path: &str,
+    page: &str,
+    dimensions: &regex::Regex,
+    index: usize,
+    u: &mut Unit,
+) -> Result<()> {
+    let page_info = providers::command("pdfinfo", &["-f", page, "-l", page, path])?;
+    let page_info = String::from_utf8_lossy(&page_info);
+    let size = dimensions
+        .captures(&page_info)
+        .context("unsupported: PDF page dimensions unavailable")?;
+    let w = size[1].parse::<f64>()?;
+    let h = size[2].parse::<f64>()?;
+    if (w * 150. / 72.).ceil() * (h * 150. / 72.).ceil() > c.limits.page_pixels as f64 {
+        bail!("limit_exceeded: PDF render pixels");
+    }
+    let prefix = c.dir.join(format!("render-{}", index + 1));
+    providers::command(
+        "pdftoppm",
+        &[
+            "-f",
+            page,
+            "-l",
+            page,
+            "-singlefile",
+            "-r",
+            "150",
+            "-png",
+            path,
+            prefix.to_str().unwrap(),
+        ],
+    )?;
+    let image = prefix.with_extension("png");
+    let bytes = fs::read(&image)?;
+    let result = c.figure(&bytes, "page-render.png", u);
+    let _ = fs::remove_file(&image);
+    result
+}
+
 fn pdf_batch(
     c: &mut ContextData,
     input: &Path,
@@ -1747,6 +1870,9 @@ fn pdf_batch(
                 .collect();
         }
     }
+    // Poppler emits exactly one <page> element per requested page; fall back to per-page text
+    // extraction if that ever stops holding, rather than shifting text onto the wrong page.
+    let per_page_fallback = text_error.is_none() && page_slices.len() != batch_end - batch_start;
     // One image extraction call per batch; `pdfimages -list` maps files back to pages.
     let dir = c.dir.join(format!("batch-{}-images", batch_start + 1));
     fs::create_dir_all(&dir)?;
@@ -1799,7 +1925,16 @@ fn pdf_batch(
         let page = (i + 1).to_string();
         if let Some(e) = &text_error {
             u.errors.push(failure(e, Some(u.id.clone())));
-        } else if let Some(slice) = page_slices.get(i - batch_start) {
+        } else if let Some(slice) = page_slice_for(
+            path,
+            &page,
+            &page_slices,
+            i - batch_start,
+            per_page_fallback,
+            &mut u,
+        )
+        .as_deref()
+        {
             let parse_started = Instant::now();
             let doc = diagrams::xml(slice)?;
             let words = doc
@@ -1892,41 +2027,26 @@ fn pdf_batch(
             }
             fs::remove_dir_all(&page_dir)?;
         }
-        if !u.blocks.iter().any(|b| b.kind == "text") {
-            if c.options.ocr {
-                // Render only a single page, and enforce dimensions before rendering.
-                let page_info = providers::command("pdfinfo", &["-f", &page, "-l", &page, path])?;
-                let page_info = String::from_utf8_lossy(&page_info);
-                let size = dimensions
-                    .captures(&page_info)
-                    .context("unsupported: PDF page dimensions unavailable")?;
-                let w = size[1].parse::<f64>()?;
-                let h = size[2].parse::<f64>()?;
-                if (w * 150. / 72.).ceil() * (h * 150. / 72.).ceil() > c.limits.page_pixels as f64 {
-                    bail!("limit_exceeded: PDF render pixels");
+        let native_text_chars: usize = u
+            .blocks
+            .iter()
+            .filter(|b| b.kind == "text")
+            .map(|b| b.text.chars().count())
+            .sum();
+        let has_figures = u.blocks.iter().any(|b| b.kind == "figure");
+        if c.options.ocr {
+            // Render when the page has no native text at all, or when it carries almost none and
+            // no embedded images were extracted (a partial text layer over a scan). OCR output
+            // that duplicates the native text layer is suppressed downstream.
+            if native_text_chars == 0
+                || (!has_figures && native_text_chars < OCR_RENDER_MAX_NATIVE_CHARS)
+            {
+                if let Err(e) = render_page_and_ocr(c, path, &page, dimensions, i, &mut u) {
+                    u.errors.push(failure(&e, Some(u.id.clone())));
                 }
-                let prefix = c.dir.join(format!("render-{}", i + 1));
-                providers::command(
-                    "pdftoppm",
-                    &[
-                        "-f",
-                        &page,
-                        "-l",
-                        &page,
-                        "-singlefile",
-                        "-r",
-                        "150",
-                        "-png",
-                        path,
-                        prefix.to_str().unwrap(),
-                    ],
-                )?;
-                let image = prefix.with_extension("png");
-                let bytes = fs::read(&image)?;
-                c.figure(&bytes, "page-render.png", &mut u)?;
-            } else {
-                u.status = "needs_ocr".into();
             }
+        } else if native_text_chars == 0 {
+            u.status = "needs_ocr".into();
         }
         if u.blocks.iter().any(|b| b.kind == "figure") {
             u.warnings.push("Embedded images retained; OCR coordinates refer to each asset, with PDF placement unresolved. Word-level native/OCR duplicates suppressed conservatively".into());

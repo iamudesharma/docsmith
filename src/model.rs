@@ -52,6 +52,10 @@ pub struct Limits {
     pub pdf_workers: usize,
     /// Concurrent OCR subprocesses across all page workers (1 = serial OCR).
     pub ocr_threads: usize,
+    /// Delimited inputs larger than this are extracted in streamed mode: block payloads are
+    /// dropped from memory once each unit file is written, and result/markdown assembly reads
+    /// the unit files one at a time.
+    pub stream_bytes: u64,
     /// Retained bytes per tenant across completed jobs; 0 disables the quota.
     pub disk_bytes: u64,
     /// Seconds a terminal job is retained before the sweep removes it; 0 disables the sweep.
@@ -72,6 +76,7 @@ impl Default for Limits {
             queued_jobs: 100,
             pdf_workers: 4,
             ocr_threads: 4,
+            stream_bytes: 16 * 1024 * 1024,
             disk_bytes: 0,
             retention_seconds: 0,
         }
@@ -360,80 +365,89 @@ impl Unit {
 pub fn markdown(doc: &Document) -> String {
     let mut out = format!("# {}\n\nStatus: {}\n\n", doc.filename, doc.status);
     for u in &doc.units {
-        out.push_str(&format!("## {}\n\n", u.name));
-        for b in &u.blocks {
-            if let Some(t) = &b.table {
-                let cells = t
-                    .cells
-                    .iter()
-                    .map(|cell| ((cell.row, cell.column), cell))
-                    .collect::<std::collections::HashMap<_, _>>();
-                if t.headers.is_empty() {
-                    out.push_str(&format!(
-                        "| {} |\n",
-                        (0..t.columns)
-                            .map(|i| format!("Column {}", i + 1))
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    ));
-                    out.push_str(&format!("| {} |\n", vec!["---"; t.columns].join(" | ")));
-                }
-                for r in 0..t.rows {
-                    let row = (0..t.columns)
-                        .map(|c| {
-                            cells
-                                .get(&(r as u32, c as u32))
-                                .map(|x| x.raw.replace('|', "\\|").replace('\n', " "))
-                                .unwrap_or_default()
-                        })
-                        .collect::<Vec<_>>();
-                    out.push_str(&format!("| {} |\n", row.join(" | ")));
-                    if r == 0 && !t.headers.is_empty() {
-                        out.push_str(&format!("| {} |\n", vec!["---"; t.columns].join(" | ")));
-                    }
-                }
-            } else {
-                out.push_str(&b.text);
-                out.push('\n');
-            }
-            if let Some(id) = &b.asset_id {
-                out.push_str(&format!("[Asset {id}](assets/{id})\n"));
-            }
-            out.push('\n');
-        }
-        for w in &u.warnings {
-            out.push_str(&format!("> Warning: {w}\n"));
-        }
+        unit_markdown(u, &mut out);
     }
     out
 }
-
-pub fn plaintext(document: &Document) -> String {
-    let mut out = String::new();
-    for unit in &document.units {
-        for block in &unit.blocks {
-            if let Some(table) = &block.table {
-                let cells = table
-                    .cells
-                    .iter()
-                    .map(|cell| ((cell.row, cell.column), cell.raw.as_str()))
-                    .collect::<std::collections::HashMap<_, _>>();
-                for r in 0..table.rows {
-                    for c in 0..table.columns {
-                        if c > 0 {
-                            out.push('\t');
-                        }
-                        out.push_str(cells.get(&(r as u32, c as u32)).copied().unwrap_or(""));
-                    }
-                    out.push('\n');
-                }
-            } else {
-                out.push_str(&block.text);
-                out.push('\n');
+/// Append one unit's Markdown section. Split out so large results can be streamed unit by
+/// unit without building the whole document string in memory.
+pub fn unit_markdown(u: &Unit, out: &mut String) {
+    out.push_str(&format!("## {}\n\n", u.name));
+    for b in &u.blocks {
+        if let Some(t) = &b.table {
+            let cells = t
+                .cells
+                .iter()
+                .map(|cell| ((cell.row, cell.column), cell))
+                .collect::<std::collections::HashMap<_, _>>();
+            if t.headers.is_empty() {
+                out.push_str(&format!(
+                    "| {} |\n",
+                    (0..t.columns)
+                        .map(|i| format!("Column {}", i + 1))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                ));
+                out.push_str(&format!("| {} |\n", vec!["---"; t.columns].join(" | ")));
             }
+            for r in 0..t.rows {
+                let row = (0..t.columns)
+                    .map(|c| {
+                        cells
+                            .get(&(r as u32, c as u32))
+                            .map(|x| x.raw.replace('|', "\\|").replace('\n', " "))
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>();
+                out.push_str(&format!("| {} |\n", row.join(" | ")));
+                if r == 0 && !t.headers.is_empty() {
+                    out.push_str(&format!("| {} |\n", vec!["---"; t.columns].join(" | ")));
+                }
+            }
+        } else {
+            out.push_str(&b.text);
+            out.push('\n');
         }
+        if let Some(id) = &b.asset_id {
+            out.push_str(&format!("[Asset {id}](assets/{id})\n"));
+        }
+        out.push('\n');
+    }
+    for w in &u.warnings {
+        out.push_str(&format!("> Warning: {w}\n"));
+    }
+}
+
+pub fn plaintext(doc: &Document) -> String {
+    let mut out = String::new();
+    for unit in &doc.units {
+        unit_plaintext(unit, &mut out);
     }
     out
+}
+/// Append one unit's tab-separated text. See [`unit_markdown`] for why this is split.
+pub fn unit_plaintext(unit: &Unit, out: &mut String) {
+    for block in &unit.blocks {
+        if let Some(table) = &block.table {
+            let cells = table
+                .cells
+                .iter()
+                .map(|cell| ((cell.row, cell.column), cell.raw.as_str()))
+                .collect::<std::collections::HashMap<_, _>>();
+            for r in 0..table.rows {
+                for c in 0..table.columns {
+                    if c > 0 {
+                        out.push('\t');
+                    }
+                    out.push_str(cells.get(&(r as u32, c as u32)).copied().unwrap_or(""));
+                }
+                out.push('\n');
+            }
+        } else {
+            out.push_str(&block.text);
+            out.push('\n');
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
