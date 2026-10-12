@@ -23,7 +23,7 @@ curl -F file=@fixtures/document.docx -F 'options={"ocr":false,"vision":false}' h
 curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result
 ```
 
-The result directory contains `result.json`, `result.md`, `units/` and content-addressed `assets/`. Keep JSON for provenance and fidelity; Markdown is a convenience export. Word uses logical sections; spreadsheets use sheets; presentations use source-ordered slides; PDF uses actual pages.
+The result directory contains `result.json`, `result.md`, `units/` and content-addressed `assets/`. Keep JSON for provenance and fidelity; Markdown is a convenience export. Word uses logical sections; spreadsheets use sheets; presentations use source-ordered slides; PDF uses actual pages. PDFs are extracted in 100-page batches with per-page checkpoints (restart reuses completed pages); CSV/TSV inputs are split into bounded chunk units. See [deployment](docs/DEPLOYMENT.md) for large-input sizing.
 
 See [validation evidence](docs/VALIDATION.md), [capabilities](docs/CAPABILITIES.md), [architecture](docs/ARCHITECTURE.md), [research and dependency decisions](docs/RESEARCH.md), [phase acceptance](docs/PHASES.md), and [deployment](docs/DEPLOYMENT.md). These separate implemented behavior from unrun real-world acceptance gates.
 

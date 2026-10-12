@@ -647,3 +647,72 @@ fn markdown_tables_and_links_are_structured() {
         .iter()
         .any(|b| b.attributes["links"][0]["href"] == "https://invalid.example"));
 }
+#[test]
+fn pdf_batch_images_map_to_correct_pages() {
+    if !doc_extractor::providers::available("pdfinfo") {
+        return;
+    }
+    // Pages 2 and 5 carry distinct images; batching attributes `pdfimages` output via `-list`.
+    let d = fixture("pages-images.pdf", Options::default());
+    let counts: Vec<usize> = d
+        .units
+        .iter()
+        .map(|u| u.blocks.iter().filter(|b| b.kind == "figure").count())
+        .collect();
+    assert_eq!(counts, vec![1, 1, 0, 0, 1, 0], "{:?}", d.errors);
+    assert_eq!(d.assets.len(), 3, "original + two distinct images");
+}
+#[test]
+fn large_csv_is_chunked_into_bounded_units() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("large.csv");
+    let mut file = std::fs::File::create(&path).unwrap();
+    use std::io::Write;
+    writeln!(file, "id,name,amount").unwrap();
+    for i in 0..60_000 {
+        writeln!(file, "{i},user{},{}", i % 1000, i % 97).unwrap();
+    }
+    drop(file);
+    let out = dir.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let d = extract::extract(
+        &path,
+        "large.csv",
+        &out,
+        Options::default(),
+        Limits::default(),
+        "test",
+    )
+    .unwrap();
+    assert_eq!(d.status, "complete", "{:?}", d.errors);
+    assert!(d.units.len() >= 2, "expected chunks, got {}", d.units.len());
+    assert_eq!(d.units[0].name, "Records");
+    let mut rows = 0usize;
+    for u in &d.units {
+        let t = u.blocks[0].table.as_ref().unwrap();
+        rows += t.rows;
+        assert_eq!(t.cells[0].row, 0, "chunk cell rows restart at zero");
+        assert!(
+            u.blocks[0]
+                .provenance
+                .cell_range
+                .as_deref()
+                .is_some_and(|r| r.starts_with("rows ")),
+            "{:?}",
+            u.blocks[0].provenance.cell_range
+        );
+        let on_disk: Unit = serde_json::from_slice(
+            &std::fs::read(out.join("units").join(format!("{}.json", u.id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            on_disk.blocks[0].table.as_ref().unwrap().rows,
+            u.blocks[0].table.as_ref().unwrap().rows
+        );
+    }
+    assert_eq!(rows, 60_001);
+    let result: Document =
+        serde_json::from_slice(&std::fs::read(out.join("result.json")).unwrap()).unwrap();
+    assert_eq!(result.units.len(), d.units.len());
+    assert_eq!(result.metadata["chunks"], serde_json::json!(d.units.len()));
+}

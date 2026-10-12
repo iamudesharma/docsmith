@@ -1,0 +1,35 @@
+{
+  "date": "2026-10-12",
+  "host": "MacBookAir10,1 (M1, 8 GB), debug and release builds, synthetic inputs",
+  "inputs": {
+    "500-page text PDF": "566 KB, ~14 text lines/page, one shared image every 25th page",
+    "3000-page text PDF": "3.4 MB, same shape",
+    "400k-row CSV": "400001 rows x 4 columns, 17 MB",
+    "700k-row CSV": "700001 rows x 4 columns, 30 MB"
+  },
+  "before": {
+    "500-page PDF (debug)": "84.8 s; 681 MB written to checkpoint.json (full document re-serialized per page)",
+    "3000-page PDF": "would fail: default 1000-unit limit and 120 s timeout; extrapolated ~509 s",
+    "400k-row CSV": "failed: limit_exceeded at the 1M-cell cap"
+  },
+  "after": {
+    "500-page PDF (debug)": "7.6 s",
+    "500-page PDF (release)": "5.0 s",
+    "3000-page PDF (debug)": "61.9 s, 3000 units, 0 errors",
+    "3000-page PDF (release)": "29.8 s, ~287 MB sampled peak RSS",
+    "500-page resume (debug)": "0.46 s, all units reused, no Poppler calls",
+    "400k-row CSV (debug)": "16.1 s wall including the 203 MB result write; extractor time 6.2 s",
+    "400k-row CSV (release)": "2.97 s wall, ~537 MB sampled peak RSS, 203 MB result (11.9x input)",
+    "700k-row CSV (release)": "3.25 s wall, ~932 MB sampled peak RSS, 356 MB result"
+  },
+  "changes": [
+    "Poppler text extraction batched per 100-page range instead of one process per page",
+    "pdfimages batched per range with -list attribution; per-page fallback on mismatch",
+    "whole-document checkpoint on a 100-unit cadence instead of per unit (per-unit files and per-asset sidecars carry resume state)",
+    "resume identity from identity.json; completed pages reused without invoking Poppler",
+    "CSV/TSV split into bounded chunk units (50k rows / 250k cells per unit) with cell-range provenance",
+    "defaults raised: units 20000, timeout 1800 s, output_bytes 512 MiB; streaming size-capped result write"
+  ],
+  "limits_note": "CSV result JSON is roughly 12x the input for tiny cells; peak memory grows with the whole document (about 0.9 GB per 700k rows of this shape). Raise limits.memory_bytes/upload_bytes for larger files; a compact/streamed table mode would be needed beyond a few million rows.",
+  "synthetic": true
+}

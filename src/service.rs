@@ -1080,7 +1080,9 @@ pub fn worker_command(
         )?));
     let memory = limits.memory_bytes;
     let cpu = limits.timeout_seconds;
-    let file = limits.output_bytes;
+    // Headroom above the checked output limit so oversized results fail with a clean error from
+    // the size check instead of SIGXFSZ during the atomic temp write.
+    let file = limits.output_bytes.saturating_add(64 * 1024 * 1024);
     #[cfg(unix)]
     unsafe {
         command.pre_exec(move || {

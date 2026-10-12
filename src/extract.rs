@@ -36,16 +36,21 @@ pub struct ContextData {
     pub document: Document,
     start: Instant,
     retained: u64,
+    identity_ok: bool,
 }
+/// Whole-document checkpoint + manifest cadence. Per-unit files are always written; rewriting
+/// the complete checkpoint for every unit is O(n^2) for large documents (500 PDF pages produced
+/// ~680 MB of checkpoint traffic) and adds no resume safety beyond the unit files. Asset resume
+/// data lives in per-asset sidecars, so this is only progress/status bookkeeping.
+const CHECKPOINT_EVERY: usize = 100;
 pub fn hash(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
-pub fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
+pub fn atomic_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
-    let bytes = serde_json::to_vec(value)?;
     let mut file = fs::File::create(&tmp)?;
     use std::io::Write;
-    file.write_all(&bytes)?;
+    file.write_all(bytes)?;
     file.sync_all()?;
     fs::rename(tmp, path)?;
     if let Some(parent) = path.parent() {
@@ -53,7 +58,72 @@ pub fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     }
     Ok(())
 }
+pub fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
+    atomic_bytes(path, &serde_json::to_vec(value)?)
+}
+/// Serialize straight into the atomic temp file while counting bytes; if the counted size
+/// exceeds `limit`, the temp file is removed and a clean error returned. This avoids holding a
+/// second full copy of large result documents in memory.
+pub fn atomic_json_limited(path: &Path, value: &impl serde::Serialize, limit: u64) -> Result<()> {
+    struct Counting<W> {
+        inner: W,
+        bytes: u64,
+    }
+    impl<W: std::io::Write> std::io::Write for Counting<W> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let n = self.inner.write(buf)?;
+            self.bytes += n as u64;
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.inner.flush()
+        }
+    }
+    let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+    use std::io::Write;
+    let mut writer = Counting {
+        inner: std::io::BufWriter::with_capacity(1024 * 1024, fs::File::create(&tmp)?),
+        bytes: 0,
+    };
+    serde_json::to_writer(&mut writer, value)?;
+    writer.inner.flush()?;
+    let counted = writer.bytes;
+    writer.inner.get_ref().sync_all()?;
+    if counted > limit {
+        let _ = fs::remove_file(&tmp);
+        bail!("limit_exceeded: output bytes");
+    }
+    fs::rename(&tmp, path)?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
 impl ContextData {
+    /// Rebuild the asset manifest from per-asset sidecars written at creation time. Used on
+    /// resume instead of the whole-document checkpoint, which may lag behind the unit files.
+    fn load_assets(dir: &Path) -> Result<Vec<Asset>> {
+        let mut entries: Vec<(u64, Asset)> = Vec::new();
+        let assets = dir.join("assets");
+        if assets.exists() {
+            for entry in fs::read_dir(&assets)? {
+                let path = entry?.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(bytes) = fs::read(&path) else { continue };
+                let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+                    continue;
+                };
+                let Ok(asset) = serde_json::from_value::<Asset>(value["asset"].clone()) else {
+                    continue;
+                };
+                entries.push((value["seq"].as_u64().unwrap_or(0), asset));
+            }
+        }
+        entries.sort_by_key(|(seq, _)| *seq);
+        Ok(entries.into_iter().map(|(_, asset)| asset).collect())
+    }
     pub(crate) fn checkpoint(&mut self, mut u: Unit) -> Result<()> {
         if self.document.units.len() >= self.limits.units {
             bail!("limit_exceeded: units");
@@ -65,12 +135,17 @@ impl ContextData {
         // Re-extract on resume using deterministic IDs. Atomic replacement retains each successful unit on crashes.
         atomic_json(&path, &u)?;
         self.document.units.push(u);
-        let bytes = serde_json::to_vec(&self.document)?;
-        if bytes.len() as u64 + self.retained > self.limits.output_bytes {
-            bail!("limit_exceeded: output bytes");
+        let units = self.document.units.len();
+        if units == 1 || units % CHECKPOINT_EVERY == 0 {
+            atomic_json_limited(
+                &self.dir.join("checkpoint.json"),
+                &self.document,
+                self.limits
+                    .output_bytes
+                    .saturating_sub(self.retained.min(self.limits.output_bytes)),
+            )?;
+            self.write_manifests(false)?;
         }
-        atomic_json(&self.dir.join("checkpoint.json"), &self.document)?;
-        self.write_manifests(false)?;
         Ok(())
     }
     fn write_manifests(&self, final_result: bool) -> Result<()> {
@@ -133,7 +208,7 @@ impl ContextData {
             cell_range: None,
             evidence: vec![],
         };
-        self.document.assets.push(Asset {
+        let asset = Asset {
             id: id.clone(),
             mime: providers::mime_for(ext).into(),
             hash: h,
@@ -141,7 +216,13 @@ impl ContextData {
             width: dimensions.map(|d| d.0),
             height: dimensions.map(|d| d.1),
             provenance,
-        });
+        };
+        // Sidecar metadata lets resume rebuild the asset manifest without touching the checkpoint.
+        atomic_json(
+            &self.dir.join("assets").join(format!("{id}.json")),
+            &json!({"seq": self.document.assets.len(), "asset": &asset}),
+        )?;
+        self.document.assets.push(asset);
         Ok(id)
     }
     pub(crate) fn figure(&mut self, bytes: &[u8], name: &str, u: &mut Unit) -> Result<()> {
@@ -225,6 +306,15 @@ pub fn extract(
         bail!("limit_exceeded: upload bytes");
     }
     let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+    // Resume identity is a small immutable file; the document checkpoint may lag behind the
+    // per-unit files, so it is not used to decide whether completed pages can be reused.
+    let previous_identity = if ext == "pdf" {
+        fs::read(dir.join("identity.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+    } else {
+        None
+    };
     let mut c = ContextData {
         dir: dir.to_owned(),
         options: options.clone(),
@@ -247,20 +337,24 @@ pub fn extract(
         },
         start: Instant::now(),
         retained: 0,
+        identity_ok: false,
     };
     if ext == "pdf" {
-        if let Ok(previous) = fs::read(dir.join("checkpoint.json")) {
-            if let Ok(previous) = serde_json::from_slice::<Document>(&previous) {
-                if previous.hash == c.document.hash
-                    && previous.versions == c.document.versions
-                    && serde_json::to_value(&previous.options)? == serde_json::to_value(&c.options)?
-                {
-                    c.retained = previous.assets.iter().map(|a| a.bytes).sum();
-                    c.document.assets = previous.assets;
-                }
+        if let Some(previous) = previous_identity {
+            if previous["hash"] == json!(c.document.hash)
+                && previous["versions"] == c.document.versions
+                && previous["options"] == serde_json::to_value(&c.options)?
+            {
+                c.document.assets = ContextData::load_assets(dir)?;
+                c.retained = c.document.assets.iter().map(|a| a.bytes).sum();
+                c.identity_ok = true;
             }
         }
     }
+    atomic_json(
+        &dir.join("identity.json"),
+        &json!({"hash":c.document.hash,"versions":c.document.versions,"options":&c.options}),
+    )?;
     let parser_error = match route(&mut c, input, &bytes, &ext) {
         Ok(()) => None,
         Err(e) => {
@@ -299,7 +393,15 @@ pub fn extract(
             .push(format!("parser error: {}", f.message));
     }
     c.document.elapsed_ms = c.start.elapsed().as_millis();
-    atomic_json(&dir.join("result.json"), &c.document)?;
+    // Streaming write with a size cap: fails cleanly instead of tripping RLIMIT_FSIZE, and does
+    // not keep a second full copy of the serialized document in memory.
+    atomic_json_limited(
+        &dir.join("result.json"),
+        &c.document,
+        c.limits
+            .output_bytes
+            .saturating_sub(c.retained.min(c.limits.output_bytes)),
+    )?;
     c.write_manifests(true)?;
     fs::write(dir.join("result.md"), markdown(&c.document))?;
     fs::write(dir.join("result.txt"), crate::model::plaintext(&c.document))?;
@@ -385,6 +487,10 @@ fn delimited(c: &mut ContextData, bytes: &[u8], ext: &str) -> Result<()> {
     if !delimiter.is_ascii() || delimiter == '\n' || delimiter == '\r' {
         bail!("unsupported delimiter");
     }
+    // Large files are split into bounded chunk units so memory stays proportional to a chunk,
+    // not the whole file. Small files keep a single unit named "Records".
+    const CHUNK_ROWS: usize = 50_000;
+    const CHUNK_CELLS: usize = 250_000;
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .delimiter(delimiter as u8)
@@ -396,13 +502,47 @@ fn delimited(c: &mut ContextData, bytes: &[u8], ext: &str) -> Result<()> {
         columns: 0,
         headers: vec![],
     };
+    let mut chunk_start = 0usize; // absolute 0-based index of the chunk's first row
+    let mut chunks = 0usize;
+    let mut total_rows = 0usize;
+    let flush =
+        |c: &mut ContextData, table: &mut Table, chunk_start: usize, chunks: usize| -> Result<()> {
+            let end = chunk_start + table.rows;
+            let mut u = Unit::new(
+                chunks,
+                "sheet",
+                if chunks == 0 {
+                    "Records".to_string()
+                } else {
+                    format!("Records {}", chunks + 1)
+                },
+            );
+            let source = format!("records rows {}-{}", chunk_start + 1, end);
+            let b = u.text("table", "", source);
+            b.provenance.cell_range = Some(format!("rows {}-{}", chunk_start + 1, end));
+            b.table = Some(std::mem::replace(
+                table,
+                Table {
+                    cells: vec![],
+                    rows: 0,
+                    columns: 0,
+                    headers: vec![],
+                },
+            ));
+            c.checkpoint(u)?;
+            Ok(())
+        };
     for (r, row) in reader.records().enumerate() {
         let row = row.context("corrupt CSV")?;
+        if row.len() > CHUNK_CELLS {
+            bail!("limit_exceeded: CSV row cells");
+        }
         table.columns = table.columns.max(row.len());
-        table.rows = r + 1;
+        table.rows += 1;
+        total_rows = r + 1;
         for (col, raw) in row.iter().enumerate() {
             table.cells.push(Cell {
-                row: r as u32,
+                row: (r - chunk_start) as u32,
                 column: col as u32,
                 raw: raw.into(),
                 value: json!(raw),
@@ -412,14 +552,18 @@ fn delimited(c: &mut ContextData, bytes: &[u8], ext: &str) -> Result<()> {
                 column_span: 1,
             });
         }
-        if table.cells.len() > 1_000_000 {
-            bail!("limit_exceeded: cells");
+        if table.rows >= CHUNK_ROWS || table.cells.len() >= CHUNK_CELLS {
+            flush(c, &mut table, chunk_start, chunks)?;
+            chunks += 1;
+            chunk_start = r + 1;
         }
     }
-    let mut u = Unit::new(0, "sheet", "Records");
-    u.text("table", "", "records").table = Some(table);
-    c.document.metadata = json!({"encoding":"UTF-8","delimiter":delimiter.to_string(),"header_inference":false,"flexible_rows":c.options.flexible_rows});
-    c.checkpoint(u)
+    if !table.cells.is_empty() {
+        flush(c, &mut table, chunk_start, chunks)?;
+        chunks += 1;
+    }
+    c.document.metadata = json!({"encoding":"UTF-8","delimiter":delimiter.to_string(),"header_inference":false,"flexible_rows":c.options.flexible_rows,"rows":total_rows,"chunks":chunks});
+    Ok(())
 }
 fn data_value(d: &Data) -> Value {
     match d {
@@ -1283,40 +1427,97 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
     let doctype = regex::Regex::new(r"(?s)<!DOCTYPE[^>]*>")?;
     let dimensions =
         regex::Regex::new(r"(?:Page\s+\d+\s+size:|Page size:)\s*([\d.]+)\s+x\s+([\d.]+)")?;
-    for i in 0..pages {
-        if let Ok(bytes) = fs::read(c.dir.join("units").join(format!("u{}.json", i + 1))) {
-            if let Ok(unit) = serde_json::from_slice::<Unit>(&bytes) {
-                if !c.document.assets.is_empty() && unit.kind == "page" && unit.index == i {
-                    c.document.units.push(unit);
-                    continue;
+    // One Poppler invocation per 100-page range instead of one per page; batches whose pages are
+    // all complete skip Poppler entirely on resume. Range XML is split per page and parsed locally.
+    const PDF_BATCH: usize = 100;
+    let mut batch_start = 0;
+    while batch_start < pages {
+        let batch_end = (batch_start + PDF_BATCH).min(pages);
+        let mut reused: Vec<Option<Unit>> = (batch_start..batch_end)
+            .map(|p| {
+                fs::read(c.dir.join("units").join(format!("u{}.json", p + 1)))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Unit>(&bytes).ok())
+                    .filter(|unit| c.identity_ok && unit.kind == "page" && unit.index == p)
+            })
+            .collect();
+        let from = (batch_start + 1).to_string();
+        let to = batch_end.to_string();
+        let mut text_error = None;
+        let mut page_slices: Vec<String> = Vec::new();
+        let mut image_dir: Option<PathBuf> = None;
+        let mut page_images: std::collections::HashMap<usize, Vec<PathBuf>> =
+            std::collections::HashMap::new();
+        if reused.iter().any(Option::is_none) {
+            match providers::command(
+                "pdftotext",
+                &["-f", &from, "-l", &to, "-bbox-layout", path, "-"],
+            ) {
+                Err(e) => text_error = Some(e),
+                Ok(b) => {
+                    let raw = String::from_utf8_lossy(&b); // Poppler emits a fixed XHTML doctype; remove it before safe parsing.
+                    let cleaned = doctype.replace_all(&raw, "").into_owned();
+                    page_slices = page_slices_of(&cleaned)
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect();
                 }
             }
-        }
-        let mut u = Unit::new(i, "page", format!("Page {}", i + 1));
-        if i == 0 {
-            let original = fs::read(input)?;
-            let id = c.asset(&original, "original.pdf", &mut u)?;
-            u.text(
-                "figure",
-                "Original PDF preserves vector content",
-                "original.pdf",
-            )
-            .asset_id = Some(id);
-            if let Err(e) = crate::pdf_source::embedded(c, input, &mut u) {
-                u.errors.push(failure(&e, Some(u.id.clone())));
+            // One image extraction call per batch; `pdfimages -list` maps files back to pages.
+            let dir = c.dir.join(format!("batch-{}-images", batch_start + 1));
+            fs::create_dir_all(&dir)?;
+            let list = providers::command("pdfimages", &["-list", "-f", &from, "-l", &to, path]);
+            let extracted = providers::command(
+                "pdfimages",
+                &[
+                    "-png",
+                    "-f",
+                    &from,
+                    "-l",
+                    &to,
+                    path,
+                    dir.join("image").to_str().unwrap(),
+                ],
+            );
+            if let (Ok(list), Ok(_)) = (list, extracted) {
+                match batch_image_map(&list, &dir) {
+                    Ok(map) => {
+                        page_images = map;
+                        image_dir = Some(dir);
+                    }
+                    Err(_) => {
+                        let _ = fs::remove_dir_all(&dir);
+                    }
+                }
+            } else {
+                let _ = fs::remove_dir_all(&dir);
             }
         }
-        let page = (i + 1).to_string();
-        let output = providers::command(
-            "pdftotext",
-            &["-f", &page, "-l", &page, "-bbox-layout", path, "-"],
-        );
-        match output {
-            Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
-            Ok(b) => {
-                let raw = String::from_utf8_lossy(&b); // Poppler emits a fixed XHTML doctype; remove it before safe parsing.
-                let s = doctype.replace_all(&raw, "");
-                let doc = diagrams::xml(&s)?;
+        let batch_images_active = image_dir.is_some();
+        for i in batch_start..batch_end {
+            if let Some(unit) = reused[i - batch_start].take() {
+                c.document.units.push(unit);
+                continue;
+            }
+            let mut u = Unit::new(i, "page", format!("Page {}", i + 1));
+            if i == 0 {
+                let original = fs::read(input)?;
+                let id = c.asset(&original, "original.pdf", &mut u)?;
+                u.text(
+                    "figure",
+                    "Original PDF preserves vector content",
+                    "original.pdf",
+                )
+                .asset_id = Some(id);
+                if let Err(e) = crate::pdf_source::embedded(c, input, &mut u) {
+                    u.errors.push(failure(&e, Some(u.id.clone())));
+                }
+            }
+            let page = (i + 1).to_string();
+            if let Some(e) = &text_error {
+                u.errors.push(failure(e, Some(u.id.clone())));
+            } else if let Some(slice) = page_slices.get(i - batch_start) {
+                let doc = diagrams::xml(slice)?;
                 let words = doc
                     .descendants()
                     .filter(|n| n.has_tag_name("word"))
@@ -1356,87 +1557,156 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
                     });
                 }
                 crate::layout::pdf_tables(&mut u, words);
+            } else {
+                u.warnings.push(
+                    "PDF batch text extraction omitted this page; text may be incomplete".into(),
+                );
             }
-        }
-        let image_dir = c.dir.join(format!("page-{}-images", i + 1));
-        fs::create_dir_all(&image_dir)?;
-        let prefix = image_dir.join("image");
-        match providers::command(
-            "pdfimages",
-            &[
-                "-f",
-                &page,
-                "-l",
-                &page,
-                "-png",
-                path,
-                prefix.to_str().unwrap(),
-            ],
-        ) {
-            Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
-            Ok(_) => {
-                let mut paths = fs::read_dir(&image_dir)?
-                    .map(|p| p.map(|p| p.path()))
-                    .collect::<std::io::Result<Vec<_>>>()?;
-                paths.sort();
-                for image in paths {
-                    let bytes = fs::read(&image)?;
-                    if let Err(e) =
-                        c.figure(&bytes, image.file_name().unwrap().to_str().unwrap(), &mut u)
-                    {
-                        u.errors.push(failure(&e, Some(u.id.clone())));
+            if batch_images_active {
+                if let Some(images) = page_images.get(&(i + 1)) {
+                    for image in images {
+                        let bytes = fs::read(image)?;
+                        if let Err(e) =
+                            c.figure(&bytes, image.file_name().unwrap().to_str().unwrap(), &mut u)
+                        {
+                            u.errors.push(failure(&e, Some(u.id.clone())));
+                        }
                     }
                 }
-            }
-        }
-        if !u.blocks.iter().any(|b| b.kind == "text") {
-            if c.options.ocr {
-                // Render only a single page, and enforce dimensions before rendering.
-                let page_info = providers::command("pdfinfo", &["-f", &page, "-l", &page, path])?;
-                let page_info = String::from_utf8_lossy(&page_info);
-                let size = dimensions
-                    .captures(&page_info)
-                    .context("unsupported: PDF page dimensions unavailable")?;
-                let w = size[1].parse::<f64>()?;
-                let h = size[2].parse::<f64>()?;
-                if (w * 150. / 72.).ceil() * (h * 150. / 72.).ceil() > c.limits.page_pixels as f64 {
-                    bail!("limit_exceeded: PDF render pixels");
-                }
-                let prefix = c.dir.join(format!("render-{}", i + 1));
-                providers::command(
-                    "pdftoppm",
+            } else {
+                // Batch image extraction unavailable for this range; fall back to per-page Poppler.
+                let page_dir = c.dir.join(format!("page-{}-images", i + 1));
+                fs::create_dir_all(&page_dir)?;
+                let prefix = page_dir.join("image");
+                match providers::command(
+                    "pdfimages",
                     &[
                         "-f",
                         &page,
                         "-l",
                         &page,
-                        "-singlefile",
-                        "-r",
-                        "150",
                         "-png",
                         path,
                         prefix.to_str().unwrap(),
                     ],
-                )?;
-                let image = prefix.with_extension("png");
-                let bytes = fs::read(&image)?;
-                c.figure(&bytes, "page-render.png", &mut u)?;
-            } else {
-                u.status = "needs_ocr".into();
+                ) {
+                    Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
+                    Ok(_) => {
+                        let mut paths = fs::read_dir(&page_dir)?
+                            .map(|p| p.map(|p| p.path()))
+                            .collect::<std::io::Result<Vec<_>>>()?;
+                        paths.sort();
+                        for image in paths {
+                            let bytes = fs::read(&image)?;
+                            if let Err(e) = c.figure(
+                                &bytes,
+                                image.file_name().unwrap().to_str().unwrap(),
+                                &mut u,
+                            ) {
+                                u.errors.push(failure(&e, Some(u.id.clone())));
+                            }
+                        }
+                    }
+                }
+                fs::remove_dir_all(&page_dir)?;
             }
+            if !u.blocks.iter().any(|b| b.kind == "text") {
+                if c.options.ocr {
+                    // Render only a single page, and enforce dimensions before rendering.
+                    let page_info =
+                        providers::command("pdfinfo", &["-f", &page, "-l", &page, path])?;
+                    let page_info = String::from_utf8_lossy(&page_info);
+                    let size = dimensions
+                        .captures(&page_info)
+                        .context("unsupported: PDF page dimensions unavailable")?;
+                    let w = size[1].parse::<f64>()?;
+                    let h = size[2].parse::<f64>()?;
+                    if (w * 150. / 72.).ceil() * (h * 150. / 72.).ceil()
+                        > c.limits.page_pixels as f64
+                    {
+                        bail!("limit_exceeded: PDF render pixels");
+                    }
+                    let prefix = c.dir.join(format!("render-{}", i + 1));
+                    providers::command(
+                        "pdftoppm",
+                        &[
+                            "-f",
+                            &page,
+                            "-l",
+                            &page,
+                            "-singlefile",
+                            "-r",
+                            "150",
+                            "-png",
+                            path,
+                            prefix.to_str().unwrap(),
+                        ],
+                    )?;
+                    let image = prefix.with_extension("png");
+                    let bytes = fs::read(&image)?;
+                    c.figure(&bytes, "page-render.png", &mut u)?;
+                } else {
+                    u.status = "needs_ocr".into();
+                }
+            }
+            if u.blocks.iter().any(|b| b.kind == "figure") {
+                u.warnings.push("Embedded images retained; OCR coordinates refer to each asset, with PDF placement unresolved. Word-level native/OCR duplicates suppressed conservatively".into());
+            }
+            if c.options.interpret_diagrams {
+                crate::layout::figure_graph(&mut u);
+                u.warnings.push("Flattened PDF diagrams expose geometry-based label candidates; connector interpretation remains unknown".into());
+            }
+            u.warnings.push("Poppler reading order and text geometry retained; PDF table grids are conservative geometric proposals".into());
+            c.checkpoint(u)?;
         }
-        if u.blocks.iter().any(|b| b.kind == "figure") {
-            u.warnings.push("Embedded images retained; OCR coordinates refer to each asset, with PDF placement unresolved. Word-level native/OCR duplicates suppressed conservatively".into());
+        if let Some(dir) = &image_dir {
+            let _ = fs::remove_dir_all(dir);
         }
-        if c.options.interpret_diagrams {
-            crate::layout::figure_graph(&mut u);
-            u.warnings.push("Flattened PDF diagrams expose geometry-based label candidates; connector interpretation remains unknown".into());
-        }
-        u.warnings.push("Poppler reading order and text geometry retained; PDF table grids are conservative geometric proposals".into());
-        c.checkpoint(u)?;
-        fs::remove_dir_all(&image_dir)?;
+        batch_start = batch_end;
     }
     Ok(())
+}
+/// Map `pdfimages` output files to 1-based page numbers using the matching `-list` table.
+/// Files are emitted in list order; a count mismatch fails so callers fall back per page.
+fn batch_image_map(
+    list: &[u8],
+    dir: &Path,
+) -> Result<std::collections::HashMap<usize, Vec<PathBuf>>> {
+    let pages: Vec<usize> = String::from_utf8_lossy(list)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next()?.parse::<usize>().ok())
+        .collect();
+    let mut files = fs::read_dir(dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    files.sort();
+    if pages.len() != files.len() {
+        bail!(
+            "image list mismatch: {} listed, {} extracted",
+            pages.len(),
+            files.len()
+        );
+    }
+    let mut map: std::collections::HashMap<usize, Vec<PathBuf>> = std::collections::HashMap::new();
+    for (page, file) in pages.into_iter().zip(files) {
+        map.entry(page).or_default().push(file);
+    }
+    Ok(map)
+}
+/// Split Poppler `-bbox-layout` output into per-page XML slices without a second parse of the
+/// whole range. Poppler always emits one `<page ...>...</page>` element per requested page.
+fn page_slices_of(xml: &str) -> Vec<&str> {
+    let mut slices = Vec::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<page") {
+        let Some(end) = rest[start..].find("</page>") else {
+            break;
+        };
+        let stop = start + end + "</page>".len();
+        slices.push(&rest[start..stop]);
+        rest = &rest[stop..];
+    }
+    slices
 }
 
 fn cell_address(row: u32, column: u32) -> String {

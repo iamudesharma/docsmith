@@ -81,6 +81,25 @@ pdf('mixed.pdf',[('Digital heading',True)])
 pdf('hidden-ocr.pdf',[('Invoice TOTAL 12345',True)])
 pdf('multicolumn.pdf',[('__COLUMNS__',False)])
 pdf('table.pdf',[('__TABLE__',False)])
+# Multi-page PDF with images on specific pages, for batch image-attribution tests.
+def pdf_with_images(name,pages):
+ red=io.BytesIO();Image.new('RGB',(60,40),'red').save(red,format='JPEG');d1=red.getvalue()
+ blue=io.BytesIO();Image.new('RGB',(60,40),'blue').save(blue,format='JPEG');d2=blue.getvalue()
+ objects=[b'<< /Type /Catalog /Pages 2 0 R >>',b'',b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',b'<< /Type /XObject /Subtype /Image /Width 60 /Height 40 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length '+str(len(d1)).encode()+b' >>\nstream\n'+d1+b'\nendstream',b'<< /Type /XObject /Subtype /Image /Width 60 /Height 40 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length '+str(len(d2)).encode()+b' >>\nstream\n'+d2+b'\nendstream']
+ ids=[]
+ for text,which in pages:
+  content=(f'BT /F1 18 Tf 40 750 Td ({text}) Tj ET\n').encode()
+  if which:content+=f'q 60 0 0 40 40 400 cm /Im{which} Do Q\n'.encode()
+  pid=len(objects)+1;cid=pid+1;ids.append(pid)
+  objects.append(f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /XObject << /Im1 4 0 R /Im2 5 0 R >> >> /Contents {cid} 0 R >>'.encode())
+  objects.append(b'<< /Length '+str(len(content)).encode()+b' >>\nstream\n'+content+b'endstream')
+ objects[1]=f'<< /Type /Pages /Count {len(ids)} /Kids ['.encode()+b' '.join(f'{i} 0 R'.encode() for i in ids)+b'] >>'
+ out=bytearray(b'%PDF-1.4\n');offsets=[0]
+ for i,obj in enumerate(objects,1):offsets.append(len(out));out+=f'{i} 0 obj\n'.encode()+obj+b'\nendobj\n'
+ start=len(out);out+=f'xref\n0 {len(offsets)}\n0000000000 65535 f \n'.encode()
+ for offset in offsets[1:]:out+=f'{offset:010d} 00000 n \n'.encode()
+ out+=f'trailer << /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n'.encode();write(name,out)
+pdf_with_images('pages-images.pdf',[('Page one',0),('Page two',1),('Page three',0),('Page four',0),('Page five',2),('Page six',0)])
 write('corrupt.pdf',b'%PDF-1.7\ncorrupt')
 write('unsupported.doc',b'legacy binary placeholder')
 write('ground-truth.json',json.dumps({'scan.png':'Invoice TOTAL 12345','noisy.png':'Invoice TOTAL 12345','rotated.png':'Invoice TOTAL 12345','diagram':{'nodes':['users','orders'],'edges':[['orders','users']]},'raster_er':{'entities':['users','orders'],'edge_count':1},'synthetic':True},indent=2))
