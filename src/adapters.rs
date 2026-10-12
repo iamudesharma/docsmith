@@ -120,6 +120,7 @@ impl FormatAdapter for Xberg {
                     rows: rows.len(),
                     columns: 0,
                     headers: vec![],
+                    compact: false,
                 };
                 for (r, row) in rows.iter().enumerate() {
                     if let Some(cols) = row.as_array() {

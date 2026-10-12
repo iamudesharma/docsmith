@@ -122,6 +122,7 @@ fn add_table(u: &mut Unit, rows: &[Vec<Vec<Word>>]) {
         rows: rows.len(),
         columns: rows[0].len(),
         headers: vec![],
+        compact: false,
     });
     u.warnings.push("Geometric table proposal may also represent aligned prose. Native text retained; no header or merged-cell inference".into());
 }

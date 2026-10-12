@@ -37,6 +37,44 @@ pub struct ContextData {
     start: Instant,
     retained: u64,
     identity_ok: bool,
+    /// Parallel batch workers write only unit files and asset sidecars; the coordinator owns
+    /// checkpoints, progress manifests and the final document order.
+    write_checkpoint: bool,
+    /// Next asset sidecar sequence number; PDF batches set it per page so merge order is
+    /// page order regardless of worker scheduling.
+    next_asset_seq: u64,
+}
+/// Build an empty document shell for a parallel worker context.
+fn empty_document(from: &Document) -> Document {
+    Document {
+        schema_version: from.schema_version.clone(),
+        id: from.id.clone(),
+        hash: from.hash.clone(),
+        mime: from.mime.clone(),
+        filename: from.filename.clone(),
+        versions: from.versions.clone(),
+        options: from.options.clone(),
+        status: "complete".into(),
+        metadata: json!({}),
+        units: vec![],
+        assets: vec![],
+        warnings: vec![],
+        errors: vec![],
+        elapsed_ms: 0,
+    }
+}
+pub(crate) fn parallel_context(c: &ContextData) -> ContextData {
+    ContextData {
+        dir: c.dir.clone(),
+        options: c.options.clone(),
+        limits: c.limits.clone(),
+        document: empty_document(&c.document),
+        start: c.start,
+        retained: 0,
+        identity_ok: false,
+        write_checkpoint: false,
+        next_asset_seq: 0,
+    }
 }
 /// Whole-document checkpoint + manifest cadence. Per-unit files are always written; rewriting
 /// the complete checkpoint for every unit is O(n^2) for large documents (500 PDF pages produced
@@ -100,9 +138,10 @@ pub fn atomic_json_limited(path: &Path, value: &impl serde::Serialize, limit: u6
     Ok(())
 }
 impl ContextData {
-    /// Rebuild the asset manifest from per-asset sidecars written at creation time. Used on
-    /// resume instead of the whole-document checkpoint, which may lag behind the unit files.
-    fn load_assets(dir: &Path) -> Result<Vec<Asset>> {
+    /// Rebuild the asset manifest from per-asset sidecars written at creation time, in sequence
+    /// order. Also returns the next sequence number. Used on resume instead of the
+    /// whole-document checkpoint, which may lag behind the unit files.
+    fn load_assets(dir: &Path) -> Result<(Vec<Asset>, u64)> {
         let mut entries: Vec<(u64, Asset)> = Vec::new();
         let assets = dir.join("assets");
         if assets.exists() {
@@ -122,7 +161,11 @@ impl ContextData {
             }
         }
         entries.sort_by_key(|(seq, _)| *seq);
-        Ok(entries.into_iter().map(|(_, asset)| asset).collect())
+        let next_seq = entries.last().map(|(seq, _)| seq + 1).unwrap_or(0);
+        Ok((
+            entries.into_iter().map(|(_, asset)| asset).collect(),
+            next_seq,
+        ))
     }
     pub(crate) fn checkpoint(&mut self, mut u: Unit) -> Result<()> {
         if self.document.units.len() >= self.limits.units {
@@ -136,7 +179,7 @@ impl ContextData {
         atomic_json(&path, &u)?;
         self.document.units.push(u);
         let units = self.document.units.len();
-        if units == 1 || units % CHECKPOINT_EVERY == 0 {
+        if self.write_checkpoint && (units == 1 || units % CHECKPOINT_EVERY == 0) {
             atomic_json_limited(
                 &self.dir.join("checkpoint.json"),
                 &self.document,
@@ -220,14 +263,25 @@ impl ContextData {
         // Sidecar metadata lets resume rebuild the asset manifest without touching the checkpoint.
         atomic_json(
             &self.dir.join("assets").join(format!("{id}.json")),
-            &json!({"seq": self.document.assets.len(), "asset": &asset}),
+            &json!({"seq": self.next_asset_seq, "asset": &asset}),
         )?;
+        self.next_asset_seq += 1;
         self.document.assets.push(asset);
         Ok(id)
     }
-    pub(crate) fn figure(&mut self, bytes: &[u8], name: &str, u: &mut Unit) -> Result<()> {
+    /// Register an asset and its figure block without running OCR/vision.
+    pub(crate) fn figure_asset(
+        &mut self,
+        bytes: &[u8],
+        name: &str,
+        u: &mut Unit,
+    ) -> Result<String> {
         let id = self.asset(bytes, name, u)?;
         u.text("figure", "", name).asset_id = Some(id.clone());
+        Ok(id)
+    }
+    pub(crate) fn figure(&mut self, bytes: &[u8], name: &str, u: &mut Unit) -> Result<()> {
+        let id = self.figure_asset(bytes, name, u)?;
         let path = self.dir.join("assets").join(&id);
         if self.options.ocr {
             let before = u.blocks.len();
@@ -306,6 +360,7 @@ pub fn extract(
         bail!("limit_exceeded: upload bytes");
     }
     let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+    let ocr_threads = limits.ocr_threads;
     // Resume identity is a small immutable file; the document checkpoint may lag behind the
     // per-unit files, so it is not used to decide whether completed pages can be reused.
     let previous_identity = if ext == "pdf" {
@@ -338,14 +393,19 @@ pub fn extract(
         start: Instant::now(),
         retained: 0,
         identity_ok: false,
+        write_checkpoint: true,
+        next_asset_seq: 0,
     };
+    providers::configure_ocr_threads(ocr_threads);
     if ext == "pdf" {
         if let Some(previous) = previous_identity {
             if previous["hash"] == json!(c.document.hash)
                 && previous["versions"] == c.document.versions
                 && previous["options"] == serde_json::to_value(&c.options)?
             {
-                c.document.assets = ContextData::load_assets(dir)?;
+                let (assets, next_seq) = ContextData::load_assets(dir)?;
+                c.document.assets = assets;
+                c.next_asset_seq = next_seq;
                 c.retained = c.document.assets.iter().map(|a| a.bytes).sum();
                 c.identity_ok = true;
             }
@@ -501,6 +561,7 @@ fn delimited(c: &mut ContextData, bytes: &[u8], ext: &str) -> Result<()> {
         rows: 0,
         columns: 0,
         headers: vec![],
+        compact: c.options.compact_tables,
     };
     let mut chunk_start = 0usize; // absolute 0-based index of the chunk's first row
     let mut chunks = 0usize;
@@ -527,6 +588,7 @@ fn delimited(c: &mut ContextData, bytes: &[u8], ext: &str) -> Result<()> {
                     rows: 0,
                     columns: 0,
                     headers: vec![],
+                    compact: table.compact,
                 },
             ));
             c.checkpoint(u)?;
@@ -625,6 +687,7 @@ fn spreadsheet(c: &mut ContextData, input: &Path, bytes: &[u8], ext: &str) -> Re
                     rows: range.height(),
                     columns: range.width(),
                     headers: vec![],
+                    compact: false,
                 };
                 for (r, col, d) in range.cells() {
                     let formula = formulas
@@ -1130,6 +1193,7 @@ fn word_table(u: &mut Unit, n: roxmltree::Node<'_, '_>, source: &str) {
         rows: 0,
         columns: 0,
         headers: vec![],
+        compact: false,
     };
     let mut vertical = std::collections::HashMap::<u32, usize>::new();
     for (r, row) in n
@@ -1217,6 +1281,7 @@ fn html_blocks(u: &mut Unit, s: &str, source: &str) {
                 rows: 0,
                 columns: 0,
                 headers: vec![],
+                compact: false,
             };
             let rows = scraper::Selector::parse("tr").unwrap();
             let cells = scraper::Selector::parse("th,td").unwrap();
@@ -1404,6 +1469,233 @@ fn rtf(c: &mut ContextData, bytes: &[u8]) -> Result<()> {
     u.warnings.push("RTF text extraction only; original formatting, tables and objects preserved in source asset".into());
     c.checkpoint(u)
 }
+/// One 100-page batch: Poppler text + image extraction, per-page parsing and checkpointing.
+/// Runs inside a parallel worker context or the coordinator, so it only touches unit files,
+/// asset files and sidecars.
+#[allow(clippy::too_many_arguments)]
+fn pdf_batch(
+    c: &mut ContextData,
+    input: &Path,
+    path: &str,
+    doctype: &regex::Regex,
+    dimensions: &regex::Regex,
+    batch_start: usize,
+    batch_end: usize,
+    missing: &[usize],
+) -> Result<()> {
+    let from = (batch_start + 1).to_string();
+    let to = batch_end.to_string();
+    let mut text_error = None;
+    let mut page_slices: Vec<String> = Vec::new();
+    let mut image_dir: Option<PathBuf> = None;
+    let mut page_images: std::collections::HashMap<usize, Vec<PathBuf>> =
+        std::collections::HashMap::new();
+    match providers::command(
+        "pdftotext",
+        &["-f", &from, "-l", &to, "-bbox-layout", path, "-"],
+    ) {
+        Err(e) => text_error = Some(e),
+        Ok(b) => {
+            let raw = String::from_utf8_lossy(&b); // Poppler emits a fixed XHTML doctype; remove it before safe parsing.
+            let cleaned = doctype.replace_all(&raw, "").into_owned();
+            page_slices = page_slices_of(&cleaned)
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+        }
+    }
+    // One image extraction call per batch; `pdfimages -list` maps files back to pages.
+    let dir = c.dir.join(format!("batch-{}-images", batch_start + 1));
+    fs::create_dir_all(&dir)?;
+    let list = providers::command("pdfimages", &["-list", "-f", &from, "-l", &to, path]);
+    let extracted = providers::command(
+        "pdfimages",
+        &[
+            "-png",
+            "-f",
+            &from,
+            "-l",
+            &to,
+            path,
+            dir.join("image").to_str().unwrap(),
+        ],
+    );
+    if let (Ok(list), Ok(_)) = (list, extracted) {
+        match batch_image_map(&list, &dir) {
+            Ok(map) => {
+                page_images = map;
+                image_dir = Some(dir);
+            }
+            Err(_) => {
+                let _ = fs::remove_dir_all(&dir);
+            }
+        }
+    } else {
+        let _ = fs::remove_dir_all(&dir);
+    }
+    let batch_images_active = image_dir.is_some();
+    for &i in missing {
+        // Page-scoped sequence numbers keep merged asset order deterministic across workers.
+        c.next_asset_seq = ((i as u64) + 1) << 32;
+        let mut u = Unit::new(i, "page", format!("Page {}", i + 1));
+        if i == 0 {
+            let original = fs::read(input)?;
+            let id = c.asset(&original, "original.pdf", &mut u)?;
+            u.text(
+                "figure",
+                "Original PDF preserves vector content",
+                "original.pdf",
+            )
+            .asset_id = Some(id);
+            if let Err(e) = crate::pdf_source::embedded(c, input, &mut u) {
+                u.errors.push(failure(&e, Some(u.id.clone())));
+            }
+        }
+        let page = (i + 1).to_string();
+        if let Some(e) = &text_error {
+            u.errors.push(failure(e, Some(u.id.clone())));
+        } else if let Some(slice) = page_slices.get(i - batch_start) {
+            let doc = diagrams::xml(slice)?;
+            let words = doc
+                .descendants()
+                .filter(|n| n.has_tag_name("word"))
+                .map(|n| {
+                    let num = |a| {
+                        n.attribute(a)
+                            .and_then(|v| v.parse::<f64>().ok())
+                            .unwrap_or(0.)
+                    };
+                    crate::layout::Word {
+                        text: node_text(n),
+                        x: num("xMin"),
+                        y: num("yMin"),
+                        width: num("xMax") - num("xMin"),
+                        height: num("yMax") - num("yMin"),
+                    }
+                })
+                .collect();
+            for n in doc.descendants().filter(|n| n.has_tag_name("line")) {
+                let words = n
+                    .children()
+                    .filter(|n| n.has_tag_name("word"))
+                    .map(node_text)
+                    .collect::<Vec<_>>();
+                let b = u.text("text", words.join(" "), format!("PDF page {}", i + 1));
+                let num = |a| {
+                    n.attribute(a)
+                        .and_then(|v| v.parse::<f64>().ok())
+                        .unwrap_or(0.)
+                };
+                b.provenance.bounds = Some(Bounds {
+                    x: num("xMin"),
+                    y: num("yMin"),
+                    width: num("xMax") - num("xMin"),
+                    height: num("yMax") - num("yMin"),
+                    coordinate_space: "pdf_points_top_left".into(),
+                });
+            }
+            crate::layout::pdf_tables(&mut u, words);
+        } else {
+            u.warnings
+                .push("PDF batch text extraction omitted this page; text may be incomplete".into());
+        }
+        if batch_images_active {
+            if let Some(images) = page_images.get(&(i + 1)) {
+                for image in images {
+                    let bytes = fs::read(image)?;
+                    if let Err(e) =
+                        c.figure(&bytes, image.file_name().unwrap().to_str().unwrap(), &mut u)
+                    {
+                        u.errors.push(failure(&e, Some(u.id.clone())));
+                    }
+                }
+            }
+        } else {
+            // Batch image extraction unavailable for this range; fall back to per-page Poppler.
+            let page_dir = c.dir.join(format!("page-{}-images", i + 1));
+            fs::create_dir_all(&page_dir)?;
+            let prefix = page_dir.join("image");
+            match providers::command(
+                "pdfimages",
+                &[
+                    "-f",
+                    &page,
+                    "-l",
+                    &page,
+                    "-png",
+                    path,
+                    prefix.to_str().unwrap(),
+                ],
+            ) {
+                Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
+                Ok(_) => {
+                    let mut paths = fs::read_dir(&page_dir)?
+                        .map(|p| p.map(|p| p.path()))
+                        .collect::<std::io::Result<Vec<_>>>()?;
+                    paths.sort();
+                    for image in paths {
+                        let bytes = fs::read(&image)?;
+                        if let Err(e) =
+                            c.figure(&bytes, image.file_name().unwrap().to_str().unwrap(), &mut u)
+                        {
+                            u.errors.push(failure(&e, Some(u.id.clone())));
+                        }
+                    }
+                }
+            }
+            fs::remove_dir_all(&page_dir)?;
+        }
+        if !u.blocks.iter().any(|b| b.kind == "text") {
+            if c.options.ocr {
+                // Render only a single page, and enforce dimensions before rendering.
+                let page_info = providers::command("pdfinfo", &["-f", &page, "-l", &page, path])?;
+                let page_info = String::from_utf8_lossy(&page_info);
+                let size = dimensions
+                    .captures(&page_info)
+                    .context("unsupported: PDF page dimensions unavailable")?;
+                let w = size[1].parse::<f64>()?;
+                let h = size[2].parse::<f64>()?;
+                if (w * 150. / 72.).ceil() * (h * 150. / 72.).ceil() > c.limits.page_pixels as f64 {
+                    bail!("limit_exceeded: PDF render pixels");
+                }
+                let prefix = c.dir.join(format!("render-{}", i + 1));
+                providers::command(
+                    "pdftoppm",
+                    &[
+                        "-f",
+                        &page,
+                        "-l",
+                        &page,
+                        "-singlefile",
+                        "-r",
+                        "150",
+                        "-png",
+                        path,
+                        prefix.to_str().unwrap(),
+                    ],
+                )?;
+                let image = prefix.with_extension("png");
+                let bytes = fs::read(&image)?;
+                c.figure(&bytes, "page-render.png", &mut u)?;
+            } else {
+                u.status = "needs_ocr".into();
+            }
+        }
+        if u.blocks.iter().any(|b| b.kind == "figure") {
+            u.warnings.push("Embedded images retained; OCR coordinates refer to each asset, with PDF placement unresolved. Word-level native/OCR duplicates suppressed conservatively".into());
+        }
+        if c.options.interpret_diagrams {
+            crate::layout::figure_graph(&mut u);
+            u.warnings.push("Flattened PDF diagrams expose geometry-based label candidates; connector interpretation remains unknown".into());
+        }
+        u.warnings.push("Poppler reading order and text geometry retained; PDF table grids are conservative geometric proposals".into());
+        c.checkpoint(u)?;
+    }
+    if let Some(dir) = &image_dir {
+        let _ = fs::remove_dir_all(dir);
+    }
+    Ok(())
+}
 fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
     let path = input.to_str().context("invalid PDF path")?;
     let info = providers::command("pdfinfo", &[path]).map_err(|e| {
@@ -1427,244 +1719,87 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
     let doctype = regex::Regex::new(r"(?s)<!DOCTYPE[^>]*>")?;
     let dimensions =
         regex::Regex::new(r"(?:Page\s+\d+\s+size:|Page size:)\s*([\d.]+)\s+x\s+([\d.]+)")?;
-    // One Poppler invocation per 100-page range instead of one per page; batches whose pages are
-    // all complete skip Poppler entirely on resume. Range XML is split per page and parsed locally.
     const PDF_BATCH: usize = 100;
-    let mut batch_start = 0;
-    while batch_start < pages {
-        let batch_end = (batch_start + PDF_BATCH).min(pages);
-        let mut reused: Vec<Option<Unit>> = (batch_start..batch_end)
-            .map(|p| {
-                fs::read(c.dir.join("units").join(format!("u{}.json", p + 1)))
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<Unit>(&bytes).ok())
-                    .filter(|unit| c.identity_ok && unit.kind == "page" && unit.index == p)
-            })
-            .collect();
-        let from = (batch_start + 1).to_string();
-        let to = batch_end.to_string();
-        let mut text_error = None;
-        let mut page_slices: Vec<String> = Vec::new();
-        let mut image_dir: Option<PathBuf> = None;
-        let mut page_images: std::collections::HashMap<usize, Vec<PathBuf>> =
-            std::collections::HashMap::new();
-        if reused.iter().any(Option::is_none) {
-            match providers::command(
-                "pdftotext",
-                &["-f", &from, "-l", &to, "-bbox-layout", path, "-"],
-            ) {
-                Err(e) => text_error = Some(e),
-                Ok(b) => {
-                    let raw = String::from_utf8_lossy(&b); // Poppler emits a fixed XHTML doctype; remove it before safe parsing.
-                    let cleaned = doctype.replace_all(&raw, "").into_owned();
-                    page_slices = page_slices_of(&cleaned)
-                        .into_iter()
-                        .map(str::to_owned)
-                        .collect();
-                }
-            }
-            // One image extraction call per batch; `pdfimages -list` maps files back to pages.
-            let dir = c.dir.join(format!("batch-{}-images", batch_start + 1));
-            fs::create_dir_all(&dir)?;
-            let list = providers::command("pdfimages", &["-list", "-f", &from, "-l", &to, path]);
-            let extracted = providers::command(
-                "pdfimages",
-                &[
-                    "-png",
-                    "-f",
-                    &from,
-                    "-l",
-                    &to,
-                    path,
-                    dir.join("image").to_str().unwrap(),
-                ],
-            );
-            if let (Ok(list), Ok(_)) = (list, extracted) {
-                match batch_image_map(&list, &dir) {
-                    Ok(map) => {
-                        page_images = map;
-                        image_dir = Some(dir);
-                    }
-                    Err(_) => {
-                        let _ = fs::remove_dir_all(&dir);
-                    }
-                }
-            } else {
-                let _ = fs::remove_dir_all(&dir);
-            }
-        }
-        let batch_images_active = image_dir.is_some();
-        for i in batch_start..batch_end {
-            if let Some(unit) = reused[i - batch_start].take() {
-                c.document.units.push(unit);
-                continue;
-            }
-            let mut u = Unit::new(i, "page", format!("Page {}", i + 1));
-            if i == 0 {
-                let original = fs::read(input)?;
-                let id = c.asset(&original, "original.pdf", &mut u)?;
-                u.text(
-                    "figure",
-                    "Original PDF preserves vector content",
-                    "original.pdf",
-                )
-                .asset_id = Some(id);
-                if let Err(e) = crate::pdf_source::embedded(c, input, &mut u) {
-                    u.errors.push(failure(&e, Some(u.id.clone())));
-                }
-            }
-            let page = (i + 1).to_string();
-            if let Some(e) = &text_error {
-                u.errors.push(failure(e, Some(u.id.clone())));
-            } else if let Some(slice) = page_slices.get(i - batch_start) {
-                let doc = diagrams::xml(slice)?;
-                let words = doc
-                    .descendants()
-                    .filter(|n| n.has_tag_name("word"))
-                    .map(|n| {
-                        let num = |a| {
-                            n.attribute(a)
-                                .and_then(|v| v.parse::<f64>().ok())
-                                .unwrap_or(0.)
-                        };
-                        crate::layout::Word {
-                            text: node_text(n),
-                            x: num("xMin"),
-                            y: num("yMin"),
-                            width: num("xMax") - num("xMin"),
-                            height: num("yMax") - num("yMin"),
-                        }
-                    })
-                    .collect();
-                for n in doc.descendants().filter(|n| n.has_tag_name("line")) {
-                    let words = n
-                        .children()
-                        .filter(|n| n.has_tag_name("word"))
-                        .map(node_text)
-                        .collect::<Vec<_>>();
-                    let b = u.text("text", words.join(" "), format!("PDF page {}", i + 1));
-                    let num = |a| {
-                        n.attribute(a)
-                            .and_then(|v| v.parse::<f64>().ok())
-                            .unwrap_or(0.)
-                    };
-                    b.provenance.bounds = Some(Bounds {
-                        x: num("xMin"),
-                        y: num("yMin"),
-                        width: num("xMax") - num("xMin"),
-                        height: num("yMax") - num("yMin"),
-                        coordinate_space: "pdf_points_top_left".into(),
-                    });
-                }
-                crate::layout::pdf_tables(&mut u, words);
-            } else {
-                u.warnings.push(
-                    "PDF batch text extraction omitted this page; text may be incomplete".into(),
-                );
-            }
-            if batch_images_active {
-                if let Some(images) = page_images.get(&(i + 1)) {
-                    for image in images {
-                        let bytes = fs::read(image)?;
-                        if let Err(e) =
-                            c.figure(&bytes, image.file_name().unwrap().to_str().unwrap(), &mut u)
-                        {
-                            u.errors.push(failure(&e, Some(u.id.clone())));
-                        }
-                    }
-                }
-            } else {
-                // Batch image extraction unavailable for this range; fall back to per-page Poppler.
-                let page_dir = c.dir.join(format!("page-{}-images", i + 1));
-                fs::create_dir_all(&page_dir)?;
-                let prefix = page_dir.join("image");
-                match providers::command(
-                    "pdfimages",
-                    &[
-                        "-f",
-                        &page,
-                        "-l",
-                        &page,
-                        "-png",
-                        path,
-                        prefix.to_str().unwrap(),
-                    ],
-                ) {
-                    Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
-                    Ok(_) => {
-                        let mut paths = fs::read_dir(&page_dir)?
-                            .map(|p| p.map(|p| p.path()))
-                            .collect::<std::io::Result<Vec<_>>>()?;
-                        paths.sort();
-                        for image in paths {
-                            let bytes = fs::read(&image)?;
-                            if let Err(e) = c.figure(
-                                &bytes,
-                                image.file_name().unwrap().to_str().unwrap(),
-                                &mut u,
-                            ) {
-                                u.errors.push(failure(&e, Some(u.id.clone())));
-                            }
-                        }
-                    }
-                }
-                fs::remove_dir_all(&page_dir)?;
-            }
-            if !u.blocks.iter().any(|b| b.kind == "text") {
-                if c.options.ocr {
-                    // Render only a single page, and enforce dimensions before rendering.
-                    let page_info =
-                        providers::command("pdfinfo", &["-f", &page, "-l", &page, path])?;
-                    let page_info = String::from_utf8_lossy(&page_info);
-                    let size = dimensions
-                        .captures(&page_info)
-                        .context("unsupported: PDF page dimensions unavailable")?;
-                    let w = size[1].parse::<f64>()?;
-                    let h = size[2].parse::<f64>()?;
-                    if (w * 150. / 72.).ceil() * (h * 150. / 72.).ceil()
-                        > c.limits.page_pixels as f64
-                    {
-                        bail!("limit_exceeded: PDF render pixels");
-                    }
-                    let prefix = c.dir.join(format!("render-{}", i + 1));
-                    providers::command(
-                        "pdftoppm",
-                        &[
-                            "-f",
-                            &page,
-                            "-l",
-                            &page,
-                            "-singlefile",
-                            "-r",
-                            "150",
-                            "-png",
-                            path,
-                            prefix.to_str().unwrap(),
-                        ],
-                    )?;
-                    let image = prefix.with_extension("png");
-                    let bytes = fs::read(&image)?;
-                    c.figure(&bytes, "page-render.png", &mut u)?;
-                } else {
-                    u.status = "needs_ocr".into();
-                }
-            }
-            if u.blocks.iter().any(|b| b.kind == "figure") {
-                u.warnings.push("Embedded images retained; OCR coordinates refer to each asset, with PDF placement unresolved. Word-level native/OCR duplicates suppressed conservatively".into());
-            }
-            if c.options.interpret_diagrams {
-                crate::layout::figure_graph(&mut u);
-                u.warnings.push("Flattened PDF diagrams expose geometry-based label candidates; connector interpretation remains unknown".into());
-            }
-            u.warnings.push("Poppler reading order and text geometry retained; PDF table grids are conservative geometric proposals".into());
-            c.checkpoint(u)?;
-        }
-        if let Some(dir) = &image_dir {
-            let _ = fs::remove_dir_all(dir);
-        }
-        batch_start = batch_end;
+    // Completed pages are reused by identity; a fully resumed document never invokes Poppler.
+    let mut slots: Vec<Option<Unit>> = Vec::with_capacity(pages);
+    for p in 0..pages {
+        let unit = fs::read(c.dir.join("units").join(format!("u{}.json", p + 1)))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Unit>(&bytes).ok())
+            .filter(|unit| c.identity_ok && unit.kind == "page" && unit.index == p);
+        slots.push(unit);
     }
-    Ok(())
+    let missing: Vec<usize> = (0..pages).filter(|p| slots[*p].is_none()).collect();
+    if !missing.is_empty() {
+        let mut batches: Vec<(usize, usize, Vec<usize>)> = Vec::new();
+        for &p in &missing {
+            let start = (p / PDF_BATCH) * PDF_BATCH;
+            match batches.last_mut() {
+                Some((known, _, list)) if *known == start => list.push(p),
+                _ => batches.push((start, (start + PDF_BATCH).min(pages), vec![p])),
+            }
+        }
+        let workers = c.limits.pdf_workers.clamp(1, 8).min(batches.len());
+        if workers <= 1 {
+            for (start, end, list) in &batches {
+                pdf_batch(c, input, path, &doctype, &dimensions, *start, *end, list)?;
+            }
+        } else {
+            let per_worker = batches.len().div_ceil(workers);
+            let results = std::thread::scope(|scope| {
+                let mut handles = Vec::new();
+                for chunk in batches.chunks(per_worker) {
+                    let doctype = &doctype;
+                    let dimensions = &dimensions;
+                    let mut worker = parallel_context(c);
+                    handles.push(scope.spawn(move || -> Result<()> {
+                        for (start, end, list) in chunk {
+                            pdf_batch(
+                                &mut worker,
+                                input,
+                                path,
+                                doctype,
+                                dimensions,
+                                *start,
+                                *end,
+                                list,
+                            )?;
+                        }
+                        Ok(())
+                    }));
+                }
+                handles
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .map_err(|_| anyhow::anyhow!("PDF batch worker panicked"))?
+                    })
+                    .collect::<Vec<Result<()>>>()
+            });
+            for result in results {
+                result?;
+            }
+            // Worker contexts only wrote files; rebuild the asset manifest from sidecars.
+            let (assets, next_seq) = ContextData::load_assets(&c.dir)?;
+            c.document.assets = assets;
+            c.next_asset_seq = next_seq;
+            c.retained = c.document.assets.iter().map(|a| a.bytes).sum();
+        }
+        // Assemble units strictly in page order, whether reused or freshly processed.
+        for (p, slot) in slots.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(serde_json::from_slice(&fs::read(
+                    c.dir.join("units").join(format!("u{}.json", p + 1)),
+                )?)?);
+            }
+        }
+        c.document.units = slots.into_iter().flatten().collect();
+        Ok(())
+    } else {
+        c.document.units = slots.into_iter().flatten().collect();
+        Ok(())
+    }
 }
 /// Map `pdfimages` output files to 1-based page numbers using the matching `-list` table.
 /// Files are emitted in list order; a count mismatch fails so callers fall back per page.

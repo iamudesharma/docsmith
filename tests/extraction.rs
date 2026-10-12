@@ -716,3 +716,114 @@ fn large_csv_is_chunked_into_bounded_units() {
     assert_eq!(result.units.len(), d.units.len());
     assert_eq!(result.metadata["chunks"], serde_json::json!(d.units.len()));
 }
+#[test]
+fn compact_tables_omit_redundant_cell_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options {
+        compact_tables: true,
+        ..Default::default()
+    };
+    let d = extract::extract(
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/quoted.csv"),
+        "quoted.csv",
+        dir.path(),
+        options,
+        Limits::default(),
+        "compact",
+    )
+    .unwrap();
+    assert_eq!(d.status, "complete");
+    let raw = std::fs::read_to_string(dir.path().join("result.json")).unwrap();
+    assert!(
+        !raw.contains("\"value\""),
+        "compact cells must not repeat values equal to raw"
+    );
+    assert!(!raw.contains("\"formula\""));
+    assert!(!raw.contains("\"cached_value\""));
+    assert!(!raw.contains("\"row_span\""));
+    // Round-trips to the full in-memory shape: a missing value means "the raw string".
+    let round: Document = serde_json::from_str(&raw).unwrap();
+    let cells = &round.units[0].blocks[0].table.as_ref().unwrap().cells;
+    let cell = cells.iter().find(|c| c.raw == "0012").unwrap();
+    assert_eq!(cell.value, serde_json::json!("0012"));
+}
+#[test]
+fn pdf_parallel_and_sequential_batches_match() {
+    if !doc_extractor::providers::available("pdfinfo") {
+        return;
+    }
+    let input = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/long.pdf");
+    let run = |workers: usize, name: &str| -> (serde_json::Value, Document) {
+        let dir = tempfile::tempdir().unwrap();
+        let limits = Limits {
+            pdf_workers: workers,
+            ..Default::default()
+        };
+        let d = extract::extract(
+            &input,
+            "long.pdf",
+            dir.path(),
+            Options::default(),
+            limits,
+            name,
+        )
+        .unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("result.json")).unwrap())
+                .unwrap();
+        value["elapsed_ms"] = serde_json::json!(0);
+        value["id"] = serde_json::json!("test");
+        (value, d)
+    };
+    let (sequential, doc_a) = run(1, "seq");
+    let (parallel, doc_b) = run(4, "par");
+    assert!(
+        doc_a.units.len() > 100,
+        "fixture must span multiple batches"
+    );
+    assert_eq!(doc_b.units.len(), doc_a.units.len());
+    assert_eq!(
+        sequential,
+        parallel,
+        "parallel batches differ: {:?}",
+        first_json_diff(&sequential, &parallel, "$".to_string())
+    );
+}
+fn first_json_diff(a: &serde_json::Value, b: &serde_json::Value, path: String) -> Option<String> {
+    match (a, b) {
+        (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+            for (key, value) in left {
+                let child = format!("{path}.{key}");
+                match right.get(key) {
+                    None => return Some(format!("{child}: missing on right")),
+                    Some(other) => {
+                        if let Some(diff) = first_json_diff(value, other, child) {
+                            return Some(diff);
+                        }
+                    }
+                }
+            }
+            None
+        }
+        (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+            if left.len() != right.len() {
+                return Some(format!("{path}: array {} vs {}", left.len(), right.len()));
+            }
+            for (index, (value, other)) in left.iter().zip(right).enumerate() {
+                if let Some(diff) = first_json_diff(value, other, format!("{path}[{index}]")) {
+                    return Some(diff);
+                }
+            }
+            None
+        }
+        _ => (a != b).then(|| {
+            let left = a.to_string();
+            let right = b.to_string();
+            format!(
+                "{path}: {} vs {}",
+                &left[..left.len().min(200)],
+                &right[..right.len().min(200)]
+            )
+        }),
+    }
+}

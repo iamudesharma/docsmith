@@ -57,6 +57,9 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('unit endpoint',request(f'/v1/extractions/{id}/units/u1')[0]==200)
   check('derived markdown',b'0012' in request(f'/v1/extractions/{id}/result?format=markdown')[1])
   check('plain text includes cells',b'0012' in request(f'/v1/extractions/{id}/result?format=text')[1])
+  _,j=upload('quoted.csv',{'compact_tables':True});compact=j['id'];wait(compact)
+  raw=request(f'/v1/extractions/{compact}/result')[1]
+  check('compact tables omit redundant cell fields',b'"value"' not in raw and b'"cached_value"' not in raw and b'"raw"' in raw)
   check('tenant isolation',request(f'/v1/extractions/{id}',token='b-token')[0]==404)
   check('tenant-specific cache hit',upload('quoted.csv')[1]['id']==id)
   other=upload('quoted.csv',token='b-token')[1]['id'];check('cache does not cross tenants',other!=id)

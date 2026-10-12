@@ -14,6 +14,10 @@ pub struct Options {
     pub interpret_diagrams: bool,
     pub delimiter: Option<char>,
     pub flexible_rows: bool,
+    /// Omit default/redundant cell fields in table output (value when equal to raw, null
+    /// formulas, unit spans). Smaller results for large delimited files; consumers treat a
+    /// missing `value` as the raw string.
+    pub compact_tables: bool,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -27,6 +31,7 @@ impl Default for Options {
             interpret_diagrams: false,
             delimiter: None,
             flexible_rows: true,
+            compact_tables: false,
         }
     }
 }
@@ -43,6 +48,10 @@ pub struct Limits {
     pub memory_bytes: u64,
     pub workers: usize,
     pub queued_jobs: usize,
+    /// Parallel 100-page batch workers inside a PDF extraction (1 = sequential).
+    pub pdf_workers: usize,
+    /// Concurrent OCR subprocesses across all page workers (1 = serial OCR).
+    pub ocr_threads: usize,
     /// Retained bytes per tenant across completed jobs; 0 disables the quota.
     pub disk_bytes: u64,
     /// Seconds a terminal job is retained before the sweep removes it; 0 disables the sweep.
@@ -61,6 +70,8 @@ impl Default for Limits {
             memory_bytes: 2 * 1024 * 1024 * 1024,
             workers: 2,
             queued_jobs: 100,
+            pdf_workers: 4,
+            ocr_threads: 4,
             disk_bytes: 0,
             retention_seconds: 0,
         }
@@ -94,12 +105,138 @@ pub struct Cell {
     pub row_span: u32,
     pub column_span: u32,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, JsonSchema)]
 pub struct Table {
     pub cells: Vec<Cell>,
     pub rows: usize,
     pub columns: usize,
     pub headers: Vec<usize>,
+    /// Output style only: omit default/redundant cell fields when serializing. Not round-tripped.
+    #[schemars(skip)]
+    pub compact: bool,
+}
+impl serde::Serialize for Table {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("Table", 4)?;
+        state.serialize_field("cells", &TableCells(self))?;
+        state.serialize_field("rows", &self.rows)?;
+        state.serialize_field("columns", &self.columns)?;
+        state.serialize_field("headers", &self.headers)?;
+        state.end()
+    }
+}
+struct TableCells<'a>(&'a Table);
+impl serde::Serialize for TableCells<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(self.0.cells.len()))?;
+        for cell in &self.0.cells {
+            if self.0.compact {
+                seq.serialize_element(&CompactCell(cell))?;
+            } else {
+                seq.serialize_element(cell)?;
+            }
+        }
+        seq.end()
+    }
+}
+/// Compact cell wire form: `value` is omitted when it equals the raw string, null
+/// formula/cached values and default spans are omitted entirely.
+struct CompactCell<'a>(&'a Cell);
+impl serde::Serialize for CompactCell<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let cell = self.0;
+        let omit_value =
+            matches!(&cell.value, Value::String(v) if v == &cell.raw) && !cell.raw.is_empty();
+        let mut state = serializer.serialize_struct("Cell", 8)?;
+        state.serialize_field("row", &cell.row)?;
+        state.serialize_field("column", &cell.column)?;
+        state.serialize_field("raw", &cell.raw)?;
+        if !omit_value {
+            state.serialize_field("value", &cell.value)?;
+        }
+        if let Some(formula) = &cell.formula {
+            state.serialize_field("formula", formula)?;
+        }
+        if let Some(cached) = &cell.cached_value {
+            state.serialize_field("cached_value", cached)?;
+        }
+        if cell.row_span != 1 {
+            state.serialize_field("row_span", &cell.row_span)?;
+        }
+        if cell.column_span != 1 {
+            state.serialize_field("column_span", &cell.column_span)?;
+        }
+        state.end()
+    }
+}
+#[derive(serde::Deserialize)]
+struct TableWire {
+    cells: Vec<CellWire>,
+    rows: usize,
+    columns: usize,
+    headers: Vec<usize>,
+}
+#[derive(serde::Deserialize)]
+struct CellWire {
+    row: u32,
+    column: u32,
+    #[serde(default)]
+    raw: String,
+    #[serde(default)]
+    value: Option<Value>,
+    #[serde(default)]
+    formula: Option<String>,
+    #[serde(default)]
+    cached_value: Option<Value>,
+    #[serde(default = "one")]
+    row_span: u32,
+    #[serde(default = "one")]
+    column_span: u32,
+}
+fn one() -> u32 {
+    1
+}
+impl<'de> serde::Deserialize<'de> for Table {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let wire = TableWire::deserialize(deserializer)?;
+        Ok(Table {
+            cells: wire
+                .cells
+                .into_iter()
+                .map(|cell| Cell {
+                    row: cell.row,
+                    column: cell.column,
+                    // A missing `value` is the compact form of "value equals the raw string".
+                    value: cell
+                        .value
+                        .unwrap_or_else(|| Value::String(cell.raw.clone())),
+                    raw: cell.raw,
+                    formula: cell.formula,
+                    cached_value: cell.cached_value,
+                    row_span: cell.row_span,
+                    column_span: cell.column_span,
+                })
+                .collect(),
+            rows: wire.rows,
+            columns: wire.columns,
+            headers: wire.headers,
+            compact: false,
+        })
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Block {

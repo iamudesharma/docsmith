@@ -41,6 +41,8 @@ The actual test host is **MacBookAir10,1, M1, 8 GB**, not the brief's M1 Pro 16 
     "output_bytes": 536870912,
     "timeout_seconds": 1800,
     "memory_bytes": 2147483648,
+    "pdf_workers": 4,
+    "ocr_threads": 4,
     "disk_bytes": 0,
     "retention_seconds": 0
   }
@@ -49,11 +51,13 @@ The actual test host is **MacBookAir10,1, M1, 8 GB**, not the brief's M1 Pro 16 
 
 ## Large inputs
 
-Measured on the recorded 8 GB M1 (synthetic inputs; see perf-large-inputs.json): a 3000-page text PDF completes in ~30 s (release) / ~62 s (debug) with ~300 MB peak RSS, and restarting an unchanged 500-page job reuses every checkpointed page in under a second. A 700k-row, 30 MB CSV completes in ~3.3 s (release) but needs ~0.9 GB of worker memory because the canonical JSON document is held in memory; its result is ~356 MB. Consequences for very large jobs:
+Measured on the recorded 8 GB M1 (synthetic inputs; see perf-large-inputs.json): a 3000-page text PDF completes in ~21 s (release, four batch workers) / ~30 s (one worker) / ~62 s (debug) with 3000 page units and no errors, and restarting an unchanged 500-page job reuses every checkpointed page in under a second. A 700k-row, 30 MB CSV completes in ~3.3 s (release) but needs ~0.9 GB of worker memory because the canonical JSON document is held in memory; its result is ~356 MB. Consequences for very large jobs:
 
 - `upload_bytes` must cover the file (default 32 MiB); `timeout_seconds` (default 1800 s) must cover the whole job.
-- CSV result JSON is roughly 12x the input for tiny cells; size `disk_bytes`/`output_bytes` and backup space accordingly. The result write is streamed with a size cap, so an oversized job fails with `limit_exceeded: output bytes` instead of a truncated file.
-- Peak memory scales with total document size (about 0.9 GB per 700k rows of the measured shape). Raise `memory_bytes` on a larger host, or split inputs; a compact table mode is future work.
+- `pdf_workers` runs independent 100-page batches concurrently (default 4, clamped to 1..8); `ocr_threads` caps concurrent Tesseract processes across all workers (default 4), so scanned PDFs get parallel OCR bounded by that number. Results are merged in page order and are identical for any worker count.
+- `compact_tables: true` (request option, `--compact-tables` on the CLI) omits redundant cell fields for delimited files: ~4x input size instead of ~12x (203 MB -> 68.5 MB for the 400k-row sample) and roughly half the peak memory. A missing `value` means "the raw string".
+- CSV result JSON is roughly 12x the input for tiny cells in the default full mode; size `disk_bytes`/`output_bytes` and backup space accordingly. The result write is streamed with a size cap, so an oversized job fails with `limit_exceeded: output bytes` instead of a truncated file.
+- Peak memory scales with total document size (about 0.9 GB per 700k rows of the measured shape; compact mode reduces this). Raise `memory_bytes` on a larger host, or split inputs; a fully streamed table mode is future work.
 - Per-unit files are always durable; the whole-document checkpoint and progress manifests are refreshed every 100 units, so coarse progress can lag for very large jobs while `units/uN.json` remains current.
 
 `disk_bytes` is a per-tenant retained-bytes quota (0 disables it): uploads that would exceed it are rejected with 507 `quota_exceeded`, while cache hits that store nothing are still served. `retention_seconds` enables a sweep that removes terminal jobs older than the window (0 disables it); the sweep runs every `min(retention_seconds, 15)` seconds and never touches jobs whose workers are still active. Explicit DELETE remains available regardless.

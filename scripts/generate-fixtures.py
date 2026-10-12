@@ -100,6 +100,8 @@ def pdf_with_images(name,pages):
  for offset in offsets[1:]:out+=f'{offset:010d} 00000 n \n'.encode()
  out+=f'trailer << /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n'.encode();write(name,out)
 pdf_with_images('pages-images.pdf',[('Page one',0),('Page two',1),('Page three',0),('Page four',0),('Page five',2),('Page six',0)])
+# 130-page text PDF: exercises multiple 100-page batches and parallel batch workers.
+pdf('long.pdf',[(f'Long page {i}',False) for i in range(1,131)])
 write('corrupt.pdf',b'%PDF-1.7\ncorrupt')
 write('unsupported.doc',b'legacy binary placeholder')
 write('ground-truth.json',json.dumps({'scan.png':'Invoice TOTAL 12345','noisy.png':'Invoice TOTAL 12345','rotated.png':'Invoice TOTAL 12345','diagram':{'nodes':['users','orders'],'edges':[['orders','users']]},'raster_er':{'entities':['users','orders'],'edge_count':1},'synthetic':True},indent=2))

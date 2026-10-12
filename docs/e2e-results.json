@@ -3,11 +3,12 @@
     "health readiness",
     "unauthorized upload rejected",
     "multipart 202",
-    "durable complete {'id': '7e9af13e-9236-48e7-b845-94c4e9c26c84', 'state': 'completed', 'filename': 'quoted.csv', 'created_at': 1791775584, 'updated_at': 1791775585, 'progress': 1, 'result_status': 'complete', 'error': None, 'warnings': [], 'unit_failures': []}",
+    "durable complete {'id': 'e98e0bc5-7a41-4b9c-8685-a78573477073', 'state': 'completed', 'filename': 'quoted.csv', 'created_at': 1791777021, 'updated_at': 1791777021, 'progress': 1, 'result_status': 'complete', 'error': None, 'warnings': [], 'unit_failures': []}",
     "canonical cells",
     "unit endpoint",
     "derived markdown",
     "plain text includes cells",
+    "compact tables omit redundant cell fields",
     "tenant isolation",
     "tenant-specific cache hit",
     "cache does not cross tenants",
@@ -30,7 +31,7 @@
     "cache hits ignore the disk quota",
     "tenant disk quota rejects new storage"
   ],
-  "count": 29,
+  "count": 30,
   "date": "2026-10-12",
   "platform": "darwin"
 }

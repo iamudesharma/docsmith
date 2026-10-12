@@ -16,10 +16,12 @@
     "500-page PDF (debug)": "7.6 s",
     "500-page PDF (release)": "5.0 s",
     "3000-page PDF (debug)": "61.9 s, 3000 units, 0 errors",
-    "3000-page PDF (release)": "29.8 s, ~287 MB sampled peak RSS",
+    "3000-page PDF (release, 1 batch worker)": "29.8 s",
+    "3000-page PDF (release, 4 batch workers)": "20.7 s, 3000 units, 0 errors",
     "500-page resume (debug)": "0.46 s, all units reused, no Poppler calls",
     "400k-row CSV (debug)": "16.1 s wall including the 203 MB result write; extractor time 6.2 s",
-    "400k-row CSV (release)": "2.97 s wall, ~537 MB sampled peak RSS, 203 MB result (11.9x input)",
+    "400k-row CSV (release, full tables)": "2.97 s wall, ~537 MB sampled peak RSS, 203 MB result (11.9x input)",
+    "400k-row CSV (release, compact_tables)": "1.5 s wall, ~403 MB sampled peak RSS, 68.5 MB result (4.0x input, 3x smaller)",
     "700k-row CSV (release)": "3.25 s wall, ~932 MB sampled peak RSS, 356 MB result"
   },
   "changes": [
@@ -28,7 +30,10 @@
     "whole-document checkpoint on a 100-unit cadence instead of per unit (per-unit files and per-asset sidecars carry resume state)",
     "resume identity from identity.json; completed pages reused without invoking Poppler",
     "CSV/TSV split into bounded chunk units (50k rows / 250k cells per unit) with cell-range provenance",
-    "defaults raised: units 20000, timeout 1800 s, output_bytes 512 MiB; streaming size-capped result write"
+    "defaults raised: units 20000, timeout 1800 s, output_bytes 512 MiB; streaming size-capped result write",
+    "parallel 100-page batch workers (limits.pdf_workers) writing disjoint unit files and content-addressed assets, merged in page order",
+    "global OCR concurrency limiter (limits.ocr_threads) so parallel page workers cannot oversubscribe Tesseract",
+    "compact_tables option omitting redundant cell fields (value equal to raw, null formulas, unit spans)"
   ],
   "limits_note": "CSV result JSON is roughly 12x the input for tiny cells; peak memory grows with the whole document (about 0.9 GB per 700k rows of this shape). Raise limits.memory_bytes/upload_bytes for larger files; a compact/streamed table mode would be needed beyond a few million rows.",
   "synthetic": true

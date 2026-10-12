@@ -32,6 +32,8 @@ enum Commands {
         #[arg(long)]
         interpret_diagrams: bool,
         #[arg(long)]
+        compact_tables: bool,
+        #[arg(long)]
         options: Option<PathBuf>,
     },
     Capabilities,
@@ -76,6 +78,7 @@ fn main() -> anyhow::Result<()> {
             languages,
             vision,
             interpret_diagrams,
+            compact_tables,
             options,
         } => {
             let opts = if let Some(path) = options {
@@ -87,6 +90,7 @@ fn main() -> anyhow::Result<()> {
                     languages,
                     vision,
                     interpret_diagrams,
+                    compact_tables,
                     ..Default::default()
                 }
             };

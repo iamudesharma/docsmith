@@ -20,6 +20,7 @@ pub fn markdown(u: &mut Unit, source: &str) {
                     rows: 0,
                     columns: 0,
                     headers: vec![0],
+                    compact: false,
                 })
             }
             Event::Start(Tag::TableHead) => {

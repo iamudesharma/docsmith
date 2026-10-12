@@ -38,7 +38,48 @@ pub fn languages() -> Vec<String> {
         })
         .unwrap_or_default()
 }
-pub fn ocr(path: &Path, u: &mut Unit, opts: &Options, limits: &Limits) -> Result<()> {
+/// Global OCR concurrency limiter: `ocr_blocks` is called from parallel page workers, and each
+/// call may spawn a Tesseract process (up to four for rotation probing). Slots are configured
+/// once per extraction from `Limits.ocr_threads`.
+static OCR_SLOTS: std::sync::OnceLock<(std::sync::Mutex<usize>, std::sync::Condvar, usize)> =
+    std::sync::OnceLock::new();
+pub fn configure_ocr_threads(threads: usize) {
+    let _ = OCR_SLOTS.set((
+        std::sync::Mutex::new(0),
+        std::sync::Condvar::new(),
+        threads.max(1),
+    ));
+}
+struct OcrSlot;
+impl OcrSlot {
+    fn acquire() -> OcrSlot {
+        if let Some((lock, cond, max)) = OCR_SLOTS.get() {
+            let mut active = lock.lock().unwrap();
+            while *active >= *max {
+                active = cond.wait(active).unwrap();
+            }
+            *active += 1;
+        }
+        OcrSlot
+    }
+}
+impl Drop for OcrSlot {
+    fn drop(&mut self) {
+        if let Some((lock, cond, _)) = OCR_SLOTS.get() {
+            let mut active = lock.lock().unwrap();
+            *active = active.saturating_sub(1);
+            cond.notify_one();
+        }
+    }
+}
+pub struct OcrOutput {
+    pub blocks: Vec<Block>,
+    pub warnings: Vec<String>,
+}
+/// Run OCR for one image and return blocks without attaching them to a unit. Callers attach
+/// with [`attach_ocr`], which assigns per-unit IDs and applies native-text duplicate suppression.
+pub fn ocr_blocks(path: &Path, opts: &Options, limits: &Limits) -> Result<OcrOutput> {
+    let _slot = OcrSlot::acquire();
     let (width, height) = image::ImageReader::open(path)?
         .with_guessed_format()?
         .into_dimensions()
@@ -47,6 +88,27 @@ pub fn ocr(path: &Path, u: &mut Unit, opts: &Options, limits: &Limits) -> Result
         bail!("limit_exceeded: image pixels");
     }
     let path = path.to_str().context("invalid image path")?;
+    let mut out = OcrOutput {
+        blocks: vec![],
+        warnings: vec![],
+    };
+    let block = |text: &str, source: &str| Block {
+        id: String::new(),
+        kind: "text".into(),
+        text: text.into(),
+        provenance: Provenance {
+            unit_id: String::new(),
+            method: "ocr".into(),
+            source: source.into(),
+            bounds: None,
+            cell_range: None,
+            evidence: vec![],
+        },
+        table: None,
+        asset_id: None,
+        diagram: None,
+        attributes: Value::Null,
+    };
     if opts.ocr_provider == "apple_vision" {
         #[cfg(target_os = "macos")]
         {
@@ -56,12 +118,12 @@ pub fn ocr(path: &Path, u: &mut Unit, opts: &Options, limits: &Limits) -> Result
             let bytes = command(&executable, &[path, &opts.languages])?;
             let rows: Vec<Value> = serde_json::from_slice(&bytes)?;
             for row in rows {
-                let b = u.text("text", row["text"].as_str().unwrap_or(""), "Apple Vision");
-                b.provenance.method = "ocr".into();
+                let mut b = block(row["text"].as_str().unwrap_or(""), "Apple Vision");
                 b.provenance.bounds = serde_json::from_value(row["bounds"].clone()).ok();
                 b.attributes = row;
+                out.blocks.push(b);
             }
-            return Ok(());
+            return Ok(out);
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -83,14 +145,6 @@ pub fn ocr(path: &Path, u: &mut Unit, opts: &Options, limits: &Limits) -> Result
     if !data.starts_with(b"level\tpage_num\t") {
         bail!("provider_error: Tesseract did not return TSV");
     }
-    let native = u
-        .blocks
-        .iter()
-        .filter(|b| b.provenance.method == "native")
-        .map(|b| b.text.to_lowercase())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let native_words: std::collections::HashSet<_> = native.split_whitespace().collect();
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .from_reader(&data[..]);
@@ -105,11 +159,8 @@ pub fn ocr(path: &Path, u: &mut Unit, opts: &Options, limits: &Limits) -> Result
         .map(|t| t.trim().to_lowercase())
         .collect::<Vec<_>>();
     if tokens.is_empty() {
-        u.warnings
+        out.warnings
             .push("OCR returned no text; scan coverage is incomplete".into());
-    }
-    if tokens.len() >= 2 && tokens.iter().all(|t| native_words.contains(t.as_str())) {
-        return Ok(());
     }
     for r in records {
         if r.get(0) != Some("5") {
@@ -120,8 +171,7 @@ pub fn ocr(path: &Path, u: &mut Unit, opts: &Options, limits: &Limits) -> Result
             continue;
         }
         let number = |i| r.get(i).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.);
-        let b = u.text("text", text, "tesseract TSV");
-        b.provenance.method = "ocr".into();
+        let mut b = block(text, "tesseract TSV");
         let (x, y, w, h) = (number(6), number(7), number(8), number(9));
         let (x, y, w, h) = match rotation {
             90 => (y, height as f64 - x - w, h, w),
@@ -137,7 +187,42 @@ pub fn ocr(path: &Path, u: &mut Unit, opts: &Options, limits: &Limits) -> Result
             coordinate_space: "image_pixels".into(),
         });
         b.attributes = json!({"ocr_score_uncalibrated":number(10),"rotation_degrees":rotation,"image_width":width,"image_height":height,"line":r.get(4),"paragraph":r.get(3),"block":r.get(2)});
+        out.blocks.push(b);
     }
+    Ok(out)
+}
+/// Attach precomputed OCR output to a unit: assign unit-scoped block IDs and drop blocks whose
+/// tokens are all already present in native text (conservative duplicate suppression).
+pub fn attach_ocr(u: &mut Unit, out: OcrOutput) {
+    u.warnings.extend(out.warnings);
+    if out.blocks.is_empty() {
+        return;
+    }
+    let native = u
+        .blocks
+        .iter()
+        .filter(|b| b.provenance.method == "native")
+        .map(|b| b.text.to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let native_words: std::collections::HashSet<_> = native.split_whitespace().collect();
+    let tokens: Vec<String> = out
+        .blocks
+        .iter()
+        .flat_map(|b| b.text.split_whitespace().map(str::to_lowercase))
+        .collect();
+    if tokens.len() >= 2 && tokens.iter().all(|t| native_words.contains(t.as_str())) {
+        return;
+    }
+    for mut b in out.blocks {
+        b.provenance.unit_id = u.id.clone();
+        b.id = format!("{}-b{}", u.id, u.blocks.len() + 1);
+        u.blocks.push(b);
+    }
+}
+pub fn ocr(path: &Path, u: &mut Unit, opts: &Options, limits: &Limits) -> Result<()> {
+    let out = ocr_blocks(path, opts, limits)?;
+    attach_ocr(u, out);
     Ok(())
 }
 pub fn vision(path: &Path, options: &Options) -> Result<Value> {
