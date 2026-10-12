@@ -827,3 +827,51 @@ fn first_json_diff(a: &serde_json::Value, b: &serde_json::Value, path: String) -
         }),
     }
 }
+
+#[test]
+fn checkpoints_are_versioned_ordered_and_stream_result_matches() {
+    if !doc_extractor::providers::available("pdfinfo") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let input = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/long.pdf");
+    let doc = extract::extract(
+        &input,
+        "long.pdf",
+        dir.path(),
+        Options::default(),
+        Limits::default(),
+        "checkpoint",
+    )
+    .unwrap();
+    let identity: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("identity.json")).unwrap()).unwrap();
+    assert_eq!(identity["checkpoint_format"], serde_json::json!(2));
+    // checkpoint.json is a complete, page-ordered snapshot of unit state (stubs, no blocks).
+    let checkpoint: Document =
+        serde_json::from_slice(&std::fs::read(dir.path().join("checkpoint.json")).unwrap())
+            .unwrap();
+    assert_eq!(checkpoint.units.len(), doc.units.len());
+    let indices: Vec<usize> = checkpoint.units.iter().map(|u| u.index).collect();
+    assert!(indices.windows(2).all(|w| w[0] < w[1]), "{indices:?}");
+    // result.json was assembled by streaming unit files and must equal the in-memory units.
+    let result: Document =
+        serde_json::from_slice(&std::fs::read(dir.path().join("result.json")).unwrap()).unwrap();
+    assert_eq!(result.units.len(), doc.units.len());
+    assert_eq!(
+        serde_json::to_value(&result.units[7].blocks).unwrap(),
+        serde_json::to_value(&doc.units[7].blocks).unwrap()
+    );
+    // Stage timings artifact exists and records the Poppler phases.
+    let timings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("timings.json")).unwrap()).unwrap();
+    assert!(timings["poppler_text_ms"].is_u64());
+    assert!(timings["unit_write_ms"].is_u64());
+    // No temporary files survive a clean run.
+    let leftovers = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+        .count();
+    assert_eq!(leftovers, 0);
+}

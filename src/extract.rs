@@ -40,6 +40,12 @@ pub struct ContextData {
     /// Parallel batch workers write only unit files and asset sidecars; the coordinator owns
     /// checkpoints, progress manifests and the final document order.
     write_checkpoint: bool,
+    /// Large table inputs drop block payloads from the in-memory document after each unit file
+    /// is written; result/markdown assembly then streams the unit files. See `stream_bytes`.
+    release_units: bool,
+    /// Optional live progress board: unit stubs for a writer thread that emits complete,
+    /// ordered checkpoints while a PDF job is still running.
+    progress: Option<std::sync::Arc<ProgressBoard>>,
     /// Next asset sidecar sequence number; PDF batches set it per page so merge order is
     /// page order regardless of worker scheduling.
     next_asset_seq: u64,
@@ -73,14 +79,207 @@ pub(crate) fn parallel_context(c: &ContextData) -> ContextData {
         retained: 0,
         identity_ok: false,
         write_checkpoint: false,
+        release_units: false,
+        progress: c.progress.clone(),
         next_asset_seq: 0,
     }
+}
+
+/// Live progress registry for long PDF runs. Workers publish lightweight unit stubs
+/// (metadata and failures only, no blocks) by page index; a writer thread turns them into
+/// complete, page-ordered checkpoint/progress/manifest snapshots on disk.
+pub(crate) struct ProgressBoard {
+    units: std::sync::Mutex<Vec<Option<Unit>>>,
+    completed: std::sync::atomic::AtomicUsize,
+    asset_generation: std::sync::atomic::AtomicUsize,
+    done: std::sync::atomic::AtomicBool,
+}
+impl ProgressBoard {
+    pub(crate) fn new(pages: usize) -> Self {
+        Self {
+            units: std::sync::Mutex::new((0..pages).map(|_| None).collect()),
+            completed: std::sync::atomic::AtomicUsize::new(0),
+            asset_generation: std::sync::atomic::AtomicUsize::new(0),
+            done: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+    fn publish(&self, unit: &Unit) {
+        let mut stub = unit.clone();
+        stub.blocks.clear();
+        let mut units = self.units.lock().unwrap();
+        if let Some(slot) = units.get_mut(unit.index) {
+            if slot.is_none() {
+                self.completed
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            *slot = Some(stub);
+        }
+    }
+    fn snapshot(&self) -> Vec<Unit> {
+        self.units
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|u| u.clone())
+            .collect()
+    }
+}
+/// Write a complete, ordered checkpoint/progress snapshot from the progress board. Safe to call
+/// concurrently with extraction: unit files and asset sidecars are append-only during a run.
+fn write_progress_snapshot(
+    dir: &Path,
+    envelope: &Document,
+    board: &ProgressBoard,
+    limits: &Limits,
+) -> Result<()> {
+    let mut doc = envelope.clone();
+    doc.units = board.snapshot();
+    let (assets, _) = ContextData::load_assets(dir)?;
+    doc.assets = assets;
+    let retained: u64 = doc.assets.iter().map(|a| a.bytes).sum();
+    let cap = limits
+        .output_bytes
+        .saturating_sub(retained.min(limits.output_bytes));
+    atomic_json_limited(&dir.join("checkpoint.json"), &doc, cap)?;
+    atomic_json(&dir.join("assets.json"), &doc.assets)?;
+    let warnings = doc
+        .warnings
+        .iter()
+        .chain(doc.units.iter().flat_map(|u| u.warnings.iter()))
+        .cloned()
+        .collect();
+    let errors = doc
+        .errors
+        .iter()
+        .chain(doc.units.iter().flat_map(|u| u.errors.iter()))
+        .cloned()
+        .collect();
+    atomic_json(
+        &dir.join("progress.json"),
+        &Progress {
+            units: doc.units.len(),
+            result_status: None,
+            warnings,
+            errors,
+        },
+    )
 }
 /// Whole-document checkpoint + manifest cadence. Per-unit files are always written; rewriting
 /// the complete checkpoint for every unit is O(n^2) for large documents (500 PDF pages produced
 /// ~680 MB of checkpoint traffic) and adds no resume safety beyond the unit files. Asset resume
 /// data lives in per-asset sidecars, so this is only progress/status bookkeeping.
 const CHECKPOINT_EVERY: usize = 100;
+/// Resume artifacts (identity/units/sidecars) format. A mismatch forces a clean re-extraction
+/// instead of reusing files whose meaning may have changed.
+const CHECKPOINT_FORMAT: u32 = 2;
+
+/// Stage timing counters (milliseconds), written to timings.json per extraction. Cheap atomic
+/// adds around the hot calls; per-process and aggregated across batch workers.
+pub static STAGE_TEXT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_IMAGES_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_PARSE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_OCR_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_WRITE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_MERGE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+fn time_stage(slot: &std::sync::atomic::AtomicU64, start: std::time::Instant) {
+    slot.fetch_add(
+        start.elapsed().as_millis() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+fn stage_timings() -> Value {
+    let get = |c: &std::sync::atomic::AtomicU64| c.load(std::sync::atomic::Ordering::Relaxed);
+    json!({
+        "poppler_text_ms": get(&STAGE_TEXT_MS),
+        "poppler_images_ms": get(&STAGE_IMAGES_MS),
+        "page_parse_ms": get(&STAGE_PARSE_MS),
+        "ocr_ms": get(&STAGE_OCR_MS),
+        "unit_write_ms": get(&STAGE_WRITE_MS),
+        "merge_ms": get(&STAGE_MERGE_MS),
+    })
+}
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+/// Remove temp files left by a kill during an atomic write; they are never valid state.
+fn sweep_tmp_files(dir: &Path) -> Result<()> {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.contains(".tmp-") && entry.path().is_file() {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Write the final result.json by streaming unit files instead of serializing the in-memory
+/// unit list. Output bytes are identical to serializing `document` (unit files are serde output
+/// of the same values) and peak memory stays at one unit. Falls back to direct serialization
+/// when a unit file is missing or the envelope marker is absent.
+pub fn write_result_streamed(dir: &Path, document: &Document, limit: u64) -> Result<()> {
+    let path = dir.join("result.json");
+    let mut envelope = document.clone();
+    envelope.units.clear();
+    let envelope_bytes = serde_json::to_vec(&envelope)?;
+    let marker = b"\"units\":[]";
+    let Some(pos) = find_subslice(&envelope_bytes, marker) else {
+        return atomic_json_limited(&path, document, limit);
+    };
+    let mut files = Vec::with_capacity(document.units.len());
+    for unit in &document.units {
+        let file = dir.join("units").join(format!("{}.json", unit.id));
+        if !file.is_file() {
+            return atomic_json_limited(&path, document, limit);
+        }
+        files.push(file);
+    }
+    struct Counting<W: std::io::Write> {
+        inner: std::io::BufWriter<W>,
+        bytes: u64,
+    }
+    impl<W: std::io::Write> std::io::Write for Counting<W> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let n = self.inner.write(buf)?;
+            self.bytes += n as u64;
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.inner.flush()
+        }
+    }
+    let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+    let mut out = Counting {
+        inner: std::io::BufWriter::with_capacity(1024 * 1024, fs::File::create(&tmp)?),
+        bytes: 0,
+    };
+    use std::io::Write;
+    out.write_all(&envelope_bytes[..pos])?;
+    out.write_all(b"\"units\":[")?;
+    for (i, file) in files.iter().enumerate() {
+        if i > 0 {
+            out.write_all(b",")?;
+        }
+        let mut unit = fs::File::open(file)?;
+        std::io::copy(&mut unit, &mut out)?;
+    }
+    out.write_all(b"]")?;
+    out.write_all(&envelope_bytes[pos + marker.len()..])?;
+    out.flush()?;
+    let counted = out.bytes;
+    out.inner.get_ref().sync_all()?;
+    if counted > limit {
+        let _ = fs::remove_file(&tmp);
+        bail!("limit_exceeded: output bytes");
+    }
+    fs::rename(&tmp, &path)?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
 pub fn hash(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -176,7 +375,19 @@ impl ContextData {
         }
         let path = self.dir.join("units").join(format!("{}.json", u.id));
         // Re-extract on resume using deterministic IDs. Atomic replacement retains each successful unit on crashes.
+        let started = Instant::now();
         atomic_json(&path, &u)?;
+        time_stage(&STAGE_WRITE_MS, started);
+        if let Some(board) = &self.progress {
+            board.publish(&u);
+        }
+        if self.release_units {
+            // Large table inputs: keep only the unit stub in memory; result/markdown assembly
+            // streams units/uN.json. In-memory blocks would otherwise scale with the whole file.
+            u.blocks.clear();
+            self.document.units.push(u);
+            return Ok(());
+        }
         self.document.units.push(u);
         let units = self.document.units.len();
         if self.write_checkpoint && (units == 1 || units % CHECKPOINT_EVERY == 0) {
@@ -267,6 +478,11 @@ impl ContextData {
         )?;
         self.next_asset_seq += 1;
         self.document.assets.push(asset);
+        if let Some(board) = &self.progress {
+            board
+                .asset_generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         Ok(id)
     }
     /// Register an asset and its figure block without running OCR/vision.
@@ -285,7 +501,10 @@ impl ContextData {
         let path = self.dir.join("assets").join(&id);
         if self.options.ocr {
             let before = u.blocks.len();
-            if let Err(e) = providers::ocr(&path, u, &self.options, &self.limits) {
+            let ocr_started = Instant::now();
+            let result = providers::ocr(&path, u, &self.options, &self.limits);
+            time_stage(&STAGE_OCR_MS, ocr_started);
+            if let Err(e) = result {
                 u.errors.push(failure(&e, Some(u.id.clone())));
             }
             for b in &mut u.blocks[before..] {
@@ -394,12 +613,26 @@ pub fn extract(
         retained: 0,
         identity_ok: false,
         write_checkpoint: true,
+        release_units: false,
+        progress: None,
         next_asset_seq: 0,
     };
     providers::configure_ocr_threads(ocr_threads);
+    for counter in [
+        &STAGE_TEXT_MS,
+        &STAGE_IMAGES_MS,
+        &STAGE_PARSE_MS,
+        &STAGE_OCR_MS,
+        &STAGE_WRITE_MS,
+        &STAGE_MERGE_MS,
+    ] {
+        counter.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+    sweep_tmp_files(dir)?;
     if ext == "pdf" {
         if let Some(previous) = previous_identity {
-            if previous["hash"] == json!(c.document.hash)
+            if previous["checkpoint_format"] == json!(CHECKPOINT_FORMAT)
+                && previous["hash"] == json!(c.document.hash)
                 && previous["versions"] == c.document.versions
                 && previous["options"] == serde_json::to_value(&c.options)?
             {
@@ -413,7 +646,12 @@ pub fn extract(
     }
     atomic_json(
         &dir.join("identity.json"),
-        &json!({"hash":c.document.hash,"versions":c.document.versions,"options":&c.options}),
+        &json!({
+            "checkpoint_format": CHECKPOINT_FORMAT,
+            "hash": c.document.hash,
+            "versions": c.document.versions,
+            "options": &c.options,
+        }),
     )?;
     let parser_error = match route(&mut c, input, &bytes, &ext) {
         Ok(()) => None,
@@ -453,16 +691,18 @@ pub fn extract(
             .push(format!("parser error: {}", f.message));
     }
     c.document.elapsed_ms = c.start.elapsed().as_millis();
-    // Streaming write with a size cap: fails cleanly instead of tripping RLIMIT_FSIZE, and does
-    // not keep a second full copy of the serialized document in memory.
-    atomic_json_limited(
-        &dir.join("result.json"),
+    // Streamed assembly with a size cap: unit payloads are copied from units/uN.json one at a
+    // time instead of serializing the whole in-memory document; fails cleanly instead of
+    // tripping RLIMIT_FSIZE.
+    write_result_streamed(
+        dir,
         &c.document,
         c.limits
             .output_bytes
             .saturating_sub(c.retained.min(c.limits.output_bytes)),
     )?;
     c.write_manifests(true)?;
+    atomic_json(&dir.join("timings.json"), &stage_timings())?;
     fs::write(dir.join("result.md"), markdown(&c.document))?;
     fs::write(dir.join("result.txt"), crate::model::plaintext(&c.document))?;
     Ok(c.document)
@@ -1490,10 +1730,13 @@ fn pdf_batch(
     let mut image_dir: Option<PathBuf> = None;
     let mut page_images: std::collections::HashMap<usize, Vec<PathBuf>> =
         std::collections::HashMap::new();
-    match providers::command(
+    let text_started = Instant::now();
+    let text_result = providers::command(
         "pdftotext",
         &["-f", &from, "-l", &to, "-bbox-layout", path, "-"],
-    ) {
+    );
+    time_stage(&STAGE_TEXT_MS, text_started);
+    match text_result {
         Err(e) => text_error = Some(e),
         Ok(b) => {
             let raw = String::from_utf8_lossy(&b); // Poppler emits a fixed XHTML doctype; remove it before safe parsing.
@@ -1507,6 +1750,7 @@ fn pdf_batch(
     // One image extraction call per batch; `pdfimages -list` maps files back to pages.
     let dir = c.dir.join(format!("batch-{}-images", batch_start + 1));
     fs::create_dir_all(&dir)?;
+    let images_started = Instant::now();
     let list = providers::command("pdfimages", &["-list", "-f", &from, "-l", &to, path]);
     let extracted = providers::command(
         "pdfimages",
@@ -1520,6 +1764,7 @@ fn pdf_batch(
             dir.join("image").to_str().unwrap(),
         ],
     );
+    time_stage(&STAGE_IMAGES_MS, images_started);
     if let (Ok(list), Ok(_)) = (list, extracted) {
         match batch_image_map(&list, &dir) {
             Ok(map) => {
@@ -1555,6 +1800,7 @@ fn pdf_batch(
         if let Some(e) = &text_error {
             u.errors.push(failure(e, Some(u.id.clone())));
         } else if let Some(slice) = page_slices.get(i - batch_start) {
+            let parse_started = Instant::now();
             let doc = diagrams::xml(slice)?;
             let words = doc
                 .descendants()
@@ -1595,6 +1841,7 @@ fn pdf_batch(
                 });
             }
             crate::layout::pdf_tables(&mut u, words);
+            time_stage(&STAGE_PARSE_MS, parse_started);
         } else {
             u.warnings
                 .push("PDF batch text extraction omitted this page; text may be incomplete".into());
@@ -1720,6 +1967,12 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
     let dimensions =
         regex::Regex::new(r"(?:Page\s+\d+\s+size:|Page size:)\s*([\d.]+)\s+x\s+([\d.]+)")?;
     const PDF_BATCH: usize = 100;
+    // PDF runs get a progress board so checkpoints, assets and progress stay current while
+    // workers are still processing; the board owns those writes instead of per-unit cadence.
+    if c.progress.is_none() {
+        c.progress = Some(std::sync::Arc::new(ProgressBoard::new(pages)));
+    }
+    c.write_checkpoint = false;
     // Completed pages are reused by identity; a fully resumed document never invokes Poppler.
     let mut slots: Vec<Option<Unit>> = Vec::with_capacity(pages);
     for p in 0..pages {
@@ -1729,7 +1982,15 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
             .filter(|unit| c.identity_ok && unit.kind == "page" && unit.index == p);
         slots.push(unit);
     }
+    // Seed reused units into the in-memory document so checkpoints and the final result list
+    // every page in order, not just newly processed ones.
+    if let Some(board) = &c.progress {
+        for unit in slots.iter().flatten() {
+            board.publish(unit);
+        }
+    }
     let missing: Vec<usize> = (0..pages).filter(|p| slots[*p].is_none()).collect();
+    let mut worker_error = None;
     if !missing.is_empty() {
         let mut batches: Vec<(usize, usize, Vec<usize>)> = Vec::new();
         for &p in &missing {
@@ -1740,20 +2001,74 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
             }
         }
         let workers = c.limits.pdf_workers.clamp(1, 8).min(batches.len());
-        if workers <= 1 {
-            for (start, end, list) in &batches {
-                pdf_batch(c, input, path, &doctype, &dimensions, *start, *end, list)?;
+        // Live checkpoint/progress writer: workers publish stubs; this thread snapshots them.
+        let (board, writer) = match c.progress.clone() {
+            Some(board) => {
+                let envelope = empty_document(&c.document);
+                let dir = c.dir.clone();
+                let limits = c.limits.clone();
+                let watch = board.clone();
+                let handle = std::thread::spawn(move || {
+                    let mut last_units = 0usize;
+                    let mut last_assets = 0usize;
+                    let mut last_write = Instant::now();
+                    loop {
+                        let done = watch.done.load(std::sync::atomic::Ordering::Relaxed);
+                        let units = watch.completed.load(std::sync::atomic::Ordering::Relaxed);
+                        let assets = watch
+                            .asset_generation
+                            .load(std::sync::atomic::Ordering::Relaxed);
+                        let progressed = units.saturating_sub(last_units) >= CHECKPOINT_EVERY
+                            || last_write.elapsed() >= std::time::Duration::from_secs(2);
+                        if (progressed || done)
+                            && (units != last_units || assets != last_assets || done)
+                        {
+                            if write_progress_snapshot(&dir, &envelope, &watch, &limits).is_ok() {
+                                last_units = units;
+                                last_assets = assets;
+                            }
+                            last_write = Instant::now();
+                        }
+                        if done {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                    }
+                });
+                (Some(board), Some(handle))
             }
+            None => (None, None),
+        };
+        let _ = &board;
+        let batches = std::sync::Arc::new(batches);
+        let outcome: Result<()> = if workers <= 1 {
+            let mut result = Ok(());
+            for (start, end, list) in batches.iter() {
+                if let Err(e) = pdf_batch(c, input, path, &doctype, &dimensions, *start, *end, list)
+                {
+                    result = Err(e);
+                    break;
+                }
+            }
+            result
         } else {
-            let per_worker = batches.len().div_ceil(workers);
+            // Dynamic scheduling: workers pull the next batch index instead of fixed slices, so
+            // a slow (image/OCR-heavy) batch does not idle the other workers.
+            let next = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let results = std::thread::scope(|scope| {
                 let mut handles = Vec::new();
-                for chunk in batches.chunks(per_worker) {
+                for _ in 0..workers {
                     let doctype = &doctype;
                     let dimensions = &dimensions;
+                    let batches = batches.clone();
+                    let next = next.clone();
                     let mut worker = parallel_context(c);
                     handles.push(scope.spawn(move || -> Result<()> {
-                        for (start, end, list) in chunk {
+                        loop {
+                            let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some((start, end, list)) = batches.get(index) else {
+                                return Ok(());
+                            };
                             pdf_batch(
                                 &mut worker,
                                 input,
@@ -1765,7 +2080,6 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
                                 list,
                             )?;
                         }
-                        Ok(())
                     }));
                 }
                 handles
@@ -1777,28 +2091,52 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
                     })
                     .collect::<Vec<Result<()>>>()
             });
+            let mut outcome = Ok(());
             for result in results {
-                result?;
+                if let Err(e) = result {
+                    outcome = Err(e);
+                    break;
+                }
             }
-            // Worker contexts only wrote files; rebuild the asset manifest from sidecars.
-            let (assets, next_seq) = ContextData::load_assets(&c.dir)?;
-            c.document.assets = assets;
-            c.next_asset_seq = next_seq;
-            c.retained = c.document.assets.iter().map(|a| a.bytes).sum();
+            outcome
+        };
+        if let Some(board) = &board {
+            board.done.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        // Assemble units strictly in page order, whether reused or freshly processed.
+        if let Some(writer) = writer {
+            let _ = writer.join();
+        }
+        // Merge what completed before propagating any failure, so successful units survive.
+        worker_error = outcome.err();
+        let started = Instant::now();
+        let mut missing_pages = Vec::new();
         for (p, slot) in slots.iter_mut().enumerate() {
             if slot.is_none() {
-                *slot = Some(serde_json::from_slice(&fs::read(
-                    c.dir.join("units").join(format!("u{}.json", p + 1)),
-                )?)?);
+                match fs::read(c.dir.join("units").join(format!("u{}.json", p + 1)))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Unit>(&bytes).ok())
+                {
+                    Some(unit) => *slot = Some(unit),
+                    None => missing_pages.push(p + 1),
+                }
             }
         }
-        c.document.units = slots.into_iter().flatten().collect();
-        Ok(())
-    } else {
-        c.document.units = slots.into_iter().flatten().collect();
-        Ok(())
+        if !missing_pages.is_empty() {
+            c.document.warnings.push(format!(
+                "incomplete pages retained no unit after failure: {missing_pages:?}"
+            ));
+        }
+        // Worker contexts only wrote files; rebuild the asset manifest from sidecars.
+        let (assets, next_seq) = ContextData::load_assets(&c.dir)?;
+        c.document.assets = assets;
+        c.next_asset_seq = next_seq;
+        c.retained = c.document.assets.iter().map(|a| a.bytes).sum();
+        time_stage(&STAGE_MERGE_MS, started);
+    }
+    c.document.units = slots.into_iter().flatten().collect();
+    match worker_error {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
 }
 /// Map `pdfimages` output files to 1-based page numbers using the matching `-list` table.
