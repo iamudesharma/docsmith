@@ -8,7 +8,7 @@ Provision native programs once, e.g. `brew install poppler tesseract`. These dow
 
 Build Apple Vision with `scripts/build-apple-vision.sh`, then export its absolute executable path as `DOC_APPLE_VISION`. The helper queries supported languages and rejects unsupported selections. It uses a CPU request and a decoded CGImage, avoiding observed local Vision GPU execution errors. Apple SDK/platform terms apply; this helper is unavailable on Linux.
 
-Xberg's evaluated release is 1.3.8. Its Rust crate requires Rust 1.92; the direct backend builds on 1.88. The 1.3.8 ARM64 CLI release was evaluated as a standalone process; set `DOC_XBERG=/absolute/path/to/xberg` while keeping its bundled dylibs together. It is optional. The upstream bundle includes third-party libraries with separate licensing obligations; do not assume the MIT engine license covers all bundled libraries. The downloaded bundle is ignored under target/, and attribution files are retained under docs/vendor/.
+Xberg's evaluated release is 1.3.8. Its Rust crate requires Rust 1.92; the direct backend builds on 1.88. The 1.3.8 ARM64 CLI release was evaluated as a standalone process and the adapter path is verified end-to-end (see docs/xberg-adapter-check.json); set `DOC_XBERG=/absolute/path/to/xberg` while keeping its bundled dylibs together. The adapter exports `NO_COLOR=1` and parses the CLI version tolerantly because upstream colorizes stdout even when piped. It is optional. The upstream bundle includes third-party libraries with separate licensing obligations; do not assume the MIT engine license covers all bundled libraries. The downloaded bundle is ignored under target/, and attribution files are retained under docs/vendor/.
 
 ## Local vision
 
@@ -40,16 +40,20 @@ The actual test host is **MacBookAir10,1, M1, 8 GB**, not the brief's M1 Pro 16 
     "page_pixels": 20000000,
     "output_bytes": 67108864,
     "timeout_seconds": 120,
-    "memory_bytes": 2147483648
+    "memory_bytes": 2147483648,
+    "disk_bytes": 0,
+    "retention_seconds": 0
   }
 }
 ```
+
+`disk_bytes` is a per-tenant retained-bytes quota (0 disables it): uploads that would exceed it are rejected with 507 `quota_exceeded`, while cache hits that store nothing are still served. `retention_seconds` enables a sweep that removes terminal jobs older than the window (0 disables it); the sweep runs every `min(retention_seconds, 15)` seconds and never touches jobs whose workers are still active. Explicit DELETE remains available regardless.
 
 `doc-extractor serve --config configuration.json` reads this file. Unspecified fields use defaults. `DOC_TOKENS` can provide the token-to-tenant JSON mapping through the environment. Keep secrets outside source control; protect the data directory with service-user filesystem permissions. All resource endpoints enforce the mapped tenant. Liveness, readiness, capabilities and OpenAPI expose no document content and do not require authentication. Readiness confirms the job database; missing optional parsers are reported separately in capabilities.
 
 The server defaults to loopback. A non-loopback bind requires bearer tokens. Place a TLS reverse proxy in front for network deployment and apply connection/body/rate limits there. Do not share one SQLite directory across multiple servers. Run as an unprivileged service user. A container/cgroup or OS sandbox adds a strict memory and filesystem/network security boundary; process isolation here contains parser crashes but is not a security sandbox.
 
-Job state, input, checkpoints, logs and assets are retained until DELETE. Back up the SQLite database and its job directories as one consistent snapshot while stopped, or use SQLite's backup API and matching immutable job snapshots. Restore into a private stopped directory, then restart. Interrupted jobs requeue and PDF checkpoints can resume completed pages; other formats safely reparse retained input. Long-soak, backup restoration and multi-host deployments have not been validated.
+Job state, input, checkpoints, logs and assets are retained until DELETE, expiry of `retention_seconds`, or (optionally) the per-tenant `disk_bytes` quota limiting new storage. Back up the SQLite database and its job directories as one consistent snapshot while stopped, or use SQLite's backup API and matching immutable job snapshots. Restore into a private stopped directory, then restart. Interrupted jobs requeue and PDF checkpoints can resume completed pages; other formats safely reparse retained input. Long-soak, backup restoration and multi-host deployments have not been validated.
 
 ## Linux
 

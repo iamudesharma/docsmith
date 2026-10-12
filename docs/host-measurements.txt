@@ -1,3 +1,10 @@
+2026-10-12 (benchmark rerun)
+hw.model: MacBookAir10,1
+hw.memsize: 8589934592
+vm.swapusage before run: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)
+vm.swapusage after run:  total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)
+
+2026-10-11
 hw.model: MacBookAir10,1
 hw.memsize: 8589934592
 vm.swapusage: total = 4096.00M  used = 3547.12M  free = 548.88M  (encrypted)

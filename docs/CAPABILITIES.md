@@ -8,7 +8,9 @@ Status is about actual extraction coverage, not advertised file extensions. All 
 | CSV / TSV | Streaming records, quoting, multiline cells, configurable delimiter, flexible rows, original strings | Quoted/leading-zero/multiline/flexible fixtures; UTF-8 only, no guessed header or silent type conversion. |
 | XLSX | Sheets, cell origins, typed values, formulas separately from cached values, source merge spans, package assets/chart cache | Fixture compares A3 formula/cached result and A1:B1 merge. No recalculation, formatting equivalence or chart rendering. |
 | ODS | Calamine sheets, values, formulas where exposed | Single typed-cell fixture; complex merged/repeated cells are not fully validated. |
-| XLS / XLSM / XLSB | Calamine adapters compiled; OOXML assets where applicable | No representative binary or macro-workbook fixture acceptance. Macros are never executed. |
+| XLS | BIFF8 sheet, typed values, formulas with cached results | Hand-built minimal BIFF8 fixture (A1 string, B2 number, A3 formula + cached 5.0). No formatting/date-format coverage or large workbook stress. |
+| XLSM | Same workbook plus macro-enabled package | Macro fixture asserts VBA source is never extracted or executed. No macro-workbook corpus validation. |
+| XLSB | Calamine adapter compiled | No representative binary fixture acceptance. Macros are never executed. |
 | DOCX | Logical sections, paragraphs, headings, lists, tables/spans, hyperlink IDs, notes/auxiliary text, media, relationship/SmartArt/chart XML | Section/table/media fixture. Physical pages/rendered drawing placement, floating-object order and exhaustive nested tables remain partial. |
 | PPTX | Presentation relationship order, slides, paragraphs, table source, notes, media/source geometry XML | Reordered-slide fixture. Complex animations/groups/rendered layout remain partial. |
 | ODT / ODP | Logical document/slide units, text and source tables/media | ODT text fixture; ODP compiled but not fixture validated. Repeated cells/rendered layout partial. |
@@ -18,7 +20,7 @@ Status is about actual extraction coverage, not advertised file extensions. All 
 | JSON / XML | Validated structured values/raw XML, logical text | Unicode fixture, DTD/entity rejection; domain-specific XML semantics not inferred. |
 | EML | Headers, MIME plain/HTML text and attachment bytes | Multipart fixture; nesting bounded to 16; MSG requires optional broad adapter/fixtures. |
 | EPUB | Container/manifest/spine source order, HTML chapters, media | Chapter fixture; no rendered pagination/DRM support. |
-| Images | Original bytes/dimensions; optional OCR/vision | Clean/noisy/rotated English and Hindi synthetic fixtures; handwriting/real scanner corpus unrun. |
+| Images | Original bytes/dimensions; optional OCR/vision | Clean/noisy/rotated English and Hindi synthetic fixtures with zero Tesseract CER in the 12 October rerun. Apple Vision currently fails every rerun with `e5rt` errors on this host; handwriting/real scanner corpus unrun. |
 | draw.io | Compressed/uncompressed pages, nodes/edges, explicit IDs, labels/groups/geometry/style/source | Two-node/one-edge source accuracy; PNG/SVG/PDF embedded-source checks. No invented keys/cardinalities. |
 | Mermaid | Flowchart identifier/nodes/simple edges; ER entities/attributes/PK/FK/UK/crow's-foot subset | Source graph/ER/unsupported-construct tests. Styling, directives, aliases and broader grammars return partial warnings. |
 | DOT | Basic identifier nodes, quoted label attribute, `->` / `--` edges | Simple source fixture. Ports, HTML labels, subgraphs and complex attributes unsupported with warnings. |
@@ -27,7 +29,7 @@ Status is about actual extraction coverage, not advertised file extensions. All 
 | SVG | Original source, texts, paths/shape attributes, transforms, embedded draw.io | Geometry/source fixture. Arbitrary paths do not establish graph semantics. |
 | VSDX / SmartArt | Original/source XML/relationship/assets retained | VSDX source fixture; semantic graph relationships and legacy VSD deferred. |
 | OOXML charts | Native cached points, series/axis/formula references, original XML | Cached-point/reference unit test. No recalculation/rendering or exact raster-chart numeric recovery. |
-| Xberg 1.3.8 | Optional native-only process adapter and full upstream JSON asset | Seven-format spike; canonical mapping is partial. Native baseline does not require Xberg. |
+| Xberg 1.3.8 | Optional native-only process adapter and full upstream JSON asset | Adapter verified end-to-end on the evaluated CLI in docs/xberg-adapter-check.json (the earlier version gate failed on ANSI-colored output). Canonical mapping is partial; native baseline does not require Xberg. |
 | Local vision | Literal-loopback llama.cpp descriptions / constrained inferred graph JSON | Actual small-model requests measured; graph fidelity remains a benchmark gate, not guaranteed semantics. |
 | Legacy DOC / PPT / VSD | Explicit unsupported in direct adapter | No claim of complete binary-format support; optional Xberg requires format-specific corpus validation. |
 

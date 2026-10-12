@@ -105,5 +105,5 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
    for f in (tmp/'data/jobs').glob('*/worker.log'):print(f, f.read_text())
   if p2 and p2.poll() is None:p2.send_signal(signal.SIGINT);p2.wait(timeout=10)
   if p and p.poll() is None:p.send_signal(signal.SIGINT);p.wait(timeout=10)
- (ROOT/'docs/e2e-results.json').write_text(json.dumps({'checks':results,'count':len(results),'date':'2026-10-11','platform':sys.platform},indent=2))
+ (ROOT/'docs/e2e-results.json').write_text(json.dumps({'checks':results,'count':len(results),'date':time.strftime('%Y-%m-%d'),'platform':sys.platform},indent=2))
  print(f'{len(results)} real API acceptance checks passed')

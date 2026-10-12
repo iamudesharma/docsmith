@@ -83,8 +83,7 @@ pdf('multicolumn.pdf',[('__COLUMNS__',False)])
 pdf('table.pdf',[('__TABLE__',False)])
 write('corrupt.pdf',b'%PDF-1.7\ncorrupt')
 write('unsupported.doc',b'legacy binary placeholder')
-write('ground-truth.json',json.dumps({'scan.png':'Invoice TOTAL 12345','noisy.png':'Invoice TOTAL 12345','rotated.png':'Invoice TOTAL 12345','diagram':{'nodes':['users','orders'],'edges':[['orders','users']]},'synthetic':True},indent=2))
-print('Generated',len(list(D.iterdir())),'fixtures')
+write('ground-truth.json',json.dumps({'scan.png':'Invoice TOTAL 12345','noisy.png':'Invoice TOTAL 12345','rotated.png':'Invoice TOTAL 12345','diagram':{'nodes':['users','orders'],'edges':[['orders','users']]},'raster_er':{'entities':['users','orders'],'edge_count':1},'synthetic':True},indent=2))
 
 # Complete package roots/spine wrappers so external engines can inspect the same fixtures.
 for name,root_part,content_type in [('document.docx','word/document.xml','application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'),('presentation.pptx','ppt/presentation.xml','application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml')]:
@@ -152,3 +151,4 @@ def _ole2(stream):
 placeholder=_bof(0x0005)+_boundsheet(0)+_sst()+_rec(0x000A,b'')
 workbook=_bof(0x0005)+_boundsheet(len(placeholder))+_sst()+_rec(0x000A,b'')+_bof(0x0010)+_dimensions()+_labelsst(0,0,0)+_number(1,1,3.0)+_formula(2,0,5.0)+_rec(0x000A,b'')
 write('workbook.xls',_ole2(workbook))
+print('Generated',len(list(D.iterdir())),'fixtures')

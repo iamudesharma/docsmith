@@ -3,7 +3,7 @@
     "health readiness",
     "unauthorized upload rejected",
     "multipart 202",
-    "durable complete {'id': '3d967764-baf7-4785-a1fc-f8f2bab747e6', 'state': 'completed', 'filename': 'quoted.csv', 'created_at': 1791770476, 'updated_at': 1791770477, 'progress': 1, 'result_status': 'complete', 'error': None, 'warnings': [], 'unit_failures': []}",
+    "durable complete {'id': '23a5a990-08d9-4527-9b10-c26ad038bf8d', 'state': 'completed', 'filename': 'quoted.csv', 'created_at': 1791771142, 'updated_at': 1791771142, 'progress': 1, 'result_status': 'complete', 'error': None, 'warnings': [], 'unit_failures': []}",
     "canonical cells",
     "unit endpoint",
     "derived markdown",
@@ -31,6 +31,6 @@
     "retention sweep removes terminal jobs"
   ],
   "count": 29,
-  "date": "2026-10-11",
+  "date": "2026-10-12",
   "platform": "darwin"
 }

@@ -14,6 +14,13 @@
       ]
     ]
   },
+  "raster_er": {
+    "entities": [
+      "users",
+      "orders"
+    ],
+    "edge_count": 1
+  },
   "synthetic": true,
   "hindi.png": "\u0928\u092e\u0938\u094d\u0924\u0947 \u092d\u093e\u0930\u0924"
 }

@@ -26,4 +26,4 @@ Without tokens the service binds to loopback and uses a single local tenant. On 
 
 Upload and archive limits are checked independently. ZIP paths, symlinks, duplicate entries, archive size/entry count and email nesting are validated. XML DTDs/entities are rejected. External relationships/HTML URLs are retained but never fetched. Macros are never executed. This version does not recursively extract archive attachments. Assets are addressed by hashes and served as attachments with `nosniff`; source labels never become filesystem paths.
 
-Retention is explicit through DELETE; automatic TTL, per-tenant disk quotas, multi-server workers, PostgreSQL, OS sandbox profiles and long-soak tests remain deployment work. Use an OS/container limit for an instantaneous memory boundary.
+Retention is explicit through DELETE, with an opt-in per-tenant `disk_bytes` quota for new storage and an opt-in `retention_seconds` sweep for terminal jobs. Multi-server workers, PostgreSQL, per-tenant instantaneous memory accounting, OS sandbox profiles and long-soak tests remain deployment work. Use an OS/container limit for an instantaneous memory boundary.

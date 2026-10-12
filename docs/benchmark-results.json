@@ -1,77 +1,77 @@
 {
-  "date": "2026-10-11",
+  "date": "2026-10-12",
   "hardware": "hw.model: MacBookAir10,1\nhw.memsize: 8589934592\n",
   "synthetic_fixtures": true,
   "runs": [
     {
       "fixture": "quoted.csv",
       "options": {},
-      "elapsed_ms": 252,
-      "process_tree_peak_rss_bytes_sampled": 9437184,
+      "elapsed_ms": 1489,
+      "process_tree_peak_rss_bytes_sampled": 25903104,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "2dd7f33229d494434859c27265c4601b1f325f4b4fe49ac36d5b69af3cfcb79f"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "digital.pdf",
       "options": {},
-      "elapsed_ms": 255,
-      "process_tree_peak_rss_bytes_sampled": 24559616,
+      "elapsed_ms": 483,
+      "process_tree_peak_rss_bytes_sampled": 25837568,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
       "status": "partial",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "2dd7f33229d494434859c27265c4601b1f325f4b4fe49ac36d5b69af3cfcb79f"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "workbook.xlsx",
       "options": {},
-      "elapsed_ms": 256,
-      "process_tree_peak_rss_bytes_sampled": 9453568,
+      "elapsed_ms": 242,
+      "process_tree_peak_rss_bytes_sampled": 22495232,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "2dd7f33229d494434859c27265c4601b1f325f4b4fe49ac36d5b69af3cfcb79f"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "document.docx",
       "options": {},
-      "elapsed_ms": 246,
-      "process_tree_peak_rss_bytes_sampled": 9469952,
+      "elapsed_ms": 244,
+      "process_tree_peak_rss_bytes_sampled": 21708800,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
       "status": "partial",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "2dd7f33229d494434859c27265c4601b1f325f4b4fe49ac36d5b69af3cfcb79f"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "diagram.drawio",
       "options": {},
-      "elapsed_ms": 246,
-      "process_tree_peak_rss_bytes_sampled": 9420800,
+      "elapsed_ms": 244,
+      "process_tree_peak_rss_bytes_sampled": 20021248,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "2dd7f33229d494434859c27265c4601b1f325f4b4fe49ac36d5b69af3cfcb79f"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "scan.png",
@@ -79,17 +79,17 @@
         "ocr": true,
         "ocr_provider": "tesseract"
       },
-      "elapsed_ms": 501,
-      "process_tree_peak_rss_bytes_sampled": 49938432,
+      "elapsed_ms": 474,
+      "process_tree_peak_rss_bytes_sampled": 49004544,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "Invoice TOTAL 12345",
       "character_error_rate": 0.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "2dd7f33229d494434859c27265c4601b1f325f4b4fe49ac36d5b69af3cfcb79f"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "noisy.png",
@@ -97,17 +97,17 @@
         "ocr": true,
         "ocr_provider": "tesseract"
       },
-      "elapsed_ms": 491,
-      "process_tree_peak_rss_bytes_sampled": 53755904,
+      "elapsed_ms": 716,
+      "process_tree_peak_rss_bytes_sampled": 52330496,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "Invoice TOTAL 12345",
       "character_error_rate": 0.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "2dd7f33229d494434859c27265c4601b1f325f4b4fe49ac36d5b69af3cfcb79f"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "rotated.png",
@@ -115,17 +115,17 @@
         "ocr": true,
         "ocr_provider": "tesseract"
       },
-      "elapsed_ms": 498,
-      "process_tree_peak_rss_bytes_sampled": 65110016,
+      "elapsed_ms": 716,
+      "process_tree_peak_rss_bytes_sampled": 64290816,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "Invoice TOTAL 12345",
       "character_error_rate": 0.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "2dd7f33229d494434859c27265c4601b1f325f4b4fe49ac36d5b69af3cfcb79f"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "scan.png",
@@ -133,11 +133,11 @@
         "ocr": true,
         "ocr_provider": "apple_vision"
       },
-      "elapsed_ms": 33931,
-      "process_tree_peak_rss_bytes_sampled": 65224704,
+      "elapsed_ms": 61822,
+      "process_tree_peak_rss_bytes_sampled": 73203712,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3301.50M  free = 794.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3293.50M  free = 802.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 549.88M  free = 1498.12M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 575.50M  free = 1472.50M  (encrypted)",
       "status": "partial",
       "errors": [
         {
@@ -149,7 +149,7 @@
       "ocr_text": "",
       "character_error_rate": 1.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "2dd7f33229d494434859c27265c4601b1f325f4b4fe49ac36d5b69af3cfcb79f"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "noisy.png",
@@ -157,11 +157,11 @@
         "ocr": true,
         "ocr_provider": "apple_vision"
       },
-      "elapsed_ms": 32768,
-      "process_tree_peak_rss_bytes_sampled": 83066880,
+      "elapsed_ms": 61465,
+      "process_tree_peak_rss_bytes_sampled": 73760768,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3293.50M  free = 802.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3285.50M  free = 810.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 575.50M  free = 1472.50M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 686.94M  free = 1361.06M  (encrypted)",
       "status": "partial",
       "errors": [
         {
@@ -173,7 +173,7 @@
       "ocr_text": "",
       "character_error_rate": 1.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "d5eb2d4e4b711146b08b0099002658395418e0b380fa2e5cc0f5938fb601f2c9"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "rotated.png",
@@ -181,11 +181,11 @@
         "ocr": true,
         "ocr_provider": "apple_vision"
       },
-      "elapsed_ms": 69800,
-      "process_tree_peak_rss_bytes_sampled": 69894144,
+      "elapsed_ms": 60944,
+      "process_tree_peak_rss_bytes_sampled": 73023488,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3285.50M  free = 810.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3221.50M  free = 874.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 686.94M  free = 1361.06M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 688.69M  free = 1359.31M  (encrypted)",
       "status": "partial",
       "errors": [
         {
@@ -197,7 +197,7 @@
       "ocr_text": "",
       "character_error_rate": 1.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "d5eb2d4e4b711146b08b0099002658395418e0b380fa2e5cc0f5938fb601f2c9"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "hindi.png",
@@ -205,17 +205,17 @@
         "ocr": true,
         "languages": "hin"
       },
-      "elapsed_ms": 773,
-      "process_tree_peak_rss_bytes_sampled": 37699584,
+      "elapsed_ms": 718,
+      "process_tree_peak_rss_bytes_sampled": 46530560,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3221.50M  free = 874.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3221.50M  free = 874.50M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 688.69M  free = 1359.31M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 688.69M  free = 1359.31M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "\u0928\u092e\u0938\u094d\u0924\u0947 \u092d\u093e\u0930\u0924",
       "character_error_rate": 0.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "d5eb2d4e4b711146b08b0099002658395418e0b380fa2e5cc0f5938fb601f2c9"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "hindi.png",
@@ -224,11 +224,11 @@
         "ocr_provider": "apple_vision",
         "languages": "hi-IN"
       },
-      "elapsed_ms": 76155,
-      "process_tree_peak_rss_bytes_sampled": 54231040,
+      "elapsed_ms": 61954,
+      "process_tree_peak_rss_bytes_sampled": 72318976,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3221.50M  free = 874.50M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3547.12M  free = 548.88M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 688.69M  free = 1359.31M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)",
       "status": "partial",
       "errors": [
         {
@@ -240,28 +240,28 @@
       "ocr_text": "",
       "character_error_rate": 1.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "d5eb2d4e4b711146b08b0099002658395418e0b380fa2e5cc0f5938fb601f2c9"
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "scan.png",
       "options": {
         "vision": true
       },
-      "elapsed_ms": 2746,
-      "process_tree_peak_rss_bytes_sampled": 24821760,
+      "elapsed_ms": 6918,
+      "process_tree_peak_rss_bytes_sampled": 24854528,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3547.12M  free = 548.88M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 4096.00M  used = 3819.44M  free = 276.56M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)",
       "status": "needs_ocr",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [
         " Invoice TOTAL 12345"
       ],
-      "vlm_server_rss_bytes_after": 195444736,
-      "vlm_server_rss_bytes_before": 2605056,
-      "vlm_server_peak_rss_bytes_sampled": 388808704,
-      "engine_binary_sha256": "d5eb2d4e4b711146b08b0099002658395418e0b380fa2e5cc0f5938fb601f2c9"
+      "vlm_server_rss_bytes_after": 492371968,
+      "vlm_server_rss_bytes_before": 438059008,
+      "vlm_server_peak_rss_bytes_sampled": 492371968,
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7"
     },
     {
       "fixture": "raster-er.png",
@@ -269,21 +269,21 @@
         "vision": true,
         "interpret_diagrams": true
       },
-      "elapsed_ms": 6571,
-      "process_tree_peak_rss_bytes_sampled": 23068672,
+      "elapsed_ms": 13836,
+      "process_tree_peak_rss_bytes_sampled": 25001984,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 4096.00M  used = 3819.44M  free = 276.56M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 5120.00M  used = 3848.94M  free = 1271.06M  (encrypted)",
-      "status": "needs_ocr",
+      "swap_before": "vm.swapusage: total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 2048.00M  used = 656.38M  free = 1391.62M  (encrypted)",
+      "status": "partial",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [
         "{\n  \"summary\": \"\",\n  \"nodes\": [\n    {\n      \"id\": \"PK\",\n      \"label\": \"id\",\n      \"attributes\": [\n        {\n          \"name\": \"name\",\n          \"label\": \"name\"\n        }\n      ]\n    },\n    {\n      \"id\": \"FK\",\n      \"label\": \"id\",\n      \"attributes\": [\n        {\n          \"name\": \"FK\",\n          \"label\": \"FK\"\n        }\n      ]\n    }\n  ],\n  \"edges\": [\n    {\n      \"source\": \"PK\",\n      \"target\": \"FK\",\n      \"label\": \"user_id\",\n      \"cardinality\": \"1:N\",\n      \"evidence\": \"user_id FK\"\n    }\n  ]\n}"
       ],
-      "vlm_server_rss_bytes_after": 147177472,
-      "vlm_server_rss_bytes_before": 194838528,
-      "vlm_server_peak_rss_bytes_sampled": 407683072,
-      "engine_binary_sha256": "d5eb2d4e4b711146b08b0099002658395418e0b380fa2e5cc0f5938fb601f2c9",
+      "vlm_server_rss_bytes_after": 677330944,
+      "vlm_server_rss_bytes_before": 492371968,
+      "vlm_server_peak_rss_bytes_sampled": 677330944,
+      "engine_binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7",
       "inferred_graphs": [
         {
           "nodes": [
@@ -353,19 +353,19 @@
         }
       ],
       "expected_entities": [
-        "orders",
-        "users"
+        "users",
+        "orders"
       ],
       "entity_label_recall": 0.0,
       "correct_endpoint_edge_count": 0,
       "expected_edge_count": 1,
-      "accuracy_warning": "JSON syntax is valid but nodes/edge endpoints are wrong on this fixture. All graph fields remain inferred."
+      "accuracy_warning": "JSON may parse yet entity/edge labels differ from ground truth; all graph output remains an unverified inference."
     }
   ],
   "notes": [
-    "Actual M1 MacBook Air 8 GB; M1 Pro 16 GB not tested.",
-    "Sampled RSS does not include all Metal/compressed memory. See vlm-memory-summary.txt (1.1 GB physical footprint snapshot).",
-    "Apple Vision was intermittent in repeated runs; successful CPU runs are separately recorded.",
-    "Synthetic results are not representative document accuracy."
+    "Actual host is the recorded hw.model; the brief M1 Pro 16 GB target remains untested.",
+    "Sampled RSS excludes part of Metal/compressed memory; see vlm-memory-summary.txt.",
+    "Apple Vision failures above are real e5rt errors, not OCR quality measurements.",
+    "Synthetic fixtures are not representative document accuracy."
   ]
 }

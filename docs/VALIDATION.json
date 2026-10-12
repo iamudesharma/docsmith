@@ -1,15 +1,15 @@
 {
-  "date": "2026-10-11",
+  "date": "2026-10-12",
   "platform": "aarch64-apple-darwin",
   "rust": "1.88.0",
-  "tests_passed": 28,
-  "live_api_checks": 23,
+  "tests_passed": 35,
+  "live_api_checks": 29,
   "build": "passed (--locked)",
   "format": "passed",
   "clippy": "passed (--all-targets -D warnings)",
-  "binary_sha256": "0c20a0ee3cc31d0c5c2ee05f9012d075b5c7e442a6e70f3474d97375c66ce8f2",
+  "binary_sha256": "9769fb4cc47cb733f6fb9113220d7362c5598772c2c0a2cf4149918d16b1abb7",
   "cargo_lock_sha256": "9fb27866413ee67bb4114a6852ebfcf042ab79c36bb70135ea6b6f6612633866",
-  "fixture_files": 40,
+  "fixture_files": 42,
   "unrun": [
     "Linux/Docker runtime (daemon unavailable)",
     "M1 Pro 16 GB benchmark (host is M1 Air 8 GB)",
@@ -19,8 +19,9 @@
     "Full legacy / Visio / SmartArt semantics"
   ],
   "optional_validation": [
-    "Tesseract synthetic English/Hindi/rotation/noise CER 0 in benchmark-results.json",
-    "Apple Vision intermittent runtime errors/timeouts",
-    "SmolVLM2 generated valid constrained JSON but wrong ER entities/endpoints; all inferred"
+    "Tesseract synthetic English/Hindi/rotation/noise CER 0 in benchmark-results.json (2026-10-12 rerun)",
+    "Apple Vision still fails with e5rt errors on every rerun image; CPU-only selection does not avoid it on this host",
+    "SmolVLM2 answered the invoice image and generated valid constrained JSON for the ER figure but labeled PK/FK instead of Users/Orders; all graph output remains inferred",
+    "Xberg 1.3.8 verified through the adapter after NO_COLOR fix: CLI, HTTP worker and capabilities checks in docs/xberg-adapter-check.json"
   ]
 }

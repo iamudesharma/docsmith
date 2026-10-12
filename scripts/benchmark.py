@@ -51,4 +51,13 @@ for name,options in cases:
   record['engine_binary_sha256']=__import__('hashlib').sha256(BIN.read_bytes()).hexdigest();
   if name=='raster-er.png' and (tmp/'out/result.json').exists():
    graphs=[b['diagram'] for u in doc['units'] for b in u['blocks'] if b.get('diagram')];record['inferred_graphs']=graphs
-  results.append(record);(ROOT/'docs/benchmark-results.json').write_text(json.dumps({'date':'2026-10-11','hardware':subprocess.check_output(['sysctl','hw.model','hw.memsize'],text=True),'synthetic_fixtures':True,'runs':results},indent=2));print(name,options,record['elapsed_ms'],record.get('status'),record.get('character_error_rate'),flush=True)
+   expected=truth.get('raster_er',{});ents=[e.lower() for e in expected.get('entities',[])]
+   nodes={n['id']:n.get('label','').lower() for g in graphs for n in g['nodes']};labels=list(nodes.values())
+   record['expected_entities']=ents;record['entity_label_recall']=round(sum(1 for e in ents if any(e in l for l in labels))/max(len(ents),1),3)
+   record['correct_endpoint_edge_count']=sum(1 for g in graphs for e in g['edges'] if all(any(x in nodes.get(e.get(k,''),'') or nodes.get(e.get(k,''),'') in x for x in ents) for k in ('source','target')))
+   record['expected_edge_count']=expected.get('edge_count',1)
+   if record['entity_label_recall']<1 or record['correct_endpoint_edge_count']<record['expected_edge_count']:record['accuracy_warning']='JSON may parse yet entity/edge labels differ from ground truth; all graph output remains an unverified inference.'
+  results.append(record)
+  notes=['Actual host is the recorded hw.model; the brief M1 Pro 16 GB target remains untested.','Sampled RSS excludes part of Metal/compressed memory; see vlm-memory-summary.txt.','Apple Vision failures above are real e5rt errors, not OCR quality measurements.','Synthetic fixtures are not representative document accuracy.']
+  (ROOT/'docs/benchmark-results.json').write_text(json.dumps({'date':time.strftime('%Y-%m-%d'),'hardware':subprocess.check_output(['sysctl','hw.model','hw.memsize'],text=True),'synthetic_fixtures':True,'runs':results,'notes':notes},indent=2))
+  print(name,options,record['elapsed_ms'],record.get('status'),record.get('character_error_rate'),flush=True)

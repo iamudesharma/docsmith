@@ -37,4 +37,4 @@ CI (`.github/workflows/ci.yml`) runs exactly that order with plain `cargo` on Ru
 
 ## Docs
 
-`docs/ARCHITECTURE.md` and `docs/DEPLOYMENT.md` are the current design/ops references; `docs/BRIEF.md` is the original brief. README links to `docs/CAPABILITIES.md`, `docs/RESEARCH.md` and `docs/PHASES.md`, which do not exist — record facts in ARCHITECTURE/DEPLOYMENT instead. `docs/vendor/` holds dated upstream snapshots with checksums (`manifest.json`); prefer them over re-fetching vendor docs. This checkout has no `.git` despite `.github/` and `.gitignore` present, so git history/diff commands will fail.
+`docs/ARCHITECTURE.md` and `docs/DEPLOYMENT.md` are the current design/ops references; `docs/BRIEF.md` is the original brief. README links to `docs/CAPABILITIES.md`, `docs/RESEARCH.md` and `docs/PHASES.md`, which exist alongside the numbered `docs/phases/` documents. `docs/vendor/` holds dated upstream snapshots with checksums (`manifest.json`); prefer them over re-fetching vendor docs. Validation evidence lives in `docs/VALIDATION.md`/`VALIDATION.json`, `docs/e2e-results.json`, `docs/benchmark-results.json` and `docs/xberg-adapter-check.json`.

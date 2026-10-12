@@ -13,6 +13,9 @@ target/debug/doc-extractor extract fixtures/workbook.xlsx --output data/example
 # OCR (provision Tesseract and language packs first):
 target/debug/doc-extractor extract fixtures/mixed.pdf --ocr --output data/ocr
 
+# Optional broad adapter (provision the evaluated Xberg 1.3.8 CLI first):
+DOC_XBERG=/path/to/xberg target/debug/doc-extractor extract fixtures/digital.pdf --parser xberg --output data/xberg
+
 # HTTP service:
 target/debug/doc-extractor serve --bind 127.0.0.1:8787 --data-dir data/service
 curl -F file=@fixtures/document.docx -F 'options={"ocr":false,"vision":false}' http://127.0.0.1:8787/v1/extractions
@@ -29,7 +32,7 @@ See [validation evidence](docs/VALIDATION.md), [capabilities](docs/CAPABILITIES.
 - PDF: `pdfinfo`, `pdftotext`, `pdfimages`, `pdftoppm` (Poppler).
 - OCR: `tesseract`, with requested traineddata provisioned locally. `TESSDATA_PREFIX` can point to your local language directory. OCR is disabled by default.
 - Apple Vision: run `scripts/build-apple-vision.sh`, set `DOC_APPLE_VISION` to the emitted executable, and use `{"ocr":true,"ocr_provider":"apple_vision","languages":"en-US"}`. Query `target/helpers/apple-vision --languages` before selecting other languages. A CPU path avoids observed local GPU runtime failures.
-- Xberg: provision the evaluated 1.3.8 CLI plus its bundled libraries, set `DOC_XBERG`, and use `{"parser":"xberg"}`. The direct adapter retains more spreadsheet formula/merge fidelity on the current fixtures.
+- Xberg: provision the evaluated 1.3.8 CLI plus its bundled libraries, set `DOC_XBERG`, and use `{"parser":"xberg"}` (or `--parser xberg`). The adapter is verified end-to-end and forces `NO_COLOR=1` because the CLI colorizes piped output. The direct adapter retains more spreadsheet formula/merge fidelity on the current fixtures.
 - Vision: provision llama.cpp, SmolVLM2 Q4 weights and matching Q8 projector; run `scripts/run-vision.sh`, set `DOC_VLM_URL=http://127.0.0.1:8799`, `DOC_VLM_MODEL=SmolVLM2`, and opt in with `{"vision":true}`. Add `interpret_diagrams:true` to request unverified graph proposals. Nothing is downloaded during extraction. Vision caching requires `DOC_VLM_REVISION` to identify immutable weights/projector/configuration.
 
 ## Checks

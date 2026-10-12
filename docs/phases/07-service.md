@@ -10,7 +10,7 @@ SQLite single-server lock, atomic checkpoints, PDF page reuse, deterministic rep
 
 ## Exit evidence
 
-Real multipart/job/result/unit/asset/auth/cache/cancel/timeout/restart/delete tests; malformed input and OpenAPI tests.
+Real multipart/job/result/unit/asset/auth/cache/cancel/timeout/restart/delete tests; malformed input and OpenAPI tests. Additional live checks cover duplicate cancellation, delete-while-running, two workers, quota rejection, cache hits under quota and the retention sweep.
 
 ## Remaining acceptance
 
