@@ -269,9 +269,9 @@ def run_job(work, port, path, options=None, name=None, timeout=600):
         "timings": timings,
     }
 
-def forget_cached(work, port, path):
-    """Delete a completed job for this exact input so a phase runs on a fresh job."""
-    jid = submit(port, path)
+def forget_cached(work, port, path, options=None):
+    """Delete a completed job for this exact input+options so a phase runs on a fresh job."""
+    jid = submit(port, path, options=options)
     if status(port, jid)["state"] in ("completed", "failed"):
         api(port, f"/v1/extractions/{jid}", method="DELETE", attempts=3)
         time.sleep(0.3)
@@ -284,7 +284,7 @@ def recovery(work, limits, path, pages, service, port):
     dispatcher: the job row stays `running`, and a restarted service re-spawns it into the same
     job directory, where completed units make Poppler work skip already-finished pages.
     """
-    forget_cached(work, port, path)
+    forget_cached(work, port, path)  # recovery.pdf is always run with default options
     jid = submit(port, path)
     d = job_dir(work, jid)
     deadline = time.time() + 180
@@ -342,7 +342,7 @@ def recovery(work, limits, path, pages, service, port):
     return evidence, new_service, new_port
 
 def cancellation(work, port, path):
-    forget_cached(work, port, path)
+    forget_cached(work, port, path, options={"ocr": True})
     jid = submit(port, path, options={"ocr": True})
     d = job_dir(work, jid)
     for _ in range(200):
