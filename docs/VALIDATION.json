@@ -3,11 +3,11 @@
  "platform": "aarch64-apple-darwin",
  "rust": "1.88.0",
  "tests_passed": 42,
- "live_api_checks": 34,
+ "live_api_checks": 35,
  "build": "passed (--locked)",
  "format": "passed",
  "clippy": "passed (--all-targets -D warnings)",
- "binary_sha256": "2cab07d15c5e62faf92d7a6cabccf022cf5c23fe273304951500e8c007839d66",
+ "binary_sha256": "c6f2a160d3c040d4dcdf6237a3c9eaf987c44b5f4680ceeba0c8e2b2dd3b2bbd",
  "cargo_lock_sha256": "92ed443d1c1298c89c573528515cd6595959171ed7b62b5561493fdff56b5600",
  "fixture_files": 44,
  "unrun": [

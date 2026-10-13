@@ -453,9 +453,13 @@ async fn upload_inner(
                         "Options too large",
                     ));
                 }
-                options = serde_json::from_slice(&b).map_err(|e| {
-                    error(StatusCode::BAD_REQUEST, "invalid_options", &e.to_string())
-                })?;
+                // Multipart clients (Swagger UI included) send an empty part for an
+                // optional string field. Treat empty/whitespace as "use defaults".
+                if b.iter().any(|byte| !byte.is_ascii_whitespace()) {
+                    options = serde_json::from_slice(&b).map_err(|e| {
+                        error(StatusCode::BAD_REQUEST, "invalid_options", &e.to_string())
+                    })?;
+                }
             }
             _ => {
                 return Err(error(
@@ -836,7 +840,7 @@ pub fn openapi() -> Value {
         };
         let mut operation = json!({"summary":summary,"parameters":params,"responses":responses,"security":security});
         if path == "/v1/extractions" {
-            operation["requestBody"] = json!({"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"options":{"type":"string","description":"JSON encoded Options"}}}}}});
+            operation["requestBody"] = json!({"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"options":{"type":"string","description":"JSON encoded Options (empty uses defaults)","example":"{\"ocr\":false,\"vision\":false}"}}}}}});
         }
         paths.entry(path).or_insert(json!({}))[method] = operation;
     }

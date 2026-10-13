@@ -28,10 +28,11 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   try:
    with urllib.request.urlopen(req,timeout=10) as r:return r.status,r.read()
   except urllib.error.HTTPError as e:return e.code,e.read()
- def upload(name,options=None,token='a-token',content=None,root=None):
+ def upload(name,options=None,token='a-token',content=None,root=None,raw_options=None):
   boundary='fixture-boundary'
   b=f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode()+((ROOT/'fixtures'/name).read_bytes() if content is None else content)+b'\r\n'
   if options is not None:b+=f'--{boundary}\r\nContent-Disposition: form-data; name="options"\r\n\r\n'.encode()+json.dumps(options).encode()+b'\r\n'
+  elif raw_options is not None:b+=f'--{boundary}\r\nContent-Disposition: form-data; name="options"\r\n\r\n'.encode()+raw_options.encode()+b'\r\n'
   b+=f'--{boundary}--\r\n'.encode()
   code,body=request('/v1/extractions','POST',b,token,{'Content-Type':'multipart/form-data; boundary='+boundary},root=root);return code,json.loads(body)
  def status(id,root=None):return json.loads(request('/v1/extractions/'+id,root=root)[1])
@@ -64,6 +65,7 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('tenant-specific cache hit',upload('quoted.csv')[1]['id']==id)
   other=upload('quoted.csv',token='b-token')[1]['id'];check('cache does not cross tenants',other!=id)
   check('invalid options rejected',upload('quoted.csv',{'unknown':True})[0]==400)
+  check('empty or blank options part uses defaults',upload('quoted.csv',raw_options='')[0]==202 and upload('quoted.csv',raw_options=' ')[0]==202)
   check('streamed upload limit returns 413',upload('quoted.csv',content=b'x'*140000)[0]==413)
   check('body limit returns 413',upload('quoted.csv',content=b'x'*180000)[0]==413)
   _,j=upload('document.docx');assetjob=j['id'];wait(assetjob);d=json.loads(request(f'/v1/extractions/{assetjob}/result')[1]);asset=d['assets'][0]['id'];check('asset endpoint',request(f'/v1/extractions/{assetjob}/assets/{asset}')[0]==200)
