@@ -5,3 +5,5 @@
 *.sqlite-shm
 
 /models/
+__pycache__/
+*.pyc

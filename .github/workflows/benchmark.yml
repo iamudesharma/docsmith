@@ -19,6 +19,12 @@ jobs:
           toolchain: '1.88'
       - run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin
       - run: cargo build --locked
+      - run: cargo build --release --locked
+      - run: python3 -m pip install --quiet pillow
+      - name: Run large-input benchmark (quick shapes)
+        env:
+          DOC_LARGE_BENCH_PATH: ${{ runner.temp }}/perf-large-inputs-linux.json
+        run: python3 scripts/benchmark-large.py --quick --work-dir "${{ runner.temp }}/large"
       - name: Run benchmark
         env:
           DOC_BENCHMARK_OUTPUT: ${{ runner.temp }}/benchmark-results.json
@@ -29,5 +35,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: benchmark-results-linux
-          path: ${{ runner.temp }}/benchmark-results.json
+          path: |
+            ${{ runner.temp }}/benchmark-results.json
+            ${{ runner.temp }}/perf-large-inputs-linux.json
           if-no-files-found: error

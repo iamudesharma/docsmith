@@ -125,7 +125,7 @@ def gen_inputs(work):
         return [], [(jpeg(f"Image heavy page {i} panel {j}", (450, 300), i * 10 + j), 450, 300) for j in range(3)]
     inputs["image-heavy.pdf"] = {"pages": heavy, "shape": "3 scanned panels per page", "bytes": build_pdf(work / "image-heavy.pdf", heavy, heavy_layout)}
 
-    rows = QUICK and 200_000 or 2_000_000
+    rows = QUICK and 500_000 or 2_000_000
     csv_path = work / "rows.csv"
     rand = random.Random(7)
     with open(csv_path, "w") as f:
@@ -406,8 +406,14 @@ def main():
             service.wait(timeout=15)
         except subprocess.TimeoutExpired:
             service.kill()
+    if QUICK:
+        evidence["quick_mode"] = True
+        inputs_note = "Quick mode: reduced page/row counts (CI runs use this)."
+    else:
+        inputs_note = "Full local shapes."
     evidence.update({
         "generated": time.strftime("%Y-%m-%d"),
+        "inputs_note": inputs_note,
         "host": subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip(),
         "command": " ".join(sys.argv),
         "limits": limits,
@@ -421,7 +427,7 @@ def main():
             "job_disk_mb covers the whole completed job directory including result files and retained assets.",
         ],
     })
-    out = ROOT / "docs/perf-large-inputs.json"
+    out = Path(os.environ.get("DOC_LARGE_BENCH_PATH", ROOT / "docs/perf-large-inputs.json"))
     out.write_text(json.dumps(evidence, indent=1) + "\n")
     print(json.dumps({k: {kk: vv for kk, vv in v.items() if kk != "timings"} for k, v in runs.items()}, indent=1))
     if recovery_result:
