@@ -47,9 +47,9 @@ esac
 
 mkdir -p "$DATA_DIR"
 CONFIG="$DATA_DIR/config.json"
-python3 - "$CONFIG" "$DATA_DIR" "$BIND" "$WORKERS" "${DOC_TOKENS:-}" "${DOC_WEBHOOK_SECRET:-}" <<'PY'
+python3 - "$CONFIG" "$DATA_DIR" "$BIND" "$WORKERS" "${DOC_TOKENS:-}" "${DOC_WEBHOOK_SECRET:-}" "${DOC_SINK_CMD:-}" <<'PY'
 import json, sys
-config_path, data_dir, bind, workers, tokens, webhook_secret = sys.argv[1:7]
+config_path, data_dir, bind, workers, tokens, webhook_secret, sink_command = sys.argv[1:8]
 config = {"data_dir": data_dir, "bind": bind, "limits": {"workers": int(workers)}}
 if tokens:
     config["tokens"] = {}
@@ -61,6 +61,8 @@ if tokens:
         config["tokens"][token] = tenant or "default"
 if webhook_secret:
     config["webhook_secret"] = webhook_secret
+if sink_command:
+    config["sink_command"] = sink_command
 # Callbacks to loopback are allowed only while the server itself is loopback-bound.
 config["webhook_allow_private"] = (
     bind.startswith("127.0.0.1") or bind.startswith("localhost") or bind.startswith("[::1]")

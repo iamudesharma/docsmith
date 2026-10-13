@@ -515,7 +515,19 @@ mod tests {
         let second = try_lock_slot(&dir, 2).expect("slot 1");
         assert!(try_lock_slot(&dir, 2).is_none(), "cap is enforced");
         drop(first);
-        let replacement = try_lock_slot(&dir, 2).expect("freed slot is reusable");
+        // A concurrently forked child (other tests spawn processes) briefly shares the
+        // open file description until exec, so allow a short window for the lock to clear.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let replacement = loop {
+            if let Some(file) = try_lock_slot(&dir, 2) {
+                break file;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "freed slot is reusable"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
         drop(replacement);
         drop(second);
         let _ = std::fs::remove_dir_all(&dir);

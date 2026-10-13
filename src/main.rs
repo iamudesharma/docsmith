@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use doc_extractor::{extract, model::*, service};
 use std::path::PathBuf;
 #[derive(Parser)]
@@ -45,6 +45,16 @@ enum Commands {
     Capabilities,
     Schema,
     Openapi,
+    /// MCP server over stdio for agent clients (offline, or proxy a service with --url).
+    Mcp {
+        #[arg(long, env = "DOC_BASE_URL")]
+        url: Option<String>,
+    },
+    /// Generate shell completions (bash, zsh, fish, elvish, powershell).
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
     #[command(hide = true)]
     Worker {
         #[arg(long)]
@@ -79,6 +89,9 @@ fn main() -> anyhow::Result<()> {
             }
             if std::env::var("DOC_WEBHOOK_ALLOW_PRIVATE").is_ok_and(|v| v == "1" || v == "true") {
                 config.webhook_allow_private = true;
+            }
+            if let Ok(command) = std::env::var("DOC_SINK_CMD") {
+                config.sink_command = Some(command);
             }
             tokio::runtime::Runtime::new()?.block_on(service::serve(config))?;
         }
@@ -141,6 +154,11 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Worker { job_dir } => service::worker(&job_dir)?,
+        Commands::Mcp { url } => doc_extractor::mcp::run(url)?,
+        Commands::Completions { shell } => {
+            let mut command = Cli::command();
+            clap_complete::generate(shell, &mut command, "doc-extractor", &mut std::io::stdout());
+        }
         Commands::Capabilities => println!(
             "{}",
             serde_json::to_string_pretty(&service::capabilities())?

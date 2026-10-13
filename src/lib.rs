@@ -4,6 +4,7 @@ pub mod diagrams;
 pub mod extract;
 pub mod layout;
 pub mod markup;
+pub mod mcp;
 pub mod model;
 pub mod pdf_source;
 pub mod providers;

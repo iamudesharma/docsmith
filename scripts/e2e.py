@@ -7,7 +7,7 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
  tmp=pathlib.Path(tmp)
  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
  base=f'http://127.0.0.1:{port}'
- config={'data_dir':str(tmp/'data'),'bind':f'127.0.0.1:{port}','tokens':{'a-token':'tenant-a','b-token':'tenant-b'},'webhook_secret':'e2e-secret','webhook_allow_private':True,'limits':{'workers':1,'timeout_seconds':4,'queued_jobs':3,'upload_bytes':131072}}
+ config={'data_dir':str(tmp/'data'),'bind':f'127.0.0.1:{port}','tokens':{'a-token':'tenant-a','b-token':'tenant-b'},'webhook_secret':'e2e-secret','webhook_allow_private':True,'sink_command':'cp {result} sink-{state}.out','limits':{'workers':1,'timeout_seconds':4,'queued_jobs':3,'upload_bytes':131072}}
  (tmp/'config.json').write_text(json.dumps(config))
  # Slow OCR provider makes cancellation/timeout tests deterministic and tests whole process groups.
  (tmp/'bin').mkdir();(tmp/'bin/tesseract').write_text('#!/bin/sh\nif [ "$1" = --list-langs ]; then printf "List\\neng\\n"; exit 0; fi\nif [ "$1" = --version ]; then echo "tesseract mock"; exit 0; fi\nsleep 20\n');(tmp/'bin/tesseract').chmod(0o755)
@@ -64,6 +64,10 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   p=start();check('health readiness',request('/health/ready',token=None)[0]==200)
   check('unauthorized upload rejected',upload('quoted.csv',token=None)[0]==401)
   code,j=upload('quoted.csv');check('multipart 202',code==202);id=j['id'];v=wait(id);check('durable complete '+str(v),v['state']=='completed')
+  sink_path=tmp/'data/jobs'/id/'sink-completed.out'
+  deadline=time.time()+8
+  while not sink_path.exists() and time.time()<deadline:time.sleep(.2)
+  check('sink command runs on completion',sink_path.exists() and sink_path.stat().st_size>0)
   code,body=request(f'/v1/extractions/{id}/result');d=json.loads(body);check('canonical cells',d['units'][0]['blocks'][0]['table']['cells'][5]['raw']=='0012')
   check('unit endpoint',request(f'/v1/extractions/{id}/units/u1')[0]==200)
   check('derived markdown',b'0012' in request(f'/v1/extractions/{id}/result?format=markdown')[1])
@@ -129,6 +133,10 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('sse job events',b'data:' in events and b'"completed"' in events)
   arch=request(f'/v1/extractions/{jsonljob}/archive')[1]
   check('archive zip',arch[:2]==b'PK')
+  view_code,view_page=request(f'/view/{jsonljob}')
+  check('viewer page',view_code==200 and b'doc-extractor viewer' in view_page)
+  metrics=request('/metrics')[1]
+  check('prometheus metrics',b'doc_jobs{' in metrics and b'doc_workers_slots' in metrics)
   _,j=upload('flexible.tsv',callback=f'http://127.0.0.1:{hook_port}/hook');hookjob=j['id'];wait(hookjob)
   deadline=time.time()+10
   while not received and time.time()<deadline:time.sleep(.1)

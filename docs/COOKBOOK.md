@@ -114,6 +114,54 @@ python3 clients/python/docsmith.py list --state completed
 python3 clients/python/docsmith.py stats
 ```
 
+## Result viewer
+
+```sh
+open "http://127.0.0.1:8787/view/$ID"     # paged tables/text, unit navigation, download links
+```
+
+The page is offline HTML (no CDN). For token-protected servers, paste the bearer token in the
+header field; it is stored in the browser's localStorage.
+
+## MCP for agent clients
+
+```sh
+doc-extractor mcp                       # offline; runs extraction via the same CLI/worker path
+doc-extractor mcp --url http://127.0.0.1:8787   # or proxy a running service
+```
+
+Claude Code:
+
+```sh
+claude mcp add doc-extractor -- doc-extractor mcp
+```
+
+Cursor/Claude Desktop config:
+
+```json
+{"mcpServers": {"doc-extractor": {"command": "doc-extractor", "args": ["mcp"]}}}
+```
+
+Tools: `extract` (path, format, options, max_chars), `capabilities`, and — with `--url` —
+`job_status`, `get_result`, `list_jobs`, `stats`.
+
+## Sink command (ship results automatically)
+
+```sh
+# Once you have object storage, results upload themselves:
+DOC_SINK_CMD='aws s3 cp {result} s3://bucket/results/{id}.{format}' DOC_REBUILD=1 ./run.sh
+```
+
+Runs once per completed job with the job directory as cwd; placeholders `{id}`, `{name}`,
+`{state}`, `{dir}`, `{result}`, `{format}` (also exported as `DOC_*`). Failures retry three
+times and the output lands in `sink-<state>.log`; pending runs show in `/v1/stats` and `/metrics`.
+
+## Metrics
+
+```sh
+curl -s http://127.0.0.1:8787/metrics     # Prometheus text: doc_jobs, workers, pending, disk, uptime
+```
+
 ## Cancel, delete, retry
 
 ```sh

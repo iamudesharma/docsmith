@@ -35,8 +35,15 @@ curl http://127.0.0.1:8787/v1/extractions?state=completed
 curl http://127.0.0.1:8787/v1/stats
 curl -N http://127.0.0.1:8787/v1/extractions/JOB_ID/events
 curl -O -J http://127.0.0.1:8787/v1/extractions/JOB_ID/archive
+# Result viewer (offline HTML: paged tables/text, download links) and Prometheus metrics:
+open http://127.0.0.1:8787/view/JOB_ID
+curl -s http://127.0.0.1:8787/metrics
 # Python client (dependency-free) and recipes:
 python3 clients/python/docsmith.py extract fixtures/digital.pdf --text
+# MCP server for agent clients (offline; --url proxies a running service):
+target/debug/doc-extractor mcp
+# Shell completions:
+target/debug/doc-extractor completions zsh > ~/.zfunc/_doc-extractor
 ```
 
 The result directory contains `result.json`, `result.md`, `units/` and content-addressed `assets/`. Keep JSON for provenance and fidelity; Markdown is a convenience export. Word uses logical sections; spreadsheets use sheets; presentations use source-ordered slides; PDF uses actual pages. PDFs are extracted in 100-page batches with per-page checkpoints (batches run in parallel by default; restart reuses completed pages); CSV/TSV inputs are split into bounded chunk units and support a compact cell form (`--compact-tables`). See [deployment](docs/DEPLOYMENT.md) for large-input sizing.

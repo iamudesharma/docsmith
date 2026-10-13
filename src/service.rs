@@ -41,6 +41,12 @@ pub struct Config {
     /// Allow webhook callbacks to loopback/private addresses (default refuses them).
     #[serde(default)]
     pub webhook_allow_private: bool,
+    /// Shell command run once per completed job (cwd = job dir). Placeholders:
+    /// `{id}`, `{name}`, `{state}`, `{dir}`, `{result}`, `{format}`; also exported as
+    /// `DOC_ID`, `DOC_FILENAME`, `DOC_STATE`, `DOC_DIR`, `DOC_RESULT`, `DOC_FORMAT`.
+    /// Example: `aws s3 cp {result} s3://bucket/results/{id}.{format}`.
+    #[serde(default)]
+    pub sink_command: Option<String>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -51,6 +57,7 @@ impl Default for Config {
             tokens: HashMap::new(),
             webhook_secret: None,
             webhook_allow_private: false,
+            sink_command: None,
         }
     }
 }
@@ -128,6 +135,7 @@ impl App {
         // Additive migration: databases created before webhooks lack this column.
         let _ = db.execute("ALTER TABLE jobs ADD COLUMN callback_url TEXT", []);
         db.execute_batch("CREATE TABLE IF NOT EXISTS webhook_deliveries(id TEXT PRIMARY KEY, job_id TEXT NOT NULL, url TEXT NOT NULL, event TEXT NOT NULL, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, delivered_at INTEGER, last_error TEXT); CREATE INDEX IF NOT EXISTS webhook_pending ON webhook_deliveries(delivered_at,next_at); CREATE INDEX IF NOT EXISTS webhook_job ON webhook_deliveries(job_id);")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS sink_runs(job_id TEXT PRIMARY KEY, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, completed_at INTEGER, last_error TEXT); CREATE INDEX IF NOT EXISTS sink_pending ON sink_runs(completed_at,next_at);")?;
         // Reap orphan process groups before redispatching their durable input.
         let mut statement =
             db.prepare("SELECT id FROM jobs WHERE state IN ('running','deleting')")?;
@@ -404,9 +412,98 @@ impl App {
             [],
         );
     }
+    /// Run the configured `sink_command` once per completed job (for example an upload to
+    /// object storage). Failures retry three times; the log stays in the job directory.
+    async fn sink_cycle(&self) {
+        let Some(command) = self.config.sink_command.clone() else {
+            return;
+        };
+        let pending: Vec<(String, String)> = {
+            let db = self.db.lock().unwrap();
+            let mut statement = match db.prepare(
+                "SELECT id,state FROM jobs WHERE state='completed' AND id NOT IN (SELECT job_id FROM sink_runs) LIMIT 100",
+            ) {
+                Ok(statement) => statement,
+                Err(e) => {
+                    tracing::error!("sink scan failed: {e}");
+                    return;
+                }
+            };
+            let rows = statement
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .and_then(|rows| rows.collect::<std::result::Result<Vec<_>, _>>());
+            match rows {
+                Ok(rows) => rows,
+                Err(_) => return,
+            }
+        };
+        for (id, state) in pending {
+            let db = self.db.lock().unwrap();
+            let _ = db.execute(
+                "INSERT OR IGNORE INTO sink_runs(job_id,state,attempts,next_at) VALUES(?1,?2,0,?3)",
+                params![id, state, epoch()],
+            );
+        }
+        let due: Vec<(String, String, String, i64)> = {
+            let db = self.db.lock().unwrap();
+            let mut statement = match db.prepare(
+                "SELECT s.job_id,j.filename,s.state,s.attempts FROM sink_runs s JOIN jobs j ON j.id=s.job_id WHERE s.completed_at IS NULL AND s.attempts < 3 AND s.next_at <= ?1 ORDER BY s.next_at LIMIT 4",
+            ) {
+                Ok(statement) => statement,
+                Err(_) => return,
+            };
+            let rows = statement
+                .query_map([epoch()], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, i64>(3)?,
+                    ))
+                })
+                .and_then(|rows| rows.collect::<std::result::Result<Vec<_>, _>>());
+            match rows {
+                Ok(rows) => rows,
+                Err(_) => return,
+            }
+        };
+        for (job_id, filename, state, attempts) in due {
+            let dir = self.dir(&job_id);
+            let command = command.clone();
+            let id = job_id.clone();
+            let outcome = tokio::task::spawn_blocking(move || {
+                run_sink(&command, &id, &state, &filename, &dir)
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+            let db = self.db.lock().unwrap();
+            let updated = match outcome {
+                Ok(()) => db.execute(
+                    "UPDATE sink_runs SET completed_at=?2,last_error=NULL WHERE job_id=?1",
+                    params![job_id, epoch()],
+                ),
+                Err(message) => {
+                    tracing::warn!("sink command failed for {job_id}: {message}");
+                    db.execute(
+                        "UPDATE sink_runs SET attempts=?2,next_at=?3,last_error=?4 WHERE job_id=?1",
+                        params![job_id, attempts + 1, epoch() + 10 * (attempts + 1), message],
+                    )
+                }
+            };
+            if let Err(e) = updated {
+                tracing::error!("sink update failed: {e}");
+            }
+        }
+        let db = self.db.lock().unwrap();
+        let _ = db.execute(
+            "DELETE FROM sink_runs WHERE job_id NOT IN (SELECT id FROM jobs)",
+            [],
+        );
+    }
     async fn webhook_worker(self) {
         loop {
             self.webhook_cycle().await;
+            self.sink_cycle().await;
             tokio::time::sleep(Duration::from_millis(1000)).await;
         }
     }
@@ -929,6 +1026,104 @@ fn is_private_host(host: &str) -> bool {
         Err(_) => false,
     }
 }
+/// Stored artifact matching the job's `result_format` (falls back to canonical JSON).
+fn result_artifact(dir: &std::path::Path) -> (PathBuf, String) {
+    let format = std::fs::read(dir.join("request.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|request| {
+            request
+                .get("options")?
+                .get("result_format")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "json".into());
+    let file = match format.as_str() {
+        "markdown" | "md" => "result.md",
+        "text" | "txt" => "result.txt",
+        "jsonl" | "ndjson" => "result.jsonl",
+        _ => "result.json",
+    };
+    let path = dir.join(file);
+    if path.is_file() {
+        (path, format)
+    } else {
+        (dir.join("result.json"), "json".into())
+    }
+}
+/// Expand placeholders, export DOC_* variables and run the sink command with the job
+/// directory as cwd. Output is appended to `sink-<state>.log` for troubleshooting.
+fn run_sink(
+    command: &str,
+    job_id: &str,
+    state: &str,
+    filename: &str,
+    dir: &std::path::Path,
+) -> std::result::Result<(), String> {
+    let (result, format) = result_artifact(dir);
+    let expanded = command
+        .replace("{id}", job_id)
+        .replace("{name}", filename)
+        .replace("{state}", state)
+        .replace("{dir}", &dir.display().to_string())
+        .replace("{result}", &result.display().to_string())
+        .replace("{format}", &format);
+    let log_path = dir.join(format!("sink-{state}.log"));
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| e.to_string())?;
+    let log_err = log.try_clone().map_err(|e| e.to_string())?;
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&expanded)
+        .current_dir(dir)
+        .env("DOC_ID", job_id)
+        .env("DOC_STATE", state)
+        .env("DOC_FILENAME", filename)
+        .env("DOC_DIR", dir)
+        .env("DOC_RESULT", &result)
+        .env("DOC_FORMAT", &format)
+        .stdin(std::process::Stdio::null())
+        .stdout(log)
+        .stderr(log_err)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(300);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if std::time::Instant::now() > deadline {
+                    let _ = child.kill();
+                    return Err("sink command timed out after 300s".into());
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    if status.success() {
+        Ok(())
+    } else {
+        let tail = std::fs::read_to_string(&log_path)
+            .unwrap_or_default()
+            .chars()
+            .rev()
+            .take(300)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        Err(format!(
+            "exit {}: {}",
+            status.code().unwrap_or(-1),
+            tail.trim()
+        ))
+    }
+}
 fn valid_part(part: &str, prefix: char) -> bool {
     part.starts_with(prefix)
         && part.len() > 1
@@ -1114,7 +1309,7 @@ async fn list(
 }
 async fn stats(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     let tenant = app.tenant(&headers)?;
-    let (by_state, webhooks_pending) = {
+    let (by_state, webhooks_pending, sinks_pending) = {
         let db = app.db.lock().unwrap();
         let mut by_state = serde_json::Map::new();
         let mut statement =
@@ -1132,7 +1327,14 @@ async fn stats(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Val
                 |r| r.get(0),
             )
             .unwrap_or(0);
-        (by_state, webhooks_pending)
+        let sinks_pending: i64 = db
+            .query_row(
+                "SELECT count(*) FROM sink_runs s JOIN jobs j ON j.id=s.job_id WHERE j.tenant=?1 AND s.completed_at IS NULL AND s.attempts < 3",
+                [&tenant],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        (by_state, webhooks_pending, sinks_pending)
     };
     let dir = app.config.data_dir.join("jobs");
     let disk_bytes = tokio::task::spawn_blocking(move || dir_bytes(&dir))
@@ -1144,10 +1346,74 @@ async fn stats(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Val
         "jobs": by_state,
         "workers": {"slots": app.config.limits.workers, "active": app.running.lock().unwrap().len()},
         "webhooks_pending": webhooks_pending,
+        "sinks_pending": sinks_pending,
         "disk_bytes": disk_bytes,
         "data_dir": app.config.data_dir,
         "retention_seconds": app.config.limits.retention_seconds,
     })))
+}
+/// Prometheus text exposition (gauges, instance-wide, no document content).
+async fn metrics(State(app): State<App>) -> ApiResult<Response> {
+    let (by_state, webhooks_pending, sinks_pending) = {
+        let db = app.db.lock().unwrap();
+        let mut by_state: Vec<(String, i64)> = Vec::new();
+        let mut statement = db.prepare("SELECT state,count(*) FROM jobs GROUP BY state")?;
+        for row in statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+            by_state.push(row?);
+        }
+        let webhooks_pending: i64 = db
+            .query_row(
+                "SELECT count(*) FROM webhook_deliveries WHERE delivered_at IS NULL AND attempts < 5",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let sinks_pending: i64 = db
+            .query_row(
+                "SELECT count(*) FROM sink_runs WHERE completed_at IS NULL AND attempts < 3",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        (by_state, webhooks_pending, sinks_pending)
+    };
+    let dir = app.config.data_dir.join("jobs");
+    let disk_bytes = tokio::task::spawn_blocking(move || dir_bytes(&dir))
+        .await
+        .unwrap_or(0);
+    let mut body = String::from("# HELP doc_jobs Current jobs by state\n# TYPE doc_jobs gauge\n");
+    for (state, count) in by_state {
+        body.push_str(&format!("doc_jobs{{state=\"{state}\"}} {count}\n"));
+    }
+    body.push_str("# TYPE doc_workers_active gauge\n");
+    body.push_str(&format!(
+        "doc_workers_active {}\n",
+        app.running.lock().unwrap().len()
+    ));
+    body.push_str("# TYPE doc_workers_slots gauge\n");
+    body.push_str(&format!(
+        "doc_workers_slots {}\n",
+        app.config.limits.workers
+    ));
+    body.push_str("# TYPE doc_webhooks_pending gauge\n");
+    body.push_str(&format!("doc_webhooks_pending {webhooks_pending}\n"));
+    body.push_str("# TYPE doc_sinks_pending gauge\n");
+    body.push_str(&format!("doc_sinks_pending {sinks_pending}\n"));
+    body.push_str("# TYPE doc_disk_bytes gauge\n");
+    body.push_str(&format!("doc_disk_bytes {disk_bytes}\n"));
+    body.push_str("# TYPE doc_uptime_seconds gauge\n");
+    body.push_str(&format!(
+        "doc_uptime_seconds {}\n",
+        epoch() - app.started_at
+    ));
+    Ok((
+        [(
+            "content-type",
+            "text/plain; version=0.0.4; charset=utf-8".to_owned(),
+        )],
+        body,
+    )
+        .into_response())
 }
 /// Bounded recursive size so `/v1/stats` cannot walk a pathological tree forever.
 fn dir_bytes(path: &std::path::Path) -> u64 {
@@ -1213,6 +1479,145 @@ async fn events(
 #[derive(Deserialize)]
 struct ArchiveQuery {
     units: Option<bool>,
+}
+const VIEWER: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>doc-extractor viewer</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 0; }
+  header { position: sticky; top: 0; background: Canvas; border-bottom: 1px solid rgba(127,127,127,.4); padding: .6rem 1rem; display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
+  main { padding: 1rem; }
+  h1 { font-size: 1rem; margin: 0; }
+  button, input, select { font: inherit; padding: .25rem .5rem; }
+  table { border-collapse: collapse; font-size: 13px; }
+  td, th { border: 1px solid rgba(127,127,127,.45); padding: .2rem .45rem; max-width: 28rem; overflow-wrap: anywhere; vertical-align: top; }
+  tbody tr:nth-child(even) { background: rgba(127,127,127,.09); }
+  .muted { opacity: .7; }
+  pre { white-space: pre-wrap; background: rgba(127,127,127,.12); padding: .6rem; border-radius: 6px; }
+  .block { margin-bottom: 1.2rem; }
+  .pill { border: 1px solid rgba(127,127,127,.5); border-radius: 999px; padding: .1rem .6rem; font-size: 12px; }
+  .error { color: crimson; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">doc-extractor viewer</h1>
+  <span class="pill" id="state">…</span>
+  <span class="muted" id="progress"></span>
+  <label class="muted">unit <input id="unit" size="4" value="u1"></label>
+  <label class="muted">rows <input id="from" size="6" value="0" title="first row"> + <input id="count" size="5" value="500" title="row count"></label>
+  <button id="load">Load</button>
+  <button id="prev">&larr;</button>
+  <button id="next">&rarr;</button>
+  <span style="flex:1"></span>
+  <label class="muted">token <input id="token" size="10" type="password" title="bearer token for protected servers"></label>
+  <span id="links" class="muted"></span>
+</header>
+<main id="body"><p class="muted">Loading…</p></main>
+<script>
+var job = decodeURIComponent(location.pathname.split('/').pop());
+var tokenBox = document.getElementById('token');
+tokenBox.value = localStorage.getItem('docsmith-token') || '';
+tokenBox.addEventListener('change', function () { localStorage.setItem('docsmith-token', tokenBox.value); });
+function headers() { var h = {}; if (tokenBox.value) h.Authorization = 'Bearer ' + tokenBox.value; return h; }
+function get(path) {
+  return fetch(path, { headers: headers() }).then(function (r) {
+    return r.text().then(function (body) {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + body.slice(0, 400));
+      try { return JSON.parse(body); } catch (e) { return body; }
+    });
+  });
+}
+function text(tag, value, cls) { var el = document.createElement(tag); el.textContent = value; if (cls) el.className = cls; return el; }
+function renderTable(table) {
+  var cells = {};
+  table.cells.forEach(function (c) { (cells[c.row] = cells[c.row] || {})[c.column] = c; });
+  var rows = Object.keys(cells).map(Number).sort(function (a, b) { return a - b; });
+  var el = document.createElement('table');
+  var thead = document.createElement('thead'), tr = document.createElement('tr');
+  tr.appendChild(text('th', 'row'));
+  for (var c = 0; c < table.columns; c++) tr.appendChild(text('th', 'col ' + (c + 1)));
+  thead.appendChild(tr); el.appendChild(thead);
+  var tbody = document.createElement('tbody');
+  rows.forEach(function (r) {
+    var row = document.createElement('tr');
+    row.appendChild(text('td', String(r), 'muted'));
+    for (var c = 0; c < table.columns; c++) {
+      var cell = cells[r][c];
+      row.appendChild(text('td', cell ? cell.raw : ''));
+    }
+    tbody.appendChild(row);
+  });
+  el.appendChild(tbody);
+  return el;
+}
+function renderUnit(unit, slice) {
+  var body = document.getElementById('body');
+  body.innerHTML = '';
+  if (slice) body.appendChild(text('p', 'rows ' + slice.from + '…' + (slice.from + slice.rows) + ' (table rows in this unit: ' + slice.rows + ')', 'muted'));
+  (unit.blocks || []).forEach(function (block) {
+    var div = document.createElement('div'); div.className = 'block';
+    if (block.table) div.appendChild(renderTable(block.table));
+    else if (block.text) div.appendChild(text('pre', block.text));
+    else if (block.asset_id) {
+      var link = text('a', 'asset ' + block.asset_id, '');
+      link.href = '/v1/extractions/' + job + '/assets/' + block.asset_id;
+      div.appendChild(link);
+    }
+    body.appendChild(div);
+  });
+  if (!body.childNodes.length) body.appendChild(text('p', 'No blocks in this unit.', 'muted'));
+}
+function load() {
+  var unit = document.getElementById('unit').value || 'u1';
+  var from = document.getElementById('from').value || '0';
+  var count = document.getElementById('count').value || '500';
+  var body = document.getElementById('body');
+  get('/v1/extractions/' + job + '/units/' + unit + '?from=' + from + '&count=' + count)
+    .then(function (data) { renderUnit(data.unit ? data.unit : data, data.slice); })
+    .catch(function (e) { body.innerHTML = ''; body.appendChild(text('pre', String(e.message || e), 'error')); });
+}
+var timer = null;
+function refresh() {
+  get('/v1/extractions/' + job).then(function (status) {
+    document.getElementById('title').textContent = status.filename + ' · ' + job.slice(0, 8);
+    document.getElementById('state').textContent = status.state;
+    document.getElementById('progress').textContent = 'units ' + status.progress + (status.result_status ? ' · ' + status.result_status : '');
+    document.getElementById('links').innerHTML = '';
+    [['json', 'JSON'], ['markdown', 'Markdown'], ['text', 'Text'], ['jsonl', 'JSONL']].forEach(function (pair) {
+      var a = text('a', pair[1] + ' ', '');
+      a.href = '/v1/extractions/' + job + '/result?format=' + pair[0];
+      document.getElementById('links').appendChild(a);
+    });
+    var zip = text('a', 'zip', ''); zip.href = '/v1/extractions/' + job + '/archive';
+    document.getElementById('links').appendChild(zip);
+    if (['completed', 'failed', 'cancelled'].indexOf(status.state) >= 0) { clearInterval(timer); timer = null; }
+  }).catch(function (e) {
+    document.getElementById('body').innerHTML = '';
+    document.getElementById('body').appendChild(text('pre', String(e.message || e), 'error'));
+    if (timer) { clearInterval(timer); timer = null; }
+  });
+}
+document.getElementById('load').addEventListener('click', load);
+document.getElementById('prev').addEventListener('click', function () {
+  var n = Math.max(1, parseInt(document.getElementById('unit').value.replace(/\D/g, '') || '1', 10) - 1);
+  document.getElementById('unit').value = 'u' + n; load();
+});
+document.getElementById('next').addEventListener('click', function () {
+  var n = parseInt(document.getElementById('unit').value.replace(/\D/g, '') || '1', 10) + 1;
+  document.getElementById('unit').value = 'u' + n; load();
+});
+refresh(); load(); timer = setInterval(refresh, 1500);
+</script>
+</body>
+</html>
+"#;
+async fn view() -> Html<&'static str> {
+    Html(VIEWER)
 }
 async fn archive(
     State(app): State<App>,
@@ -1536,8 +1941,10 @@ pub fn router(app: App) -> Router {
     let limit = app.config.limits.upload_bytes as usize + 16384;
     Router::new()
         .route("/", get(landing))
+        .route("/view/{id}", get(view))
         .route("/v1/extractions", get(list).post(upload))
         .route("/v1/stats", get(stats))
+        .route("/metrics", get(metrics))
         .route("/v1/extractions/{id}", get(status).delete(delete))
         .route("/v1/extractions/{id}/result", get(result))
         .route("/v1/extractions/{id}/units/{unit_id}", get(unit))
