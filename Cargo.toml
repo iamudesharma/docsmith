@@ -39,6 +39,8 @@ lopdf = { version = "=0.38.0", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 utoipa-swagger-ui = { version = "=10.0.1", features = ["axum", "vendored"] }
+tokio-stream = "0.1"
+hmac = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

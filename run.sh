@@ -47,9 +47,9 @@ esac
 
 mkdir -p "$DATA_DIR"
 CONFIG="$DATA_DIR/config.json"
-python3 - "$CONFIG" "$DATA_DIR" "$BIND" "$WORKERS" "${DOC_TOKENS:-}" <<'PY'
+python3 - "$CONFIG" "$DATA_DIR" "$BIND" "$WORKERS" "${DOC_TOKENS:-}" "${DOC_WEBHOOK_SECRET:-}" <<'PY'
 import json, sys
-config_path, data_dir, bind, workers, tokens = sys.argv[1:6]
+config_path, data_dir, bind, workers, tokens, webhook_secret = sys.argv[1:7]
 config = {"data_dir": data_dir, "bind": bind, "limits": {"workers": int(workers)}}
 if tokens:
     config["tokens"] = {}
@@ -59,6 +59,12 @@ if tokens:
             continue
         token, _, tenant = pair.partition(":")
         config["tokens"][token] = tenant or "default"
+if webhook_secret:
+    config["webhook_secret"] = webhook_secret
+# Callbacks to loopback are allowed only while the server itself is loopback-bound.
+config["webhook_allow_private"] = (
+    bind.startswith("127.0.0.1") or bind.startswith("localhost") or bind.startswith("[::1]")
+)
 json.dump(config, open(config_path, "w"), indent=2)
 PY
 
@@ -67,8 +73,9 @@ echo "  binary: $BIN"
 echo "  config: $CONFIG"
 echo "  state:  $DATA_DIR  (delete this directory to clear all cached jobs)"
 echo "  API:    http://$BIND"
+echo "  home:   http://$BIND/      (links, stats, quickstart)"
 echo "  docs:   http://$BIND/docs  (Swagger UI: try every endpoint in the browser)"
-echo "  guides: docs/DEPLOYMENT.md (ops), docs/CAPABILITIES.md (formats/options), docs/PIPELINE.md (concurrency)"
+echo "  guides: docs/DEPLOYMENT.md (ops), docs/CAPABILITIES.md (formats/options), docs/COOKBOOK.md (recipes)"
 echo "  try:    curl -s http://$BIND/health/ready"
 echo "          curl -s -F file=@fixtures/quoted.csv http://$BIND/v1/extractions"
 echo "          curl -s http://$BIND/openapi.json"

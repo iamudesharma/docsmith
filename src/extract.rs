@@ -742,6 +742,8 @@ fn write_derived(dir: &Path, doc: &Document) -> Result<()> {
     use std::io::{BufWriter, Write};
     let mut md = BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.md"))?);
     let mut txt = BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.txt"))?);
+    let mut jsonl =
+        BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.jsonl"))?);
     write!(md, "# {}\n\nStatus: {}\n\n", doc.filename, doc.status)?;
     let mut buffer = String::new();
     for unit in &doc.units {
@@ -752,9 +754,13 @@ fn write_derived(dir: &Path, doc: &Document) -> Result<()> {
         buffer.clear();
         crate::model::unit_plaintext(&full, &mut buffer);
         txt.write_all(buffer.as_bytes())?;
+        buffer.clear();
+        crate::model::unit_jsonl(&full, &mut buffer)?;
+        jsonl.write_all(buffer.as_bytes())?;
     }
     md.flush()?;
     txt.flush()?;
+    jsonl.flush()?;
     Ok(())
 }
 fn route(c: &mut ContextData, input: &Path, bytes: &[u8], ext: &str) -> Result<()> {

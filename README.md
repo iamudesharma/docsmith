@@ -30,11 +30,18 @@ curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result
 # and GET .../result serves the derived text (all artifacts are still written to the job dir).
 # Preview rows without downloading a large result (streams the derived export):
 python3 scripts/preview.py JOB_ID                 # also: --unit u1, --markdown, --download out.json
+# Job listing, stats, live events, zip archive and signed webhooks:
+curl http://127.0.0.1:8787/v1/extractions?state=completed
+curl http://127.0.0.1:8787/v1/stats
+curl -N http://127.0.0.1:8787/v1/extractions/JOB_ID/events
+curl -O -J http://127.0.0.1:8787/v1/extractions/JOB_ID/archive
+# Python client (dependency-free) and recipes:
+python3 clients/python/docsmith.py extract fixtures/digital.pdf --text
 ```
 
 The result directory contains `result.json`, `result.md`, `units/` and content-addressed `assets/`. Keep JSON for provenance and fidelity; Markdown is a convenience export. Word uses logical sections; spreadsheets use sheets; presentations use source-ordered slides; PDF uses actual pages. PDFs are extracted in 100-page batches with per-page checkpoints (batches run in parallel by default; restart reuses completed pages); CSV/TSV inputs are split into bounded chunk units and support a compact cell form (`--compact-tables`). See [deployment](docs/DEPLOYMENT.md) for large-input sizing.
 
-See [validation evidence](docs/VALIDATION.md), [accuracy report](docs/ACCURACY.md), [capabilities](docs/CAPABILITIES.md), [architecture](docs/ARCHITECTURE.md), [pipeline and concurrency](docs/PIPELINE.md), [research and dependency decisions](docs/RESEARCH.md), [phase acceptance](docs/PHASES.md), and [deployment](docs/DEPLOYMENT.md). These separate implemented behavior from unrun real-world acceptance gates.
+See [validation evidence](docs/VALIDATION.md), [accuracy report](docs/ACCURACY.md), [cookbook](docs/COOKBOOK.md), [Python client](clients/python/README.md), [capabilities](docs/CAPABILITIES.md), [architecture](docs/ARCHITECTURE.md), [pipeline and concurrency](docs/PIPELINE.md), [research and dependency decisions](docs/RESEARCH.md), [phase acceptance](docs/PHASES.md), and [deployment](docs/DEPLOYMENT.md). These separate implemented behavior from unrun real-world acceptance gates.
 
 ## Providers
 

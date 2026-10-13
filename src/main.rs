@@ -33,8 +33,8 @@ enum Commands {
         interpret_diagrams: bool,
         #[arg(long)]
         compact_tables: bool,
-        /// Result representation: json (default), markdown or text.
-        #[arg(long, value_parser = ["json", "markdown", "text"])]
+        /// Result representation: json (default), markdown, text or jsonl.
+        #[arg(long, value_parser = ["json", "markdown", "text", "jsonl"])]
         format: Option<String>,
         /// Stream the selected result artifact to stdout (the path goes to stderr).
         #[arg(long)]
@@ -73,6 +73,12 @@ fn main() -> anyhow::Result<()> {
             };
             if let Ok(tokens) = std::env::var("DOC_TOKENS") {
                 config.tokens = serde_json::from_str(&tokens)?;
+            }
+            if let Ok(secret) = std::env::var("DOC_WEBHOOK_SECRET") {
+                config.webhook_secret = Some(secret);
+            }
+            if std::env::var("DOC_WEBHOOK_ALLOW_PRIVATE").is_ok_and(|v| v == "1" || v == "true") {
+                config.webhook_allow_private = true;
             }
             tokio::runtime::Runtime::new()?.block_on(service::serve(config))?;
         }
@@ -117,6 +123,7 @@ fn main() -> anyhow::Result<()> {
             let artifact = match opts.result_format.as_str() {
                 "markdown" | "md" => "result.md",
                 "text" | "txt" => "result.txt",
+                "jsonl" | "ndjson" => "result.jsonl",
                 _ => "result.json",
             };
             let path = output.join(artifact);

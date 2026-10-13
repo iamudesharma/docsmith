@@ -3,12 +3,12 @@
  "platform": "aarch64-apple-darwin",
  "rust": "1.88.0",
  "tests_passed": 43,
- "live_api_checks": 38,
+ "live_api_checks": 49,
  "build": "passed (--locked)",
  "format": "passed",
  "clippy": "passed (--all-targets -D warnings)",
- "binary_sha256": "a61a9f0b366433d408cee3300750ae819f7ebedd22c806c144b8eabbb848f8b1",
- "cargo_lock_sha256": "92ed443d1c1298c89c573528515cd6595959171ed7b62b5561493fdff56b5600",
+ "binary_sha256": "a91b1ccb550aa38714adcb87f1dbc81e443b0ff0992ca500a0acb96df2085bf3",
+ "cargo_lock_sha256": "0a625e6795ed521f3fde6f06b8a695b3c50bbfae8dea294b124ce4ba520aefd8",
  "fixture_files": 44,
  "unrun": [
   "Container/Docker runtime (local daemon unavailable; Linux benchmark runs in the GitHub Actions workflow)",
@@ -28,7 +28,8 @@
   "Phase 1: versioned resume artifacts (checkpoint_format), page-ordered checkpoint/progress snapshots with live progress in sequential and parallel modes, merge-before-error retention, streamed result.json assembly, temp-file sweep, per-stage timings",
   "Phase 2: streamed table output (limits.stream_bytes, block release per unit, streamed result.md/result.txt), live progress for streamed chunks",
   "Phase 3: machine-wide OCR budget via flock slot files shared by worker processes",
-  "Phase 4: dynamic PDF batch scheduling, contained render/OCR failures, Poppler page-count fallback, sparse-text page OCR routing"
+  "Phase 4: dynamic PDF batch scheduling, contained render/OCR failures, Poppler page-count fallback, sparse-text page OCR routing",
+  "Phase 5: job listing and stats, SSE job events, unit row slicing, zip archive endpoint, JSONL derived export, signed retried webhooks, landing page, dependency-free Python client and cookbook"
  ],
  "large_input_evidence": "docs/perf-large-inputs.json (2026-10-13: digital/scanned/mixed/image-heavy PDFs, 2M-row CSV, recovery, cancellation)",
  "accuracy_evidence": "docs/ACCURACY.md / docs/accuracy-results.json (13 October 2026: cells 29/29, PDF pages 138/138, content checks 25/25, English OCR CER 0 over 5 raster cases)"
