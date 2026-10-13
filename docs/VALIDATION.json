@@ -3,12 +3,12 @@
  "platform": "aarch64-apple-darwin",
  "rust": "1.88.0",
  "tests_passed": 47,
- "live_api_checks": 52,
+ "live_api_checks": 54,
  "build": "passed (--locked)",
  "format": "passed",
  "clippy": "passed (--all-targets -D warnings)",
- "binary_sha256": "68d8e2407c7181fdb7242a34a37f609b89897946856c8affd33161163d396f67",
- "cargo_lock_sha256": "01bdce5ebb3f77c9d044ccac43c17842d34ee9a62d2d5aa3c569d82f5290d007",
+ "binary_sha256": "30696367f4adc542b0cedf1bb11f2c12155eea849588cbd78cb6d747eb4d2503",
+ "cargo_lock_sha256": "336ec5bf13c79657c2d161b4c00f0f673f74bddf81b21cfeb452e59b5a4ec5c9",
  "fixture_files": 44,
  "unrun": [
   "Container/Docker runtime (local daemon unavailable; Linux benchmark runs in the GitHub Actions workflow)",
@@ -30,7 +30,8 @@
   "Phase 3: machine-wide OCR budget via flock slot files shared by worker processes",
   "Phase 4: dynamic PDF batch scheduling, contained render/OCR failures, Poppler page-count fallback, sparse-text page OCR routing",
   "Phase 5: job listing and stats, SSE job events, unit row slicing, zip archive endpoint, JSONL derived export, signed retried webhooks, landing page, dependency-free Python client and cookbook",
-  "Phase 6: MCP stdio tool server (offline and service-proxy modes), sink_command per completed job, offline result viewer, Prometheus metrics, shell completions"
+  "Phase 6: MCP stdio tool server (offline and service-proxy modes), sink_command per completed job, offline result viewer, Prometheus metrics, shell completions",
+  "Phase 7: HTML derived export, batch upload (repeat the file field, one job per file), JSON log mode, docker-compose and systemd samples"
  ],
  "large_input_evidence": "docs/perf-large-inputs.json (2026-10-13: digital/scanned/mixed/image-heavy PDFs, 2M-row CSV, recovery, cancellation)",
  "accuracy_evidence": "docs/ACCURACY.md / docs/accuracy-results.json (13 October 2026: cells 29/29, PDF pages 138/138, content checks 25/25, English OCR CER 0 over 5 raster cases)"

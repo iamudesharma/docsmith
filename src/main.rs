@@ -33,8 +33,8 @@ enum Commands {
         interpret_diagrams: bool,
         #[arg(long)]
         compact_tables: bool,
-        /// Result representation: json (default), markdown, text or jsonl.
-        #[arg(long, value_parser = ["json", "markdown", "text", "jsonl"])]
+        /// Result representation: json (default), markdown, text, jsonl or html.
+        #[arg(long, value_parser = ["json", "markdown", "text", "jsonl", "html"])]
         format: Option<String>,
         /// Stream the selected result artifact to stdout (the path goes to stderr).
         #[arg(long)]
@@ -62,10 +62,14 @@ enum Commands {
     },
 }
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
+    let builder = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(std::io::stderr)
-        .init();
+        .with_writer(std::io::stderr);
+    if std::env::var("DOC_LOG_JSON").is_ok_and(|value| value == "1" || value == "true") {
+        builder.json().init();
+    } else {
+        builder.init();
+    }
     match Cli::parse().command {
         Commands::Serve {
             bind,
@@ -137,6 +141,7 @@ fn main() -> anyhow::Result<()> {
                 "markdown" | "md" => "result.md",
                 "text" | "txt" => "result.txt",
                 "jsonl" | "ndjson" => "result.jsonl",
+                "html" => "result.html",
                 _ => "result.json",
             };
             let path = output.join(artifact);

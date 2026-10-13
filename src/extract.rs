@@ -744,7 +744,10 @@ fn write_derived(dir: &Path, doc: &Document) -> Result<()> {
     let mut txt = BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.txt"))?);
     let mut jsonl =
         BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.jsonl"))?);
+    let mut html = BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.html"))?);
     write!(md, "# {}\n\nStatus: {}\n\n", doc.filename, doc.status)?;
+    write!(html, "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>body{{font:14px/1.5 -apple-system,system-ui,sans-serif;margin:2rem auto;max-width:70rem;padding:0 1rem}}table{{border-collapse:collapse;margin:.6rem 0}}td,th{{border:1px solid #bbb;padding:.2rem .45rem;vertical-align:top;max-width:28rem;overflow-wrap:anywhere}}tbody tr:nth-child(even){{background:rgba(127,127,127,.09)}}pre,p{{overflow-wrap:anywhere}}</style>\n</head>\n<body>\n<h1>{}</h1>\n<p>Status: {}</p>\n",
+        crate::model::html_escape(&doc.filename), crate::model::html_escape(&doc.filename), crate::model::html_escape(&doc.status))?;
     let mut buffer = String::new();
     for unit in &doc.units {
         let full = load_unit_payload(dir, unit)?;
@@ -757,10 +760,15 @@ fn write_derived(dir: &Path, doc: &Document) -> Result<()> {
         buffer.clear();
         crate::model::unit_jsonl(&full, &mut buffer)?;
         jsonl.write_all(buffer.as_bytes())?;
+        buffer.clear();
+        crate::model::unit_html(&full, &mut buffer);
+        html.write_all(buffer.as_bytes())?;
     }
+    write!(html, "</body>\n</html>\n")?;
     md.flush()?;
     txt.flush()?;
     jsonl.flush()?;
+    html.flush()?;
     Ok(())
 }
 fn route(c: &mut ContextData, input: &Path, bytes: &[u8], ext: &str) -> Result<()> {

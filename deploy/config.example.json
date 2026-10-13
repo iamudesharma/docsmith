@@ -1,0 +1,9 @@
+{
+  "data_dir": "/home/extractor/data",
+  "bind": "0.0.0.0:8787",
+  "tokens": { "replace-with-a-real-token": "default" },
+  "limits": { "workers": 2, "pdf_workers": 4, "ocr_threads": 2 },
+  "webhook_secret": null,
+  "webhook_allow_private": false,
+  "sink_command": null
+}
