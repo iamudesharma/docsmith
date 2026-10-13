@@ -272,7 +272,7 @@ def run_case(name, fixture, flags, kind, spec, out_root, langs):
         got = ocr_text(doc)
         cer = error_rate(spec, got)
         wer = word_error_rate(spec, got)
-        record.update(passed=cer == 0.0, cer=cer, wer=wer, detail=f"text={got[:80]!r}")
+        record.update(passed=cer == 0.0, cer=cer, wer=wer, got=got, detail=f"text={got[:80]!r}")
     elif kind == "recall":
         # Measured, not pass/fail: this is OCR text recovery for an inferred-content figure.
         hay = joined(doc).lower()
@@ -289,7 +289,8 @@ def main():
         return 1
     langs = []
     try:
-        langs = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=30).stdout.split()[1:]
+        listed = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=30).stdout
+        langs = [line.strip() for line in listed.splitlines()[1:] if line.strip()]
     except Exception:
         pass
     out_root = pathlib.Path(tempfile.mkdtemp(prefix="accuracy-run-"))
@@ -365,7 +366,8 @@ def main():
         "|---|---|---|---|",
     ]
     for r in ocr_records:
-        lines.append(f"| {r['name']} | {r['cer']:.4f} | {r['wer']:.4f} | `{r.get('detail', '')[7:60]}` |")
+        got = r.get("got", "").replace("|", "\\|")[:60]
+        lines.append(f"| {r['name']} | {r['cer']:.4f} | {r['wer']:.4f} | `{got}` |")
     if failures:
         lines += ["", "## Failures", ""] + [f"- {name}" for name in failures]
     measured = [r for r in results if r["kind"] == "recall"]

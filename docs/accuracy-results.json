@@ -1,14 +1,8 @@
 {
- "date": "2026-10-13 08:40",
+ "date": "2026-10-13 08:41",
  "host": "MacBookAir10,1",
  "binary_sha256": "8fcb43719762717a62643d8e429b1abdc14b93e45df2e61662fc09098d0b5bcd",
  "tesseract_languages": [
-  "of",
-  "available",
-  "languages",
-  "in",
-  "\"/opt/homebrew/share/tessdata/\"",
-  "(3):",
   "eng",
   "osd",
   "snum"
@@ -32,7 +26,7 @@
   "skipped": [
    "OCR Hindi raster (skipped without hin traineddata)"
   ],
-  "elapsed_s": 15.1
+  "elapsed_s": 15.4
  },
  "checks": [
   {
@@ -342,6 +336,7 @@
    "passed": true,
    "cer": 0.0,
    "wer": 0.0,
+   "got": "Invoice TOTAL 12345",
    "detail": "text='Invoice TOTAL 12345'",
    "elapsed_ms": 0
   },
@@ -352,6 +347,7 @@
    "passed": true,
    "cer": 0.0,
    "wer": 0.0,
+   "got": "Invoice TOTAL 12345",
    "detail": "text='Invoice TOTAL 12345'",
    "elapsed_ms": 0
   },
@@ -362,6 +358,7 @@
    "passed": true,
    "cer": 0.0,
    "wer": 0.0,
+   "got": "Invoice TOTAL 12345",
    "detail": "text='Invoice TOTAL 12345'",
    "elapsed_ms": 0
   },
@@ -372,6 +369,7 @@
    "passed": true,
    "cer": 0.0,
    "wer": 0.0,
+   "got": "Invoice TOTAL 12345",
    "detail": "text='Invoice TOTAL 12345'",
    "elapsed_ms": 0
   },
@@ -382,6 +380,7 @@
    "passed": true,
    "cer": 0.0,
    "wer": 0.0,
+   "got": "Invoice TOTAL 12345",
    "detail": "text='Invoice TOTAL 12345'",
    "elapsed_ms": 0
   },

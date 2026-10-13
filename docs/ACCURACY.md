@@ -1,6 +1,6 @@
-# Extraction accuracy — 2026-10-13 08:40
+# Extraction accuracy — 2026-10-13 08:41
 
-Host `MacBookAir10,1`, binary `8fcb43719762717a…`, Tesseract languages: of, available, languages, in, "/opt/homebrew/share/tessdata/", (3):, eng, osd, snum.
+Host `MacBookAir10,1`, binary `8fcb43719762717a…`, Tesseract languages: eng, osd, snum.
 Synthetic fixtures with known content (see `scripts/generate-fixtures.py`); script: `scripts/accuracy.py`.
 
 | Metric | Result |
@@ -14,11 +14,11 @@ Synthetic fixtures with known content (see `scripts/generate-fixtures.py`); scri
 
 | Case | CER | WER | Extracted |
 |---|---|---|---|
-| OCR clean raster | 0.0000 | 0.0000 | `nvoice TOTAL 12345'` |
-| OCR noisy raster | 0.0000 | 0.0000 | `nvoice TOTAL 12345'` |
-| OCR rotated raster (90° probe) | 0.0000 | 0.0000 | `nvoice TOTAL 12345'` |
-| OCR image-only PDF page | 0.0000 | 0.0000 | `nvoice TOTAL 12345'` |
-| Mixed page: native + OCR | 0.0000 | 0.0000 | `nvoice TOTAL 12345'` |
+| OCR clean raster | 0.0000 | 0.0000 | `Invoice TOTAL 12345` |
+| OCR noisy raster | 0.0000 | 0.0000 | `Invoice TOTAL 12345` |
+| OCR rotated raster (90° probe) | 0.0000 | 0.0000 | `Invoice TOTAL 12345` |
+| OCR image-only PDF page | 0.0000 | 0.0000 | `Invoice TOTAL 12345` |
+| Mixed page: native + OCR | 0.0000 | 0.0000 | `Invoice TOTAL 12345` |
 
 ## Measured (informational, inferred content)
 
