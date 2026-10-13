@@ -8,72 +8,72 @@
     {
       "fixture": "quoted.csv",
       "options": {},
-      "elapsed_ms": 1594,
-      "process_tree_peak_rss_bytes_sampled": 19070976,
+      "elapsed_ms": 783,
+      "process_tree_peak_rss_bytes_sampled": 19660800,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 3072.00M  used = 1663.62M  free = 1408.38M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 3072.00M  used = 1663.62M  free = 1408.38M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "f1782e11a4ab5305562ca8a66e01ca6ef0375f95892e25b78aed484708f42f0a"
+      "engine_binary_sha256": "11107e70a79a7e19d3e341a71f97884dc12ba27c4a715e94c33c59c2909b1928"
     },
     {
       "fixture": "digital.pdf",
       "options": {},
-      "elapsed_ms": 640,
-      "process_tree_peak_rss_bytes_sampled": 32800768,
+      "elapsed_ms": 1198,
+      "process_tree_peak_rss_bytes_sampled": 26836992,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 3072.00M  used = 1663.62M  free = 1408.38M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 3072.00M  used = 1663.62M  free = 1408.38M  (encrypted)",
       "status": "partial",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "f1782e11a4ab5305562ca8a66e01ca6ef0375f95892e25b78aed484708f42f0a"
+      "engine_binary_sha256": "11107e70a79a7e19d3e341a71f97884dc12ba27c4a715e94c33c59c2909b1928"
     },
     {
       "fixture": "workbook.xlsx",
       "options": {},
-      "elapsed_ms": 271,
-      "process_tree_peak_rss_bytes_sampled": 22642688,
+      "elapsed_ms": 1106,
+      "process_tree_peak_rss_bytes_sampled": 24133632,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 3072.00M  used = 1663.62M  free = 1408.38M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 3072.00M  used = 1663.62M  free = 1408.38M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "f1782e11a4ab5305562ca8a66e01ca6ef0375f95892e25b78aed484708f42f0a"
+      "engine_binary_sha256": "11107e70a79a7e19d3e341a71f97884dc12ba27c4a715e94c33c59c2909b1928"
     },
     {
       "fixture": "document.docx",
       "options": {},
-      "elapsed_ms": 264,
-      "process_tree_peak_rss_bytes_sampled": 21217280,
+      "elapsed_ms": 842,
+      "process_tree_peak_rss_bytes_sampled": 23478272,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 3072.00M  used = 1663.62M  free = 1408.38M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 3072.00M  used = 1663.62M  free = 1408.38M  (encrypted)",
       "status": "partial",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "f1782e11a4ab5305562ca8a66e01ca6ef0375f95892e25b78aed484708f42f0a"
+      "engine_binary_sha256": "11107e70a79a7e19d3e341a71f97884dc12ba27c4a715e94c33c59c2909b1928"
     },
     {
       "fixture": "diagram.drawio",
       "options": {},
-      "elapsed_ms": 261,
-      "process_tree_peak_rss_bytes_sampled": 20365312,
+      "elapsed_ms": 713,
+      "process_tree_peak_rss_bytes_sampled": 20856832,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 3072.00M  used = 1663.62M  free = 1408.38M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 3072.00M  used = 1663.62M  free = 1408.38M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "",
       "inferred_descriptions": [],
-      "engine_binary_sha256": "f1782e11a4ab5305562ca8a66e01ca6ef0375f95892e25b78aed484708f42f0a"
+      "engine_binary_sha256": "11107e70a79a7e19d3e341a71f97884dc12ba27c4a715e94c33c59c2909b1928"
     },
     {
       "fixture": "scan.png",
@@ -81,17 +81,17 @@
         "ocr": true,
         "ocr_provider": "tesseract"
       },
-      "elapsed_ms": 784,
-      "process_tree_peak_rss_bytes_sampled": 64536576,
+      "elapsed_ms": 4491,
+      "process_tree_peak_rss_bytes_sampled": 60030976,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 3072.00M  used = 1663.62M  free = 1408.38M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 3072.00M  used = 1655.62M  free = 1416.38M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "Invoice TOTAL 12345",
       "character_error_rate": 0.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "f1782e11a4ab5305562ca8a66e01ca6ef0375f95892e25b78aed484708f42f0a"
+      "engine_binary_sha256": "11107e70a79a7e19d3e341a71f97884dc12ba27c4a715e94c33c59c2909b1928"
     },
     {
       "fixture": "noisy.png",
@@ -99,17 +99,17 @@
         "ocr": true,
         "ocr_provider": "tesseract"
       },
-      "elapsed_ms": 1027,
-      "process_tree_peak_rss_bytes_sampled": 67223552,
+      "elapsed_ms": 2710,
+      "process_tree_peak_rss_bytes_sampled": 64225280,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 3072.00M  used = 1655.62M  free = 1416.38M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 3072.00M  used = 1655.62M  free = 1416.38M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "Invoice TOTAL 12345",
       "character_error_rate": 0.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "f1782e11a4ab5305562ca8a66e01ca6ef0375f95892e25b78aed484708f42f0a"
+      "engine_binary_sha256": "11107e70a79a7e19d3e341a71f97884dc12ba27c4a715e94c33c59c2909b1928"
     },
     {
       "fixture": "rotated.png",
@@ -117,17 +117,17 @@
         "ocr": true,
         "ocr_provider": "tesseract"
       },
-      "elapsed_ms": 784,
-      "process_tree_peak_rss_bytes_sampled": 52002816,
+      "elapsed_ms": 2615,
+      "process_tree_peak_rss_bytes_sampled": 63766528,
       "exit": 0,
-      "swap_before": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
-      "swap_after": "vm.swapusage: total = 1024.00M  used = 0.25M  free = 1023.75M  (encrypted)",
+      "swap_before": "vm.swapusage: total = 3072.00M  used = 1655.62M  free = 1416.38M  (encrypted)",
+      "swap_after": "vm.swapusage: total = 3072.00M  used = 1655.62M  free = 1416.38M  (encrypted)",
       "status": "complete",
       "errors": [],
       "ocr_text": "Invoice TOTAL 12345",
       "character_error_rate": 0.0,
       "inferred_descriptions": [],
-      "engine_binary_sha256": "f1782e11a4ab5305562ca8a66e01ca6ef0375f95892e25b78aed484708f42f0a"
+      "engine_binary_sha256": "11107e70a79a7e19d3e341a71f97884dc12ba27c4a715e94c33c59c2909b1928"
     }
   ],
   "notes": [

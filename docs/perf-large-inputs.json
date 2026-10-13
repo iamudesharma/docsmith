@@ -1,145 +1,145 @@
 {
  "runs": {
   "digital": {
-   "id": "d319d48e-9e57-4429-ae34-787985313438",
+   "id": "7a870e60-10e4-469a-9542-844e55b73916",
    "state": "completed",
    "status": "partial",
-   "wall_s": 13.14,
-   "peak_rss_mb": 100,
+   "wall_s": 16.0,
+   "peak_rss_mb": 55,
    "job_disk_mb": 28.3,
    "units": 2000,
    "result_mb": 10.2,
    "timings": {
-    "derived_write_ms": 8,
-    "merge_ms": 85,
+    "derived_write_ms": 11,
+    "merge_ms": 222,
     "ocr_ms": 0,
-    "page_parse_ms": 0,
-    "poppler_images_ms": 1097,
-    "poppler_text_ms": 938,
-    "result_write_ms": 56,
-    "unit_write_ms": 45042
+    "page_parse_ms": 182,
+    "poppler_images_ms": 4563,
+    "poppler_text_ms": 3243,
+    "result_write_ms": 81,
+    "unit_write_ms": 47950
    }
   },
   "scanned-ocr": {
-   "id": "07482169-458e-4c19-bfa1-8c1efbf6dc84",
+   "id": "6adf9ad5-9e9e-41b5-b23f-9de28f3c6221",
    "state": "completed",
    "status": "partial",
-   "wall_s": 47.55,
-   "peak_rss_mb": 85,
+   "wall_s": 81.45,
+   "peak_rss_mb": 82,
    "job_disk_mb": 6.4,
    "units": 80,
    "result_mb": 0.6,
    "timings": {
     "derived_write_ms": 1,
-    "merge_ms": 7,
-    "ocr_ms": 42403,
+    "merge_ms": 16,
+    "ocr_ms": 73190,
     "page_parse_ms": 0,
-    "poppler_images_ms": 3250,
-    "poppler_text_ms": 19,
-    "result_write_ms": 10,
-    "unit_write_ms": 660
+    "poppler_images_ms": 6175,
+    "poppler_text_ms": 28,
+    "result_write_ms": 12,
+    "unit_write_ms": 610
    }
   },
   "mixed-ocr": {
-   "id": "2f98c952-d0dc-4f90-a3df-7af783f46624",
+   "id": "85a12227-ccf6-4843-86e4-5eae9fb7cb45",
    "state": "completed",
    "status": "partial",
-   "wall_s": 23.93,
+   "wall_s": 37.78,
    "peak_rss_mb": 81,
    "job_disk_mb": 3.7,
    "units": 100,
    "result_mb": 0.5,
    "timings": {
-    "derived_write_ms": 0,
-    "merge_ms": 5,
-    "ocr_ms": 20759,
+    "derived_write_ms": 1,
+    "merge_ms": 13,
+    "ocr_ms": 33436,
     "page_parse_ms": 0,
-    "poppler_images_ms": 1625,
-    "poppler_text_ms": 23,
-    "result_write_ms": 10,
-    "unit_write_ms": 766
+    "poppler_images_ms": 2595,
+    "poppler_text_ms": 40,
+    "result_write_ms": 9,
+    "unit_write_ms": 733
    }
   },
   "image-heavy-ocr": {
-   "id": "41877d11-9384-41e4-9da5-6814fbd0be66",
+   "id": "8093195e-199b-48a8-ae51-8ce1cba852c8",
    "state": "completed",
    "status": "partial",
-   "wall_s": 38.72,
-   "peak_rss_mb": 55,
+   "wall_s": 67.34,
+   "peak_rss_mb": 53,
    "job_disk_mb": 4.0,
    "units": 30,
    "result_mb": 0.7,
    "timings": {
-    "derived_write_ms": 1,
-    "merge_ms": 7,
-    "ocr_ms": 35919,
+    "derived_write_ms": 2,
+    "merge_ms": 11,
+    "ocr_ms": 63750,
     "page_parse_ms": 0,
-    "poppler_images_ms": 997,
-    "poppler_text_ms": 16,
-    "result_write_ms": 11,
-    "unit_write_ms": 264
+    "poppler_images_ms": 1631,
+    "poppler_text_ms": 28,
+    "result_write_ms": 9,
+    "unit_write_ms": 235
    }
   },
   "csv-2m": {
-   "id": "ab14abd3-71de-47dd-b312-e8c7cc0235ff",
+   "id": "80e24798-6a20-45b1-9807-fd27cf37d884",
    "state": "completed",
    "status": "complete",
-   "wall_s": 20.08,
-   "peak_rss_mb": 1001,
+   "wall_s": 19.93,
+   "peak_rss_mb": 967,
    "job_disk_mb": 2315.9,
    "units": 41,
    "result_mb": 1020.9,
    "timings": {
-    "derived_write_ms": 6842,
+    "derived_write_ms": 9238,
     "merge_ms": 0,
     "ocr_ms": 0,
     "page_parse_ms": 0,
     "poppler_images_ms": 0,
     "poppler_text_ms": 0,
-    "result_write_ms": 6739,
-    "unit_write_ms": 3977
+    "result_write_ms": 1620,
+    "unit_write_ms": 5622
    }
   },
   "csv-2m-compact": {
-   "id": "4099eca2-3926-4415-8591-f33fdbbc472a",
+   "id": "d62d8209-2474-47d9-81ba-0f0cc286a7ec",
    "state": "completed",
    "status": "complete",
-   "wall_s": 19.33,
-   "peak_rss_mb": 1247,
+   "wall_s": 13.04,
+   "peak_rss_mb": 673,
    "job_disk_mb": 965.2,
    "units": 41,
    "result_mb": 345.6,
    "timings": {
-    "derived_write_ms": 5930,
+    "derived_write_ms": 6867,
     "merge_ms": 0,
     "ocr_ms": 0,
     "page_parse_ms": 0,
     "poppler_images_ms": 0,
     "poppler_text_ms": 0,
-    "result_write_ms": 4552,
-    "unit_write_ms": 4852
+    "result_write_ms": 355,
+    "unit_write_ms": 2464
    }
   }
  },
  "recovery": {
-  "job": "70bdb092-9075-4acf-ab36-6778d22df9ee",
-  "units_before_kill": 503,
+  "job": "a5cd61f4-25a2-4a82-8427-a43aefab1478",
+  "units_before_kill": 507,
   "worker_group_killed": true,
   "resumed_state": "completed",
   "resumed_status": "partial",
-  "resumed_wall_s": 11.49,
-  "peak_rss_mb": 86,
+  "resumed_wall_s": 12.14,
+  "peak_rss_mb": 73,
   "final_units": 2000,
   "result_mb": 10.2,
   "timings": {
-   "derived_write_ms": 11,
-   "merge_ms": 120,
+   "derived_write_ms": 21,
+   "merge_ms": 159,
    "ocr_ms": 0,
-   "page_parse_ms": 7,
-   "poppler_images_ms": 1778,
-   "poppler_text_ms": 1449,
-   "result_write_ms": 187,
-   "unit_write_ms": 36735
+   "page_parse_ms": 154,
+   "poppler_images_ms": 3358,
+   "poppler_text_ms": 2669,
+   "result_write_ms": 277,
+   "unit_write_ms": 35132
   }
  },
  "cancellation": {
@@ -149,7 +149,7 @@
  },
  "generated": "2026-10-13",
  "host": "Apple M1",
- "command": "scripts/benchmark-large.py --phases recovery,cancel",
+ "command": "scripts/benchmark-large.py",
  "limits": {
   "workers": 1,
   "queued_jobs": 4,
@@ -202,5 +202,6 @@
   "peak_rss_mb is sampled process-tree RSS (100 ms); macOS keeps freed allocator pages resident, so it overstates steady-state usage. Streamed CSV live-heap peaks are recorded in docs/VALIDATION.md.",
   "timings come from the per-job timings.json (millisecond counters per stage, aggregated across batch workers).",
   "job_disk_mb covers the whole completed job directory including result files and retained assets."
- ]
+ ],
+ "inputs_note": "Full local shapes."
 }
