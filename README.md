@@ -23,6 +23,8 @@ open http://127.0.0.1:8787/docs
 curl -F file=@fixtures/document.docx -F 'options={"ocr":false,"vision":false}' http://127.0.0.1:8787/v1/extractions
 # Use the returned id:
 curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result
+# Preview rows without downloading a large result (streams the derived export):
+python3 scripts/preview.py JOB_ID                 # also: --unit u1, --markdown, --download out.json
 ```
 
 The result directory contains `result.json`, `result.md`, `units/` and content-addressed `assets/`. Keep JSON for provenance and fidelity; Markdown is a convenience export. Word uses logical sections; spreadsheets use sheets; presentations use source-ordered slides; PDF uses actual pages. PDFs are extracted in 100-page batches with per-page checkpoints (batches run in parallel by default; restart reuses completed pages); CSV/TSV inputs are split into bounded chunk units and support a compact cell form (`--compact-tables`). See [deployment](docs/DEPLOYMENT.md) for large-input sizing.
