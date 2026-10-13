@@ -604,36 +604,41 @@ fn tenant_usage(data_dir: &std::path::Path, db: &Connection, tenant: &str) -> Re
     }
     Ok(total)
 }
+/// Cap on files per multipart request; each file becomes an independent job.
+const MAX_BATCH_FILES: usize = 32;
+struct UploadedFile {
+    id: String,
+    filename: String,
+    dir: PathBuf,
+    size: u64,
+    digest: sha2::Sha256,
+}
 async fn upload(
     State(app): State<App>,
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> ApiResult<Response> {
     let tenant = app.tenant(&headers)?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let dir = app.dir(&id);
-    tokio::fs::create_dir_all(&dir).await?;
-    let result = upload_inner(&app, &headers, &tenant, &id, &dir, &mut multipart).await;
+    let mut created: Vec<(String, PathBuf)> = Vec::new();
+    let result = upload_inner(&app, &tenant, &mut created, &mut multipart).await;
     if result.is_err() {
-        let _ = tokio::fs::remove_dir_all(dir).await;
+        for (_, dir) in &created {
+            let _ = tokio::fs::remove_dir_all(dir).await;
+        }
     }
     result
 }
 async fn upload_inner(
     app: &App,
-    _headers: &HeaderMap,
     tenant: &str,
-    id: &str,
-    dir: &std::path::Path,
+    created: &mut Vec<(String, PathBuf)>,
     multipart: &mut Multipart,
 ) -> ApiResult<Response> {
-    let mut filename = None;
+    let mut files: Vec<UploadedFile> = Vec::new();
     let mut options = Options::default();
     let mut seen_options = false;
     let mut callback_url: Option<String> = None;
     let mut seen_callback = false;
-    let mut uploaded = 0u64;
-    let mut digest = sha2::Sha256::new();
     use sha2::Digest;
     use tokio::io::AsyncWriteExt;
     while let Some(mut field) = multipart
@@ -643,13 +648,17 @@ async fn upload_inner(
     {
         match field.name().unwrap_or("") {
             "file" => {
-                if filename.is_some() {
+                if files.len() >= MAX_BATCH_FILES {
                     return Err(error(
                         StatusCode::BAD_REQUEST,
                         "invalid_upload",
-                        "Exactly one file required",
+                        "Too many files in one request (max 32)",
                     ));
                 }
+                let id = uuid::Uuid::new_v4().to_string();
+                let dir = app.dir(&id);
+                tokio::fs::create_dir_all(&dir).await?;
+                created.push((id.clone(), dir.clone()));
                 let name = field.file_name().unwrap_or("document.txt").to_owned();
                 let name = name
                     .rsplit(['/', '\\'])
@@ -665,6 +674,7 @@ async fn upload_inner(
                 }
                 let mut out = tokio::fs::File::create(dir.join("input")).await?;
                 let mut size = 0u64;
+                let mut digest = sha2::Sha256::new();
                 while let Some(chunk) = field
                     .chunk()
                     .await
@@ -682,8 +692,13 @@ async fn upload_inner(
                     out.write_all(&chunk).await?;
                 }
                 out.sync_all().await?;
-                uploaded = size;
-                filename = Some(name);
+                files.push(UploadedFile {
+                    id,
+                    filename: name,
+                    dir,
+                    size,
+                    digest,
+                });
             }
             "options" => {
                 if seen_options {
@@ -757,71 +772,91 @@ async fn upload_inner(
             }
         }
     }
-    let filename = filename
-        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "invalid_upload", "File required"))?;
+    if files.is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_upload",
+            "File required",
+        ));
+    }
     validate_options(&options)?;
     let options_json = serde_json::to_string(&options).map_err(anyhow::Error::from)?;
-    let key = extract::hash(
-        format!(
-            "{}:{}:{}:{}:{}",
-            hex::encode(digest.finalize()),
-            filename,
-            options_json,
-            extract::parser_fingerprint(),
-            app.provider_fingerprint
-        )
-        .as_bytes(),
-    );
-    atomic_json(
-        &dir.join("request.json"),
-        &json!({"id":id,"filename":filename,"options":options,"limits":app.config.limits,"callback_url":callback_url}),
-    )?;
-    let cached = {
-        let db = app.db.lock().unwrap();
-        let cached:Option<String>=db.query_row("SELECT id FROM jobs WHERE tenant=?1 AND cache_key=?2 AND state='completed' ORDER BY created_at DESC LIMIT 1",params![tenant,key],|r|r.get(0)).ok();
-        let cached = if options.vision && std::env::var("DOC_VLM_REVISION").is_err() {
-            None
-        } else {
+    let mut results: Vec<Value> = Vec::new();
+    for file in files {
+        atomic_json(
+            &file.dir.join("request.json"),
+            &json!({"id":file.id,"filename":file.filename,"options":options,"limits":app.config.limits,"callback_url":callback_url}),
+        )?;
+        let key = extract::hash(
+            format!(
+                "{}:{}:{}:{}:{}",
+                hex::encode(file.digest.finalize()),
+                file.filename,
+                options_json,
+                extract::parser_fingerprint(),
+                app.provider_fingerprint
+            )
+            .as_bytes(),
+        );
+        let cached = {
+            let db = app.db.lock().unwrap();
+            let cached:Option<String>=db.query_row("SELECT id FROM jobs WHERE tenant=?1 AND cache_key=?2 AND state='completed' ORDER BY created_at DESC LIMIT 1",params![tenant,key],|r|r.get(0)).ok();
+            let cached = if options.vision && std::env::var("DOC_VLM_REVISION").is_err() {
+                None
+            } else {
+                cached
+            };
+            if cached.is_none() {
+                let queued: i64 = db.query_row(
+                    "SELECT count(*) FROM jobs WHERE state IN ('queued','running')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if queued >= app.config.limits.queued_jobs as i64 {
+                    return Err(error(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "queue_full",
+                        "Job queue full",
+                    ));
+                }
+                // Quota applies to newly stored jobs; cache hits above are free. Retained bytes
+                // include this upload plus everything already kept for the tenant.
+                let used = tenant_usage(&app.config.data_dir, &db, tenant)?;
+                if app.config.limits.disk_bytes > 0
+                    && used.saturating_add(file.size) > app.config.limits.disk_bytes
+                {
+                    return Err(error(
+                        StatusCode::INSUFFICIENT_STORAGE,
+                        "quota_exceeded",
+                        "Tenant disk quota exceeded; DELETE completed jobs or raise disk_bytes",
+                    ));
+                }
+                db.execute("INSERT INTO jobs(id,tenant,filename,cache_key,options,state,created_at,updated_at,callback_url) VALUES(?1,?2,?3,?4,?5,'queued',?6,?6,?7)",params![file.id,tenant,file.filename,key,options_json,epoch(),callback_url])?;
+            }
             cached
         };
-        if cached.is_none() {
-            let queued: i64 = db.query_row(
-                "SELECT count(*) FROM jobs WHERE state IN ('queued','running')",
-                [],
-                |r| r.get(0),
-            )?;
-            if queued >= app.config.limits.queued_jobs as i64 {
-                return Err(error(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    "queue_full",
-                    "Job queue full",
-                ));
+        match cached {
+            Some(cached) => {
+                tokio::fs::remove_dir_all(&file.dir).await?;
+                results.push(json!({"id":cached,"cached":true,"filename":file.filename}));
             }
-            // Quota applies to newly stored jobs; cache hits above are free. Retained bytes
-            // include this upload plus everything already kept for the tenant.
-            let used = tenant_usage(&app.config.data_dir, &db, tenant)?;
-            if app.config.limits.disk_bytes > 0
-                && used.saturating_add(uploaded) > app.config.limits.disk_bytes
-            {
-                return Err(error(
-                    StatusCode::INSUFFICIENT_STORAGE,
-                    "quota_exceeded",
-                    "Tenant disk quota exceeded; DELETE completed jobs or raise disk_bytes",
-                ));
-            }
-            db.execute("INSERT INTO jobs(id,tenant,filename,cache_key,options,state,created_at,updated_at,callback_url) VALUES(?1,?2,?3,?4,?5,'queued',?6,?6,?7)",params![id,tenant,filename,key,options_json,epoch(),callback_url])?;
+            None => results.push(json!({"id":file.id,"cached":false,"filename":file.filename})),
         }
-        cached
-    };
-    if let Some(cached) = cached {
-        tokio::fs::remove_dir_all(dir).await?;
-        return Ok((
-            StatusCode::ACCEPTED,
-            Json(json!({"id":cached,"cached":true})),
-        )
-            .into_response());
     }
-    Ok((StatusCode::ACCEPTED, Json(json!({"id":id,"cached":false}))).into_response())
+    if results.len() == 1 {
+        let one = &results[0];
+        Ok((
+            StatusCode::ACCEPTED,
+            Json(json!({"id":one["id"],"cached":one["cached"]})),
+        )
+            .into_response())
+    } else {
+        Ok((
+            StatusCode::ACCEPTED,
+            Json(json!({"jobs":results,"total":results.len()})),
+        )
+            .into_response())
+    }
 }
 
 pub fn validate_options(options: &Options) -> ApiResult<()> {
@@ -861,13 +896,15 @@ pub fn validate_options(options: &Options) -> ApiResult<()> {
             "Delimiter must be ASCII",
         ));
     }
-    if !["json", "markdown", "md", "text", "txt", "jsonl", "ndjson"]
-        .contains(&options.result_format.as_str())
+    if ![
+        "json", "markdown", "md", "text", "txt", "jsonl", "ndjson", "html",
+    ]
+    .contains(&options.result_format.as_str())
     {
         return Err(error(
             StatusCode::BAD_REQUEST,
             "invalid_options",
-            "Expected result_format json, markdown, text or jsonl",
+            "Expected result_format json, markdown, text, jsonl or html",
         ));
     }
     Ok(())
@@ -921,6 +958,7 @@ async fn result(
         "markdown" | "md" => ("result.md", "text/markdown; charset=utf-8"),
         "text" | "txt" => ("result.txt", "text/plain; charset=utf-8"),
         "jsonl" | "ndjson" => ("result.jsonl", "application/x-ndjson; charset=utf-8"),
+        "html" => ("result.html", "text/html; charset=utf-8"),
         _ => {
             return Err(error(
                 StatusCode::BAD_REQUEST,
@@ -1588,7 +1626,7 @@ function refresh() {
     document.getElementById('state').textContent = status.state;
     document.getElementById('progress').textContent = 'units ' + status.progress + (status.result_status ? ' · ' + status.result_status : '');
     document.getElementById('links').innerHTML = '';
-    [['json', 'JSON'], ['markdown', 'Markdown'], ['text', 'Text'], ['jsonl', 'JSONL']].forEach(function (pair) {
+    [['json', 'JSON'], ['markdown', 'Markdown'], ['text', 'Text'], ['jsonl', 'JSONL'], ['html', 'HTML']].forEach(function (pair) {
       var a = text('a', pair[1] + ' ', '');
       a.href = '/v1/extractions/' + job + '/result?format=' + pair[0];
       document.getElementById('links').appendChild(a);
@@ -1850,7 +1888,7 @@ pub fn openapi() -> Value {
             }
         }
         if path.ends_with("/result") {
-            params.push(json!({"name":"format","in":"query","description":"Export format; defaults to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl"]}}));
+            params.push(json!({"name":"format","in":"query","description":"Export format; defaults to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl","html"]}}));
         }
         if path.ends_with("/units/{unit_id}") {
             params.push(json!({"name":"from","in":"query","description":"First table row of the slice (used with count)","schema":{"type":"integer","minimum":0}}));
@@ -1909,7 +1947,7 @@ pub fn openapi() -> Value {
         };
         let mut operation = json!({"summary":summary,"parameters":params,"responses":responses,"security":security});
         if path == "/v1/extractions" && method == "post" {
-            operation["requestBody"] = json!({"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"options":{"type":"string","description":"JSON encoded Options (empty uses defaults)","example":"{\"ocr\":false,\"vision\":false}"},"callback_url":{"type":"string","description":"Optional http(s) URL notified when the job reaches a terminal state (signed when webhook_secret is set)","example":"https://example.com/hooks/docsmith"}}}}}});
+            operation["requestBody"] = json!({"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary","description":"Repeat the field to submit up to 32 files in one request; each becomes a job and the response then contains a jobs array"},"options":{"type":"string","description":"JSON encoded Options (empty uses defaults)","example":"{\"ocr\":false,\"vision\":false}"},"callback_url":{"type":"string","description":"Optional http(s) URL notified when the job reaches a terminal state (signed when webhook_secret is set)","example":"https://example.com/hooks/docsmith"}}}}}});
         }
         paths.entry(path).or_insert(json!({}))[method] = operation;
     }

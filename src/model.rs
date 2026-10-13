@@ -454,6 +454,77 @@ pub fn unit_plaintext(unit: &Unit, out: &mut String) {
         }
     }
 }
+/// Minimal HTML escaping for derived markup (text, filenames, cell raws).
+pub fn html_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+/// Self-contained HTML for one unit: tables become `<table>`, text becomes `<p>`, assets
+/// become links. Mirrors `unit_markdown` (generic column headers when none are known).
+pub fn unit_html(unit: &Unit, out: &mut String) {
+    out.push_str(&format!(
+        "<section class=\"unit\" id=\"{}\">\n<h2>{}</h2>\n",
+        html_escape(&unit.id),
+        html_escape(&unit.name)
+    ));
+    for block in &unit.blocks {
+        if let Some(table) = &block.table {
+            let cells = table
+                .cells
+                .iter()
+                .map(|cell| ((cell.row, cell.column), cell.raw.as_str()))
+                .collect::<std::collections::HashMap<_, _>>();
+            let cell_html = |r: u32, c: u32| html_escape(cells.get(&(r, c)).copied().unwrap_or(""));
+            out.push_str("<table>\n<thead><tr>");
+            if table.headers.is_empty() {
+                for c in 0..table.columns {
+                    out.push_str(&format!("<th>Column {}</th>", c + 1));
+                }
+                out.push_str("</tr></thead>\n<tbody>\n");
+                for r in 0..table.rows as u32 {
+                    out.push_str("<tr>");
+                    for c in 0..table.columns as u32 {
+                        out.push_str(&format!("<td>{}</td>", cell_html(r, c)));
+                    }
+                    out.push_str("</tr>\n");
+                }
+            } else {
+                for c in 0..table.columns as u32 {
+                    out.push_str(&format!("<th>{}</th>", cell_html(0, c)));
+                }
+                out.push_str("</tr></thead>\n<tbody>\n");
+                for r in 1..table.rows as u32 {
+                    out.push_str("<tr>");
+                    for c in 0..table.columns as u32 {
+                        out.push_str(&format!("<td>{}</td>", cell_html(r, c)));
+                    }
+                    out.push_str("</tr>\n");
+                }
+            }
+            out.push_str("</tbody>\n</table>\n");
+        } else if let Some(asset) = &block.asset_id {
+            out.push_str(&format!(
+                "<figure><a href=\"assets/{}\">{}</a></figure>\n",
+                html_escape(asset),
+                html_escape(asset)
+            ));
+        } else {
+            out.push_str(&format!("<p>{}</p>\n", html_escape(&block.text)));
+        }
+    }
+    out.push_str("</section>\n");
+}
+
 /// One JSON object per line: a record per table row, text block or asset, so huge results
 /// can be consumed incrementally (for example row-by-row into object storage). Streamed by
 /// `extract::write_derived` like the other derived formats.

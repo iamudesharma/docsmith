@@ -46,6 +46,14 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   b+=f'--{boundary}--\r\n'.encode()
   code,body=request('/v1/extractions','POST',b,token,{'Content-Type':'multipart/form-data; boundary='+boundary},root=root);return code,json.loads(body)
  def status(id,root=None):return json.loads(request('/v1/extractions/'+id,root=root)[1])
+ def upload_multi(names,options=None,token='a-token'):
+  boundary='batch-boundary'
+  b=b''
+  for name in names:
+   b+=f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode()+(ROOT/'fixtures'/name).read_bytes()+b'\r\n'
+  if options is not None:b+=f'--{boundary}\r\nContent-Disposition: form-data; name="options"\r\n\r\n'.encode()+json.dumps(options).encode()+b'\r\n'
+  b+=f'--{boundary}--\r\n'.encode()
+  code,body=request('/v1/extractions','POST',b,token,{'Content-Type':'multipart/form-data; boundary='+boundary});return code,json.loads(body)
  def wait(id,target=None,root=None):
   for _ in range(160):
    v=status(id,root=root)
@@ -137,6 +145,13 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('viewer page',view_code==200 and b'doc-extractor viewer' in view_page)
   metrics=request('/metrics')[1]
   check('prometheus metrics',b'doc_jobs{' in metrics and b'doc_workers_slots' in metrics)
+  _,j=upload('quoted.csv',{'result_format':'html'});htmljob=j['id'];wait(htmljob)
+  html=request(f'/v1/extractions/{htmljob}/result')[1]
+  check('result_format html renders tables',html.startswith(b'<!doctype html>') and b'<table>' in html and b'0012' in html)
+  code,batch=upload_multi(['quoted.csv','flexible.tsv'],{'result_format':'jsonl'})
+  jobs=batch.get('jobs',[])
+  for entry in jobs:wait(entry['id'])
+  check('batch upload creates one job per file',code==202 and len(jobs)==2 and all(status(entry['id'])['state']=='completed' for entry in jobs))
   _,j=upload('flexible.tsv',callback=f'http://127.0.0.1:{hook_port}/hook');hookjob=j['id'];wait(hookjob)
   deadline=time.time()+10
   while not received and time.time()<deadline:time.sleep(.1)

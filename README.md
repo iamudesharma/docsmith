@@ -27,7 +27,10 @@ curl -F file=@fixtures/document.docx -F 'options={"ocr":false,"vision":false}' h
 # Use the returned id:
 curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result
 # Text instead of canonical JSON for this job: upload with -F 'options={"result_format":"text"}'
-# and GET .../result serves the derived text (all artifacts are still written to the job dir).
+# (formats: json | markdown | text | jsonl | html) — GET .../result serves that representation.
+# Batch: repeat the file field (max 32); each file becomes a job:
+curl -F file=@fixtures/digital.pdf -F file=@fixtures/quoted.csv http://127.0.0.1:8787/v1/extractions
+# Deploy: docker compose up --build   |   deploy/doc-extractor.service (systemd, see docs/DEPLOYMENT.md)
 # Preview rows without downloading a large result (streams the derived export):
 python3 scripts/preview.py JOB_ID                 # also: --unit u1, --markdown, --download out.json
 # Job listing, stats, live events, zip archive and signed webhooks:

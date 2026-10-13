@@ -1,0 +1,31 @@
+# docker-compose.yml — single-node doc-extractor service.
+#
+#   docker compose up --build
+#   open http://127.0.0.1:8787/         (landing page)
+#   open http://127.0.0.1:8787/docs     (Swagger UI)
+#
+# The example config binds 0.0.0.0 inside the container, so bearer tokens are required:
+# replace the placeholder token in deploy/config.example.json (or set DOC_TOKENS here) before
+# exposing the service beyond your machine.
+services:
+  doc-extractor:
+    build: .
+    command: ["serve", "--config", "/config/config.json"]
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ./deploy/config.example.json:/config/config.json:ro
+      - doc-data:/home/extractor/data
+    # environment:
+    #   DOC_TOKENS: '{"replace-with-a-real-token": "default"}'
+    #   DOC_LOG_JSON: "1"
+    #   DOC_WEBHOOK_SECRET: change-me
+    #   DOC_SINK_CMD: "sh -c 'echo shipped {id} {state}'"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  doc-data:

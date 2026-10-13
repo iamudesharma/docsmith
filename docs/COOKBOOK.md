@@ -162,6 +162,26 @@ times and the output lands in `sink-<state>.log`; pending runs show in `/v1/stat
 curl -s http://127.0.0.1:8787/metrics     # Prometheus text: doc_jobs, workers, pending, disk, uptime
 ```
 
+## Batch upload
+
+```sh
+# Up to 32 files per request; each becomes an independent job:
+curl -s -F file=@a.pdf -F file=@b.docx -F 'options={"ocr":true}' "$BASE/v1/extractions"
+# -> {"jobs":[{"id":"…","cached":false,"filename":"a.pdf"}, …],"total":2}
+```
+
+Poll each id as usual; a single-file request keeps the classic `{"id":…,"cached":…}` response.
+
+## HTML export
+
+```sh
+curl -s "$BASE/v1/extractions/$ID/result?format=html" -o result.html
+# per-job default: -F 'options={"result_format":"html"}'
+```
+
+Self-contained HTML (tables, text, asset links) written as `result.html` alongside the other
+derived artifacts and offered as a download link in the viewer.
+
 ## Cancel, delete, retry
 
 ```sh

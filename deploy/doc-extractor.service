@@ -1,0 +1,33 @@
+# systemd unit for a single-node doc-extractor deployment.
+#
+#   sudo useradd --system --create-home --home-dir /var/lib/doc-extractor extractor
+#   sudo install -m 644 deploy/doc-extractor.service /etc/systemd/system/
+#   sudo install -m 644 deploy/config.example.json /etc/doc-extractor/config.json   # then edit
+#   sudo systemctl daemon-reload && sudo systemctl enable --now doc-extractor
+#
+# The example config binds 0.0.0.0:8787, so replace the placeholder bearer token before
+# starting. Put a TLS reverse proxy in front for network exposure (see docs/DEPLOYMENT.md).
+[Unit]
+Description=doc-extractor document extraction service
+Documentation=file:/usr/share/doc/doc-extractor/DEPLOYMENT.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=extractor
+Group=extractor
+ExecStart=/usr/local/bin/doc-extractor serve --config /etc/doc-extractor/config.json
+Environment=DOC_LOG_JSON=1
+Restart=on-failure
+RestartSec=2
+# Hardening: the service only needs its data directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/doc-extractor
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
