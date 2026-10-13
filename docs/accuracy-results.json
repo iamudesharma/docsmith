@@ -1,7 +1,7 @@
 {
- "date": "2026-10-13 20:33",
+ "date": "2026-10-13 21:03",
  "host": "MacBookAir10,1",
- "binary_sha256": "3adf4b53cdc291d9030c3e611e5765abb8d05ed7ea32ed7d5b1815462552f784",
+ "binary_sha256": "0870c8d7887075859c9f3fe19247bf7516596fadf88f4dbe67ca5006a7c97c44",
  "tesseract_languages": [
   "eng",
   "osd",
@@ -26,7 +26,7 @@
   "skipped": [
    "OCR Hindi raster (skipped without hin traineddata)"
   ],
-  "elapsed_s": 15.3
+  "elapsed_s": 53.1
  },
  "checks": [
   {
@@ -117,7 +117,7 @@
    "pages_correct": 130,
    "passed": true,
    "detail": "",
-   "elapsed_ms": 0
+   "elapsed_ms": 3
   },
   {
    "name": "PDF pages with images (attribution)",
@@ -338,7 +338,7 @@
    "wer": 0.0,
    "got": "Invoice TOTAL 12345",
    "detail": "text='Invoice TOTAL 12345'",
-   "elapsed_ms": 0
+   "elapsed_ms": 1
   },
   {
    "name": "OCR noisy raster",
@@ -371,7 +371,7 @@
    "wer": 0.0,
    "got": "Invoice TOTAL 12345",
    "detail": "text='Invoice TOTAL 12345'",
-   "elapsed_ms": 0
+   "elapsed_ms": 1
   },
   {
    "name": "Mixed page: native + OCR",

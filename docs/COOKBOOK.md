@@ -182,6 +182,17 @@ curl -s "$BASE/v1/extractions/$ID/result?format=html" -o result.html
 Self-contained HTML (tables, text, asset links) written as `result.html` alongside the other
 derived artifacts and offered as a download link in the viewer.
 
+## Page ranges (large PDFs)
+
+```sh
+# Only pages 1-50 and 60 (1-based; "60-" runs to the end):
+curl -s -F file=@report.pdf -F 'options={"pages":"1-50,60"}' "$BASE/v1/extractions"
+```
+
+Selected pages keep their original numbering (`Page 60` stays `Page 60`), checkpoints for other
+pages are ignored, and the document metadata records `pages_total` and `page_range`. Applies to
+PDFs; other formats ignore the option.
+
 ## Cancel, delete, retry
 
 ```sh

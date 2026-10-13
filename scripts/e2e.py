@@ -152,6 +152,10 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   jobs=batch.get('jobs',[])
   for entry in jobs:wait(entry['id'])
   check('batch upload creates one job per file',code==202 and len(jobs)==2 and all(status(entry['id'])['state']=='completed' for entry in jobs))
+  _,j=upload('digital.pdf',{'pages':'2'});ranged=j['id'];wait(ranged)
+  ranged_doc=json.loads(request(f'/v1/extractions/{ranged}/result')[1])
+  check('page range selects requested pages',len(ranged_doc['units'])==1 and ranged_doc['units'][0]['name']=='Page 2' and ranged_doc['metadata']['pages_total']==2)
+  check('invalid page range rejected',upload('digital.pdf',{'pages':'5-2'})[0]==400)
   _,j=upload('flexible.tsv',callback=f'http://127.0.0.1:{hook_port}/hook');hookjob=j['id'];wait(hookjob)
   deadline=time.time()+10
   while not received and time.time()<deadline:time.sleep(.1)
