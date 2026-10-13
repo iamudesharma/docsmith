@@ -135,6 +135,23 @@ def gen_inputs(work):
     inputs["rows.csv"] = {"rows": rows, "shape": f"{rows} rows x 4 columns", "bytes": csv_path.stat().st_size}
     return inputs
 
+def host_description():
+    """Portable host label; never fatal (a cosmetic probe must not fail a run)."""
+    if sys.platform == "darwin":
+        try:
+            return subprocess.check_output(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], text=True
+            ).strip()
+        except Exception:
+            return "macOS"
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.lower().startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return sys.platform
+
 def free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -414,7 +431,7 @@ def main():
     evidence.update({
         "generated": time.strftime("%Y-%m-%d"),
         "inputs_note": inputs_note,
-        "host": subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip(),
+        "host": host_description(),
         "command": " ".join(sys.argv),
         "limits": limits,
         "inputs": inputs,
