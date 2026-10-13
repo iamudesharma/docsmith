@@ -2,13 +2,13 @@
  "date": "2026-10-13",
  "platform": "aarch64-apple-darwin",
  "rust": "1.88.0",
- "tests_passed": 42,
- "live_api_checks": 35,
+ "tests_passed": 47,
+ "live_api_checks": 52,
  "build": "passed (--locked)",
  "format": "passed",
  "clippy": "passed (--all-targets -D warnings)",
- "binary_sha256": "c6f2a160d3c040d4dcdf6237a3c9eaf987c44b5f4680ceeba0c8e2b2dd3b2bbd",
- "cargo_lock_sha256": "92ed443d1c1298c89c573528515cd6595959171ed7b62b5561493fdff56b5600",
+ "binary_sha256": "68d8e2407c7181fdb7242a34a37f609b89897946856c8affd33161163d396f67",
+ "cargo_lock_sha256": "01bdce5ebb3f77c9d044ccac43c17842d34ee9a62d2d5aa3c569d82f5290d007",
  "fixture_files": 44,
  "unrun": [
   "Container/Docker runtime (local daemon unavailable; Linux benchmark runs in the GitHub Actions workflow)",
@@ -28,7 +28,9 @@
   "Phase 1: versioned resume artifacts (checkpoint_format), page-ordered checkpoint/progress snapshots with live progress in sequential and parallel modes, merge-before-error retention, streamed result.json assembly, temp-file sweep, per-stage timings",
   "Phase 2: streamed table output (limits.stream_bytes, block release per unit, streamed result.md/result.txt), live progress for streamed chunks",
   "Phase 3: machine-wide OCR budget via flock slot files shared by worker processes",
-  "Phase 4: dynamic PDF batch scheduling, contained render/OCR failures, Poppler page-count fallback, sparse-text page OCR routing"
+  "Phase 4: dynamic PDF batch scheduling, contained render/OCR failures, Poppler page-count fallback, sparse-text page OCR routing",
+  "Phase 5: job listing and stats, SSE job events, unit row slicing, zip archive endpoint, JSONL derived export, signed retried webhooks, landing page, dependency-free Python client and cookbook",
+  "Phase 6: MCP stdio tool server (offline and service-proxy modes), sink_command per completed job, offline result viewer, Prometheus metrics, shell completions"
  ],
  "large_input_evidence": "docs/perf-large-inputs.json (2026-10-13: digital/scanned/mixed/image-heavy PDFs, 2M-row CSV, recovery, cancellation)",
  "accuracy_evidence": "docs/ACCURACY.md / docs/accuracy-results.json (13 October 2026: cells 29/29, PDF pages 138/138, content checks 25/25, English OCR CER 0 over 5 raster cases)"

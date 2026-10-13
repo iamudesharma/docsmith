@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use doc_extractor::{extract, model::*, service};
 use std::path::PathBuf;
 #[derive(Parser)]
@@ -33,12 +33,28 @@ enum Commands {
         interpret_diagrams: bool,
         #[arg(long)]
         compact_tables: bool,
+        /// Result representation: json (default), markdown, text or jsonl.
+        #[arg(long, value_parser = ["json", "markdown", "text", "jsonl"])]
+        format: Option<String>,
+        /// Stream the selected result artifact to stdout (the path goes to stderr).
+        #[arg(long)]
+        stdout: bool,
         #[arg(long)]
         options: Option<PathBuf>,
     },
     Capabilities,
     Schema,
     Openapi,
+    /// MCP server over stdio for agent clients (offline, or proxy a service with --url).
+    Mcp {
+        #[arg(long, env = "DOC_BASE_URL")]
+        url: Option<String>,
+    },
+    /// Generate shell completions (bash, zsh, fish, elvish, powershell).
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
     #[command(hide = true)]
     Worker {
         #[arg(long)]
@@ -68,6 +84,15 @@ fn main() -> anyhow::Result<()> {
             if let Ok(tokens) = std::env::var("DOC_TOKENS") {
                 config.tokens = serde_json::from_str(&tokens)?;
             }
+            if let Ok(secret) = std::env::var("DOC_WEBHOOK_SECRET") {
+                config.webhook_secret = Some(secret);
+            }
+            if std::env::var("DOC_WEBHOOK_ALLOW_PRIVATE").is_ok_and(|v| v == "1" || v == "true") {
+                config.webhook_allow_private = true;
+            }
+            if let Ok(command) = std::env::var("DOC_SINK_CMD") {
+                config.sink_command = Some(command);
+            }
             tokio::runtime::Runtime::new()?.block_on(service::serve(config))?;
         }
         Commands::Extract {
@@ -79,6 +104,8 @@ fn main() -> anyhow::Result<()> {
             vision,
             interpret_diagrams,
             compact_tables,
+            format,
+            stdout,
             options,
         } => {
             let opts = if let Some(path) = options {
@@ -91,6 +118,7 @@ fn main() -> anyhow::Result<()> {
                     vision,
                     interpret_diagrams,
                     compact_tables,
+                    result_format: format.unwrap_or_else(|| Options::default().result_format),
                     ..Default::default()
                 }
             };
@@ -105,9 +133,32 @@ fn main() -> anyhow::Result<()> {
             std::fs::copy(input, output.join("input"))?;
             // CLI uses exactly the service's isolated worker path, including resource limits and process tree cleanup.
             run_cli_worker(&output)?;
-            println!("{}", output.join("result.json").display());
+            let artifact = match opts.result_format.as_str() {
+                "markdown" | "md" => "result.md",
+                "text" | "txt" => "result.txt",
+                "jsonl" | "ndjson" => "result.jsonl",
+                _ => "result.json",
+            };
+            let path = output.join(artifact);
+            if stdout {
+                // Bytes go to stdout so the artifact can be piped (for example to object storage);
+                // the path is only informational and goes to stderr.
+                use std::io::{copy, Write};
+                let mut file = std::fs::File::open(&path)?;
+                let mut out = std::io::stdout().lock();
+                copy(&mut file, &mut out)?;
+                out.flush()?;
+                eprintln!("{}", path.display());
+            } else {
+                println!("{}", path.display());
+            }
         }
         Commands::Worker { job_dir } => service::worker(&job_dir)?,
+        Commands::Mcp { url } => doc_extractor::mcp::run(url)?,
+        Commands::Completions { shell } => {
+            let mut command = Cli::command();
+            clap_complete::generate(shell, &mut command, "doc-extractor", &mut std::io::stdout());
+        }
         Commands::Capabilities => println!(
             "{}",
             serde_json::to_string_pretty(&service::capabilities())?

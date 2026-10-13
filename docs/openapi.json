@@ -296,6 +296,11 @@
       "Options": {
         "additionalProperties": false,
         "properties": {
+          "compact_tables": {
+            "default": false,
+            "description": "Omit default/redundant cell fields in table output (value when equal to raw, null\nformulas, unit spans). Smaller results for large delimited files; consumers treat a\nmissing `value` as the raw string.",
+            "type": "boolean"
+          },
           "delimiter": {
             "default": null,
             "maxLength": 1,
@@ -331,6 +336,11 @@
           },
           "parser": {
             "default": "direct",
+            "type": "string"
+          },
+          "result_format": {
+            "default": "json",
+            "description": "Default representation of this job's result: `json` (canonical), `markdown` or\n`text`. `GET .../result` uses it when no `?format=` query is given, so a job can be\nrequested in the form that will be shipped downstream (for example to object storage).",
             "type": "string"
           },
           "vision": {
@@ -857,6 +867,249 @@
       }
     },
     "/v1/extractions": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "enum": [
+                "queued",
+                "running",
+                "completed",
+                "failed",
+                "cancelled"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "jobs": {
+                      "items": {
+                        "properties": {
+                          "created_at": {
+                            "format": "int64",
+                            "type": "integer"
+                          },
+                          "error": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/components/schemas/Failure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "filename": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "progress": {
+                            "format": "uint",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "result_status": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "state": {
+                            "type": "string"
+                          },
+                          "unit_failures": {
+                            "items": {
+                              "$ref": "#/components/schemas/Failure"
+                            },
+                            "type": "array"
+                          },
+                          "updated_at": {
+                            "format": "int64",
+                            "type": "integer"
+                          },
+                          "warnings": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "state",
+                          "filename",
+                          "created_at",
+                          "updated_at",
+                          "progress",
+                          "warnings",
+                          "unit_failures"
+                        ],
+                        "title": "Job",
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "jobs",
+                    "total"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "List jobs for the caller"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request/options"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not ready or worker stopping"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Upload limit exceeded"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Queue full"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal failure"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "List jobs for the caller"
+      },
       "post": {
         "parameters": [],
         "requestBody": {
@@ -864,12 +1117,18 @@
             "multipart/form-data": {
               "schema": {
                 "properties": {
+                  "callback_url": {
+                    "description": "Optional http(s) URL notified when the job reaches a terminal state (signed when webhook_secret is set)",
+                    "example": "https://example.com/hooks/docsmith",
+                    "type": "string"
+                  },
                   "file": {
                     "format": "binary",
                     "type": "string"
                   },
                   "options": {
-                    "description": "JSON encoded Options",
+                    "description": "JSON encoded Options (empty uses defaults)",
+                    "example": "{\"ocr\":false,\"vision\":false}",
                     "type": "string"
                   }
                 },
@@ -1350,6 +1609,153 @@
         "summary": "Job state and checkpoint progress"
       }
     },
+    "/v1/extractions/{id}/archive": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Include unit checkpoints in the archive",
+            "in": "query",
+            "name": "units",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Zip archive of result artifacts"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request/options"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not ready or worker stopping"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Upload limit exceeded"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Queue full"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal failure"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Zip archive of result artifacts"
+      }
+    },
     "/v1/extractions/{id}/assets/{asset_id}": {
       "get": {
         "parameters": [
@@ -1698,6 +2104,144 @@
         "summary": "Cancel queued or running job"
       }
     },
+    "/v1/extractions/{id}/events": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent job events until terminal"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request/options"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not ready or worker stopping"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Upload limit exceeded"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Queue full"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal failure"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Server-sent job events until terminal"
+      }
+    },
     "/v1/extractions/{id}/result": {
       "get": {
         "parameters": [
@@ -1710,13 +2254,15 @@
             }
           },
           {
+            "description": "Export format; defaults to the job's result_format option",
             "in": "query",
             "name": "format",
             "schema": {
               "enum": [
                 "json",
                 "markdown",
-                "text"
+                "text",
+                "jsonl"
               ],
               "type": "string"
             }
@@ -1799,6 +2345,11 @@
                   ],
                   "title": "Document",
                   "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
                 }
               },
               "text/markdown": {
@@ -1946,6 +2497,25 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "First table row of the slice (used with count)",
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum table rows in the slice (default 500, max 10000)",
+            "in": "query",
+            "name": "count",
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -2121,6 +2691,135 @@
           {}
         ],
         "summary": "Completed unit checkpoint"
+      }
+    },
+    "/v1/stats": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Queue, job and disk statistics"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request/options"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not ready or worker stopping"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Upload limit exceeded"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Queue full"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal failure"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Queue, job and disk statistics"
       }
     }
   }

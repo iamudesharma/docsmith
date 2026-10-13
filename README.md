@@ -10,6 +10,9 @@ scripts/cargo-local.sh build --locked
 # Native extraction, no OCR/model required:
 target/debug/doc-extractor extract fixtures/workbook.xlsx --output data/example
 
+# Result as text bytes on stdout (pipe-ready, for example to object storage later):
+target/debug/doc-extractor extract fixtures/quoted.csv --format text --stdout > quoted.txt
+
 # OCR (provision Tesseract and language packs first):
 target/debug/doc-extractor extract fixtures/mixed.pdf --ocr --output data/ocr
 
@@ -23,13 +26,29 @@ open http://127.0.0.1:8787/docs
 curl -F file=@fixtures/document.docx -F 'options={"ocr":false,"vision":false}' http://127.0.0.1:8787/v1/extractions
 # Use the returned id:
 curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result
+# Text instead of canonical JSON for this job: upload with -F 'options={"result_format":"text"}'
+# and GET .../result serves the derived text (all artifacts are still written to the job dir).
 # Preview rows without downloading a large result (streams the derived export):
 python3 scripts/preview.py JOB_ID                 # also: --unit u1, --markdown, --download out.json
+# Job listing, stats, live events, zip archive and signed webhooks:
+curl http://127.0.0.1:8787/v1/extractions?state=completed
+curl http://127.0.0.1:8787/v1/stats
+curl -N http://127.0.0.1:8787/v1/extractions/JOB_ID/events
+curl -O -J http://127.0.0.1:8787/v1/extractions/JOB_ID/archive
+# Result viewer (offline HTML: paged tables/text, download links) and Prometheus metrics:
+open http://127.0.0.1:8787/view/JOB_ID
+curl -s http://127.0.0.1:8787/metrics
+# Python client (dependency-free) and recipes:
+python3 clients/python/docsmith.py extract fixtures/digital.pdf --text
+# MCP server for agent clients (offline; --url proxies a running service):
+target/debug/doc-extractor mcp
+# Shell completions:
+target/debug/doc-extractor completions zsh > ~/.zfunc/_doc-extractor
 ```
 
 The result directory contains `result.json`, `result.md`, `units/` and content-addressed `assets/`. Keep JSON for provenance and fidelity; Markdown is a convenience export. Word uses logical sections; spreadsheets use sheets; presentations use source-ordered slides; PDF uses actual pages. PDFs are extracted in 100-page batches with per-page checkpoints (batches run in parallel by default; restart reuses completed pages); CSV/TSV inputs are split into bounded chunk units and support a compact cell form (`--compact-tables`). See [deployment](docs/DEPLOYMENT.md) for large-input sizing.
 
-See [validation evidence](docs/VALIDATION.md), [accuracy report](docs/ACCURACY.md), [capabilities](docs/CAPABILITIES.md), [architecture](docs/ARCHITECTURE.md), [pipeline and concurrency](docs/PIPELINE.md), [research and dependency decisions](docs/RESEARCH.md), [phase acceptance](docs/PHASES.md), and [deployment](docs/DEPLOYMENT.md). These separate implemented behavior from unrun real-world acceptance gates.
+See [validation evidence](docs/VALIDATION.md), [accuracy report](docs/ACCURACY.md), [cookbook](docs/COOKBOOK.md), [Python client](clients/python/README.md), [capabilities](docs/CAPABILITIES.md), [architecture](docs/ARCHITECTURE.md), [pipeline and concurrency](docs/PIPELINE.md), [research and dependency decisions](docs/RESEARCH.md), [phase acceptance](docs/PHASES.md), and [deployment](docs/DEPLOYMENT.md). These separate implemented behavior from unrun real-world acceptance gates.
 
 ## Providers
 

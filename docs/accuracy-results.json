@@ -1,7 +1,7 @@
 {
- "date": "2026-10-13 08:59",
+ "date": "2026-10-13 09:55",
  "host": "MacBookAir10,1",
- "binary_sha256": "b24f886455dde15bb37012810051746652ab0167c808d33124bc66bfadf83153",
+ "binary_sha256": "a861378147172329aee6d7e7830d2841f11aef13a431f0c942deb1fb168172e7",
  "tesseract_languages": [
   "eng",
   "osd",
@@ -26,7 +26,7 @@
   "skipped": [
    "OCR Hindi raster (skipped without hin traineddata)"
   ],
-  "elapsed_s": 15.8
+  "elapsed_s": 16.0
  },
  "checks": [
   {

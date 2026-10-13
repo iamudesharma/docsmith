@@ -18,6 +18,10 @@ pub struct Options {
     /// formulas, unit spans). Smaller results for large delimited files; consumers treat a
     /// missing `value` as the raw string.
     pub compact_tables: bool,
+    /// Default representation of this job's result: `json` (canonical), `markdown` or
+    /// `text`. `GET .../result` uses it when no `?format=` query is given, so a job can be
+    /// requested in the form that will be shipped downstream (for example to object storage).
+    pub result_format: String,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -32,6 +36,7 @@ impl Default for Options {
             delimiter: None,
             flexible_rows: true,
             compact_tables: false,
+            result_format: "json".into(),
         }
     }
 }
@@ -448,6 +453,38 @@ pub fn unit_plaintext(unit: &Unit, out: &mut String) {
             out.push('\n');
         }
     }
+}
+/// One JSON object per line: a record per table row, text block or asset, so huge results
+/// can be consumed incrementally (for example row-by-row into object storage). Streamed by
+/// `extract::write_derived` like the other derived formats.
+pub fn unit_jsonl(unit: &Unit, out: &mut String) -> std::result::Result<(), serde_json::Error> {
+    use std::fmt::Write;
+    for block in &unit.blocks {
+        if let Some(table) = &block.table {
+            let cells = table
+                .cells
+                .iter()
+                .map(|cell| ((cell.row, cell.column), cell.raw.as_str()))
+                .collect::<std::collections::HashMap<_, _>>();
+            for r in 0..table.rows {
+                let row = (0..table.columns)
+                    .map(|c| cells.get(&(r as u32, c as u32)).copied().unwrap_or(""))
+                    .collect::<Vec<_>>();
+                let record = serde_json::json!({
+                    "unit": unit.id, "kind": unit.kind, "name": unit.name,
+                    "block": block.id, "row": r, "cells": row,
+                });
+                writeln!(out, "{}", serde_json::to_string(&record)?).ok();
+            }
+        } else {
+            let record = serde_json::json!({
+                "unit": unit.id, "kind": unit.kind, "name": unit.name,
+                "block": block.id, "text": block.text, "asset": block.asset_id,
+            });
+            writeln!(out, "{}", serde_json::to_string(&record)?).ok();
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
