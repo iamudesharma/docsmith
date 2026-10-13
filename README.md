@@ -18,6 +18,8 @@ DOC_XBERG=/path/to/xberg target/debug/doc-extractor extract fixtures/digital.pdf
 
 # HTTP service:
 target/debug/doc-extractor serve --bind 127.0.0.1:8787 --data-dir data/service
+# Interactive API console (Swagger UI; assets are compiled into the binary, no CDN):
+open http://127.0.0.1:8787/docs
 curl -F file=@fixtures/document.docx -F 'options={"ocr":false,"vision":false}' http://127.0.0.1:8787/v1/extractions
 # Use the returned id:
 curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result

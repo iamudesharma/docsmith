@@ -92,6 +92,8 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   p.kill();p.wait();p=start();v=wait(recover);check('crash restart recovers job',v['state']=='failed' and v['error']['code']=='limit_exceeded')
   check('delete removes job and data',request(f'/v1/extractions/{id}','DELETE')[0]==204 and request(f'/v1/extractions/{id}')[0]==404 and not (tmp/'data/jobs'/id).exists())
   spec=json.loads(request('/openapi.json')[1]);check('openapi routes',len(spec['paths'])==9)
+  docs_code,docs_page=request('/docs');docs_spec=json.loads(request('/docs/openapi.json')[1])
+  check('swagger docs ui serves the same contract',docs_code==200 and b'Swagger UI' in docs_page and docs_spec['paths'].keys()==spec['paths'].keys())
   # Second instance proves a two-worker pool and the retention sweep (no quota).
   with socket.socket() as s2:s2.bind(('127.0.0.1',0));port2=s2.getsockname()[1]
   base2=f'http://127.0.0.1:{port2}'

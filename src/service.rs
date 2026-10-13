@@ -21,6 +21,7 @@ use std::{
     time::Duration,
 };
 use tokio::process::Command;
+use utoipa_swagger_ui::SwaggerUi;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -847,6 +848,22 @@ pub fn openapi() -> Value {
     }
     spec
 }
+/// OpenAPI document served to clients: the live contract. Resource operations always declare
+/// the bearer scheme (with an anonymous alternative on loopback); once tokens are configured
+/// the requirement becomes strict.
+pub fn openapi_document(config: &Config) -> Value {
+    let mut spec = openapi();
+    if !config.tokens.is_empty() {
+        for (path, item) in spec["paths"].as_object_mut().unwrap() {
+            if !path.starts_with("/health/") && path != "/v1/capabilities" {
+                for operation in item.as_object_mut().unwrap().values_mut() {
+                    operation["security"] = json!([{"bearerAuth":[]}]);
+                }
+            }
+        }
+    }
+    spec
+}
 pub fn router(app: App) -> Router {
     let limit = app.config.limits.upload_bytes as usize + 16384;
     Router::new()
@@ -868,19 +885,7 @@ pub fn router(app: App) -> Router {
         )
         .route(
             "/openapi.json",
-            get(|State(app): State<App>| async move {
-                let mut spec = openapi();
-                if !app.config.tokens.is_empty() {
-                    for (path, item) in spec["paths"].as_object_mut().unwrap() {
-                        if !path.starts_with("/health/") && path != "/v1/capabilities" {
-                            for operation in item.as_object_mut().unwrap().values_mut() {
-                                operation["security"] = json!([{"bearerAuth":[]}]);
-                            }
-                        }
-                    }
-                }
-                Json(spec)
-            }),
+            get(|State(app): State<App>| async move { Json(openapi_document(&app.config)) }),
         )
         .route(
             "/health/live",
@@ -904,6 +909,12 @@ pub fn router(app: App) -> Router {
                     Json(json!({"status":if ok {"ready"}else{"not_ready"}})),
                 )
             }),
+        )
+        // Interactive API console. The UI assets are compiled into the binary, so `docs`
+        // works offline; the spec it loads is the same live contract as `/openapi.json`.
+        .merge(
+            SwaggerUi::new("/docs")
+                .external_url_unchecked("/docs/openapi.json", openapi_document(&app.config)),
         )
         .layer(DefaultBodyLimit::max(limit))
         .with_state(app)
