@@ -1,0 +1,410 @@
+{
+ "date": "2026-10-13 08:40",
+ "host": "MacBookAir10,1",
+ "binary_sha256": "8fcb43719762717a62643d8e429b1abdc14b93e45df2e61662fc09098d0b5bcd",
+ "tesseract_languages": [
+  "of",
+  "available",
+  "languages",
+  "in",
+  "\"/opt/homebrew/share/tessdata/\"",
+  "(3):",
+  "eng",
+  "osd",
+  "snum"
+ ],
+ "summary": {
+  "content_checks_passed": 25,
+  "content_checks_total": 25,
+  "cell_accuracy": {
+   "correct": 29,
+   "total": 29,
+   "pct": 100.0
+  },
+  "page_text_accuracy": {
+   "correct": 138,
+   "total": 138,
+   "pct": 100.0
+  },
+  "ocr_mean_cer": 0.0,
+  "ocr_cases": 5,
+  "failures": [],
+  "skipped": [
+   "OCR Hindi raster (skipped without hin traineddata)"
+  ],
+  "elapsed_s": 15.1
+ },
+ "checks": [
+  {
+   "name": "CSV cells (quoting, multiline, leading zeros)",
+   "fixture": "quoted.csv",
+   "kind": "cells",
+   "cells_total": 9,
+   "cells_correct": 9,
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "TSV cells (flexible rows)",
+   "fixture": "flexible.tsv",
+   "kind": "cells",
+   "cells_total": 3,
+   "cells_correct": 3,
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "XLSX cells",
+   "fixture": "workbook.xlsx",
+   "kind": "cells",
+   "cells_total": 4,
+   "cells_correct": 4,
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "XLS (BIFF8) cells",
+   "fixture": "workbook.xls",
+   "kind": "cells",
+   "cells_total": 3,
+   "cells_correct": 3,
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "XLSM cells (macro-enabled)",
+   "fixture": "workbook.xlsm",
+   "kind": "cells",
+   "cells_total": 3,
+   "cells_correct": 3,
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "ODS cells",
+   "fixture": "workbook.ods",
+   "kind": "cells",
+   "cells_total": 1,
+   "cells_correct": 1,
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "PDF geometric table cells",
+   "fixture": "table.pdf",
+   "kind": "cells",
+   "cells_total": 6,
+   "cells_correct": 6,
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "Digital PDF pages",
+   "fixture": "digital.pdf",
+   "kind": "pages",
+   "pages_total": 2,
+   "pages_correct": 2,
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "130-page PDF pages",
+   "fixture": "long.pdf",
+   "kind": "pages",
+   "pages_total": 130,
+   "pages_correct": 130,
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 1
+  },
+  {
+   "name": "PDF pages with images (attribution)",
+   "fixture": "pages-images.pdf",
+   "kind": "pages",
+   "pages_total": 6,
+   "pages_correct": 6,
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "XLSX formula + cached value + merged cell",
+   "fixture": "workbook.xlsx",
+   "kind": "structure",
+   "passed": true,
+   "detail": "merge=2 formula=SUM(A2:B2) cached=5.0",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "PDF two-column reading order",
+   "fixture": "multicolumn.pdf",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "Word document content",
+   "fixture": "document.docx",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "ODT content",
+   "fixture": "document.odt",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "EPUB content",
+   "fixture": "book.epub",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "Markdown content",
+   "fixture": "document.md",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "JSON content",
+   "fixture": "document.json",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "XML content",
+   "fixture": "document.xml",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "HTML content (no external fetch)",
+   "fixture": "document.html",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "RTF content",
+   "fixture": "document.rtf",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "Email content",
+   "fixture": "message.eml",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "DBML source retained",
+   "fixture": "schema.dbml",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "Mermaid source retained",
+   "fixture": "flow.mmd",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "Graphviz source retained",
+   "fixture": "flow.dot",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "PlantUML source retained",
+   "fixture": "flow.puml",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "PPTX slide source order",
+   "fixture": "presentation.pptx",
+   "kind": "order",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "draw.io graph nodes + edge",
+   "fixture": "diagram.drawio",
+   "kind": "diagram",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "Compressed draw.io graph",
+   "fixture": "compressed.drawio",
+   "kind": "diagram",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "PDF-retained draw.io source",
+   "fixture": "embedded-diagram.pdf",
+   "kind": "diagram",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "SVG text",
+   "fixture": "diagram.svg",
+   "kind": "contains",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "Hidden OCR layer not duplicated",
+   "fixture": "hidden-ocr.pdf",
+   "kind": "count",
+   "passed": true,
+   "detail": "occurrences: 1",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "XLSM macro code never surfaced",
+   "fixture": "workbook.xlsm",
+   "kind": "absent",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "XXE entity never resolved",
+   "fixture": "unsafe.xml",
+   "kind": "absent",
+   "passed": true,
+   "detail": "",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "Corrupt PDF reports clean failure",
+   "fixture": "corrupt.pdf",
+   "kind": "status",
+   "passed": true,
+   "detail": "status=failed",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "Unsafe archive rejected or reported",
+   "fixture": "unsafe.docx",
+   "kind": "status",
+   "passed": true,
+   "detail": "status=failed",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "OCR clean raster",
+   "fixture": "scan.png",
+   "kind": "ocr",
+   "passed": true,
+   "cer": 0.0,
+   "wer": 0.0,
+   "detail": "text='Invoice TOTAL 12345'",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "OCR noisy raster",
+   "fixture": "noisy.png",
+   "kind": "ocr",
+   "passed": true,
+   "cer": 0.0,
+   "wer": 0.0,
+   "detail": "text='Invoice TOTAL 12345'",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "OCR rotated raster (90\u00b0 probe)",
+   "fixture": "rotated.png",
+   "kind": "ocr",
+   "passed": true,
+   "cer": 0.0,
+   "wer": 0.0,
+   "detail": "text='Invoice TOTAL 12345'",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "OCR image-only PDF page",
+   "fixture": "scanned.pdf",
+   "kind": "ocr",
+   "passed": true,
+   "cer": 0.0,
+   "wer": 0.0,
+   "detail": "text='Invoice TOTAL 12345'",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "Mixed page: native + OCR",
+   "fixture": "mixed.pdf",
+   "kind": "ocr",
+   "passed": true,
+   "cer": 0.0,
+   "wer": 0.0,
+   "detail": "text='Invoice TOTAL 12345'",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "OCR raster ER figure entity text (measured, informational)",
+   "fixture": "raster-er.png",
+   "kind": "recall",
+   "passed": null,
+   "recall": 0.5,
+   "detail": "found ['orders'] of ['users', 'orders']",
+   "elapsed_ms": 0
+  },
+  {
+   "name": "OCR Hindi raster (skipped without hin traineddata)",
+   "fixture": "hindi.png",
+   "kind": "ocr",
+   "skipped": "hin traineddata not installed"
+  }
+ ],
+ "notes": [
+  "Synthetic fixtures with known ground truth; real customer scans/handwriting remain unrun.",
+  "OCR is measured in English only on this host; the Hindi fixture is skipped unless `hin` traineddata is installed.",
+  "Geometric PDF tables and raster/vector diagram graphs are proposals (inferred), not claimed fidelity - the ER raster entity recall line records how much text OCR recovers, not graph correctness.",
+  "Table-cell accuracy compares exact cell `raw` strings (leading zeros and multiline content preserved)."
+ ]
+}
