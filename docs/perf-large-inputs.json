@@ -1,40 +1,206 @@
 {
-  "date": "2026-10-12",
-  "host": "MacBookAir10,1 (M1, 8 GB), debug and release builds, synthetic inputs",
-  "inputs": {
-    "500-page text PDF": "566 KB, ~14 text lines/page, one shared image every 25th page",
-    "3000-page text PDF": "3.4 MB, same shape",
-    "400k-row CSV": "400001 rows x 4 columns, 17 MB",
-    "700k-row CSV": "700001 rows x 4 columns, 30 MB"
+ "runs": {
+  "digital": {
+   "id": "d319d48e-9e57-4429-ae34-787985313438",
+   "state": "completed",
+   "status": "partial",
+   "wall_s": 13.14,
+   "peak_rss_mb": 100,
+   "job_disk_mb": 28.3,
+   "units": 2000,
+   "result_mb": 10.2,
+   "timings": {
+    "derived_write_ms": 8,
+    "merge_ms": 85,
+    "ocr_ms": 0,
+    "page_parse_ms": 0,
+    "poppler_images_ms": 1097,
+    "poppler_text_ms": 938,
+    "result_write_ms": 56,
+    "unit_write_ms": 45042
+   }
   },
-  "before": {
-    "500-page PDF (debug)": "84.8 s; 681 MB written to checkpoint.json (full document re-serialized per page)",
-    "3000-page PDF": "would fail: default 1000-unit limit and 120 s timeout; extrapolated ~509 s",
-    "400k-row CSV": "failed: limit_exceeded at the 1M-cell cap"
+  "scanned-ocr": {
+   "id": "07482169-458e-4c19-bfa1-8c1efbf6dc84",
+   "state": "completed",
+   "status": "partial",
+   "wall_s": 47.55,
+   "peak_rss_mb": 85,
+   "job_disk_mb": 6.4,
+   "units": 80,
+   "result_mb": 0.6,
+   "timings": {
+    "derived_write_ms": 1,
+    "merge_ms": 7,
+    "ocr_ms": 42403,
+    "page_parse_ms": 0,
+    "poppler_images_ms": 3250,
+    "poppler_text_ms": 19,
+    "result_write_ms": 10,
+    "unit_write_ms": 660
+   }
   },
-  "after": {
-    "500-page PDF (debug)": "7.6 s",
-    "500-page PDF (release)": "5.0 s",
-    "3000-page PDF (debug)": "61.9 s, 3000 units, 0 errors",
-    "3000-page PDF (release, 1 batch worker)": "29.8 s",
-    "3000-page PDF (release, 4 batch workers)": "20.7 s, 3000 units, 0 errors",
-    "500-page resume (debug)": "0.46 s, all units reused, no Poppler calls",
-    "400k-row CSV (debug)": "16.1 s wall including the 203 MB result write; extractor time 6.2 s",
-    "400k-row CSV (release, full tables)": "2.97 s wall, ~537 MB sampled peak RSS, 203 MB result (11.9x input)",
-    "400k-row CSV (release, compact_tables)": "1.5 s wall, ~403 MB sampled peak RSS, 68.5 MB result (4.0x input, 3x smaller)",
-    "700k-row CSV (release)": "3.25 s wall, ~932 MB sampled peak RSS, 356 MB result"
+  "mixed-ocr": {
+   "id": "2f98c952-d0dc-4f90-a3df-7af783f46624",
+   "state": "completed",
+   "status": "partial",
+   "wall_s": 23.93,
+   "peak_rss_mb": 81,
+   "job_disk_mb": 3.7,
+   "units": 100,
+   "result_mb": 0.5,
+   "timings": {
+    "derived_write_ms": 0,
+    "merge_ms": 5,
+    "ocr_ms": 20759,
+    "page_parse_ms": 0,
+    "poppler_images_ms": 1625,
+    "poppler_text_ms": 23,
+    "result_write_ms": 10,
+    "unit_write_ms": 766
+   }
   },
-  "changes": [
-    "Poppler text extraction batched per 100-page range instead of one process per page",
-    "pdfimages batched per range with -list attribution; per-page fallback on mismatch",
-    "whole-document checkpoint on a 100-unit cadence instead of per unit (per-unit files and per-asset sidecars carry resume state)",
-    "resume identity from identity.json; completed pages reused without invoking Poppler",
-    "CSV/TSV split into bounded chunk units (50k rows / 250k cells per unit) with cell-range provenance",
-    "defaults raised: units 20000, timeout 1800 s, output_bytes 512 MiB; streaming size-capped result write",
-    "parallel 100-page batch workers (limits.pdf_workers) writing disjoint unit files and content-addressed assets, merged in page order",
-    "global OCR concurrency limiter (limits.ocr_threads) so parallel page workers cannot oversubscribe Tesseract",
-    "compact_tables option omitting redundant cell fields (value equal to raw, null formulas, unit spans)"
-  ],
-  "limits_note": "CSV result JSON is roughly 12x the input for tiny cells; peak memory grows with the whole document (about 0.9 GB per 700k rows of this shape). Raise limits.memory_bytes/upload_bytes for larger files; a compact/streamed table mode would be needed beyond a few million rows.",
-  "synthetic": true
+  "image-heavy-ocr": {
+   "id": "41877d11-9384-41e4-9da5-6814fbd0be66",
+   "state": "completed",
+   "status": "partial",
+   "wall_s": 38.72,
+   "peak_rss_mb": 55,
+   "job_disk_mb": 4.0,
+   "units": 30,
+   "result_mb": 0.7,
+   "timings": {
+    "derived_write_ms": 1,
+    "merge_ms": 7,
+    "ocr_ms": 35919,
+    "page_parse_ms": 0,
+    "poppler_images_ms": 997,
+    "poppler_text_ms": 16,
+    "result_write_ms": 11,
+    "unit_write_ms": 264
+   }
+  },
+  "csv-2m": {
+   "id": "ab14abd3-71de-47dd-b312-e8c7cc0235ff",
+   "state": "completed",
+   "status": "complete",
+   "wall_s": 20.08,
+   "peak_rss_mb": 1001,
+   "job_disk_mb": 2315.9,
+   "units": 41,
+   "result_mb": 1020.9,
+   "timings": {
+    "derived_write_ms": 6842,
+    "merge_ms": 0,
+    "ocr_ms": 0,
+    "page_parse_ms": 0,
+    "poppler_images_ms": 0,
+    "poppler_text_ms": 0,
+    "result_write_ms": 6739,
+    "unit_write_ms": 3977
+   }
+  },
+  "csv-2m-compact": {
+   "id": "4099eca2-3926-4415-8591-f33fdbbc472a",
+   "state": "completed",
+   "status": "complete",
+   "wall_s": 19.33,
+   "peak_rss_mb": 1247,
+   "job_disk_mb": 965.2,
+   "units": 41,
+   "result_mb": 345.6,
+   "timings": {
+    "derived_write_ms": 5930,
+    "merge_ms": 0,
+    "ocr_ms": 0,
+    "page_parse_ms": 0,
+    "poppler_images_ms": 0,
+    "poppler_text_ms": 0,
+    "result_write_ms": 4552,
+    "unit_write_ms": 4852
+   }
+  }
+ },
+ "recovery": {
+  "job": "70bdb092-9075-4acf-ab36-6778d22df9ee",
+  "units_before_kill": 503,
+  "worker_group_killed": true,
+  "resumed_state": "completed",
+  "resumed_status": "partial",
+  "resumed_wall_s": 11.49,
+  "peak_rss_mb": 86,
+  "final_units": 2000,
+  "result_mb": 10.2,
+  "timings": {
+   "derived_write_ms": 11,
+   "merge_ms": 120,
+   "ocr_ms": 0,
+   "page_parse_ms": 7,
+   "poppler_images_ms": 1778,
+   "poppler_text_ms": 1449,
+   "result_write_ms": 187,
+   "unit_write_ms": 36735
+  }
+ },
+ "cancellation": {
+  "state": "cancelled",
+  "surviving_descendants": [],
+  "temp_files": []
+ },
+ "generated": "2026-10-13",
+ "host": "Apple M1",
+ "command": "scripts/benchmark-large.py --phases recovery,cancel",
+ "limits": {
+  "workers": 1,
+  "queued_jobs": 4,
+  "upload_bytes": 268435456,
+  "output_bytes": 2147483648,
+  "timeout_seconds": 1800,
+  "memory_bytes": 6442450944,
+  "pdf_workers": 4,
+  "ocr_threads": 4,
+  "stream_bytes": 16777216
+ },
+ "inputs": {
+  "digital.pdf": {
+   "pages": 2000,
+   "shape": "text page, shared figure every 25th",
+   "bytes": 2403748
+  },
+  "recovery.pdf": {
+   "pages": 2000,
+   "shape": "digital variant used for the SIGKILL recovery run",
+   "bytes": 2405748
+  },
+  "scanned.pdf": {
+   "pages": 80,
+   "shape": "image-only page per scan",
+   "bytes": 1709067
+  },
+  "cancel.pdf": {
+   "pages": 80,
+   "shape": "scan variant used for the cancellation run",
+   "bytes": 1704196
+  },
+  "mixed.pdf": {
+   "pages": 100,
+   "shape": "60 digital pages + 40 scan pages",
+   "bytes": 889540
+  },
+  "image-heavy.pdf": {
+   "pages": 30,
+   "shape": "3 scanned panels per page",
+   "bytes": 572433
+  },
+  "rows.csv": {
+   "rows": 2000000,
+   "shape": "2000000 rows x 4 columns",
+   "bytes": 87337967
+  }
+ },
+ "notes": [
+  "peak_rss_mb is sampled process-tree RSS (100 ms); macOS keeps freed allocator pages resident, so it overstates steady-state usage. Streamed CSV live-heap peaks are recorded in docs/VALIDATION.md.",
+  "timings come from the per-job timings.json (millisecond counters per stage, aggregated across batch workers).",
+  "job_disk_mb covers the whole completed job directory including result files and retained assets."
+ ]
 }

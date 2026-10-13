@@ -73,6 +73,14 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('running cancellation',json.loads(request(f'/v1/extractions/{slow}/cancel','POST',b'')[1])['state']=='cancelled')
   time.sleep(.2);check('cancel remains cancelled',status(slow)['state']=='cancelled')
   check('double cancellation is idempotent',json.loads(request(f'/v1/extractions/{slow}/cancel','POST',b'')[1])['state']=='cancelled')
+  # Cancellation must reap the whole process group (worker + stub tesseract + sleep) and leave
+  # no partially written temp files behind.
+  time.sleep(.5)
+  descendants=subprocess.run(['pgrep','-f','sleep 20'],capture_output=True,text=True).stdout.strip()
+  check('cancellation reaps OCR descendants',descendants=='')
+  jobdir=tmp/'data/jobs'/slow
+  tempfiles=[f.name for f in jobdir.iterdir() if '.tmp-' in f.name] if jobdir.exists() else []
+  check('cancellation leaves no temp files',tempfiles==[])
   # DELETE of a running job must stop the isolated worker and remove retained data.
   _,j=upload('scan.png',{'ocr':True});deleting=j['id'];wait(deleting,'running')
   code,_=request(f'/v1/extractions/{deleting}','DELETE')
@@ -87,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   # Second instance proves a two-worker pool and the retention sweep (no quota).
   with socket.socket() as s2:s2.bind(('127.0.0.1',0));port2=s2.getsockname()[1]
   base2=f'http://127.0.0.1:{port2}'
-  (tmp/'config2.json').write_text(json.dumps({'data_dir':str(tmp/'data2'),'bind':f'127.0.0.1:{port2}','limits':{'workers':2,'timeout_seconds':30,'queued_jobs':10,'upload_bytes':131072,'retention_seconds':2}}))
+  (tmp/'config2.json').write_text(json.dumps({'data_dir':str(tmp/'data2'),'bind':f'127.0.0.1:{port2}','limits':{'workers':2,'ocr_threads':1,'timeout_seconds':30,'queued_jobs':10,'upload_bytes':131072,'retention_seconds':2}}))
   p2=subprocess.Popen([str(BIN),'serve','--config',str(tmp/'config2.json')],env=env,stdout=subprocess.DEVNULL,stderr=open(tmp/'server2.log','a'))
   for _ in range(100):
    try:
@@ -97,6 +105,19 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   _,j=upload('scan.png',{'ocr':True},token=None,root=base2);busy=j['id'];wait(busy,'running',root=base2)
   _,j=upload('quoted.csv',token=None,root=base2);fast=j['id'];v=wait(fast,root=base2)
   check('second worker completes a job while one is busy',v['state']=='completed' and status(busy,root=base2)['state'] in ('running','queued'))
+  # Machine-wide OCR budget: config2 sets ocr_threads=1, so even with two workers busy on two
+  # different OCR jobs, at most one stub Tesseract may run across both worker processes.
+  _,j=upload('scan.png',{'ocr':True},token=None,root=base2);second_ocr=j['id']
+  for _ in range(40):
+   if status(second_ocr,root=base2)['state']=='running':break
+   time.sleep(.05)
+  max_concurrent=0
+  for _ in range(10):
+   running=len(subprocess.run(['pgrep','-f','sleep 20'],capture_output=True,text=True).stdout.strip().split())
+   max_concurrent=max(max_concurrent,running)
+   time.sleep(.2)
+  check('machine-wide OCR budget shared across jobs',max_concurrent==1)
+  json.loads(request(f'/v1/extractions/{second_ocr}/cancel','POST',b'',token=None,root=base2)[1])
   json.loads(request(f'/v1/extractions/{busy}/cancel','POST',b'',token=None,root=base2)[1])
   check('retention sweep removes terminal jobs',wait_gone(fast,root=base2))
   p2.send_signal(signal.SIGINT);p2.wait(timeout=10);p2=None

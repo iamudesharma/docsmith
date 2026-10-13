@@ -148,14 +148,24 @@ ocr_threads` against available cores.
 | PDF batch size | constant | 100 pages | one Poppler range per batch |
 | Progress snapshots | ~2 s / 100 units | coordinator writer thread | complete, ordered, versioned; runs in both modes |
 
-## 6. Measured wall times (this Mac, release build, synthetic inputs)
+## 6. Measured runs (13 October 2026, M1 8 GB, release build, synthetic inputs)
 
-| Workload | 1 worker | 4 workers |
-|---|---|---|
-| 3000-page text PDF | 29.8 s | **20.7 s** |
-| 500-page text PDF | 5.0 s | — |
-| 500-page resume (no changes) | 0.46 s | — |
-| 400k-row CSV (full tables) | 2.97 s | n/a (single-threaded) |
-| 400k-row CSV (`compact_tables`) | 1.5 s | n/a |
+All via `scripts/benchmark-large.py` (`pdf_workers = 4`, `ocr_threads = 4`, one worker process);
+full record including per-stage timings, sampled process-tree RSS and temp disk is in
+`perf-large-inputs.json`.
 
-See `perf-large-inputs.json` for the full record and `DEPLOYMENT.md` for sizing guidance.
+| Workload | Wall | Result | Job disk | Stage highlights |
+|---|---|---|---|---|
+| 2000-page digital PDF | 13.1 s | 10.2 MB | 28.3 MB | Poppler text 0.94 s, images 1.1 s, unit writes 45 s across threads |
+| 80-page scanned PDF (`ocr`) | 47.4 s | 0.6 MB | 6.4 MB | OCR 42.0 s (the whole cost), images 3.2 s |
+| 100-page mixed PDF (`ocr`) | 24.0 s | 0.5 MB | 3.7 MB | OCR 20.8 s |
+| 30-page image-heavy PDF, 3 panels/page (`ocr`) | 38.4 s | 0.7 MB | 4.0 MB | OCR 35.7 s (90 images) |
+| 2M-row / 87 MB CSV | 20.1 s | 1020.9 MB | 2316 MB | unit writes 4.0 s, result write 6.7 s, derived files 6.8 s |
+| 2M-row CSV (`compact_tables`) | 19.3 s | 345.6 MB | 1089 MB | result write 4.6 s, derived files 5.9 s |
+| 2000-page PDF crash recovery | 11.5 s after restart | 10.2 MB | — | 503/2000 units reused; service + worker SIGKILL, dispatcher resumed the job |
+| 80-page OCR cancellation | < 1 s | — | — | no surviving descendants, no leftover temp files |
+
+Streamed-vs-buffered live heap for a 700k-row CSV (counting allocator, same build):
+**107 MB peak / 0 MB final** streamed versus **915 MB peak / 496 MB final** buffered. macOS
+RSS overstates both because the system allocator keeps freed pages resident (the live-heap
+measurement is the honest one; see `VALIDATION.md`).

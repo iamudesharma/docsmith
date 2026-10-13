@@ -181,6 +181,8 @@ pub static STAGE_PARSE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 pub static STAGE_OCR_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static STAGE_WRITE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static STAGE_MERGE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_RESULT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_DERIVED_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 fn time_stage(slot: &std::sync::atomic::AtomicU64, start: std::time::Instant) {
     slot.fetch_add(
         start.elapsed().as_millis() as u64,
@@ -196,6 +198,8 @@ fn stage_timings() -> Value {
         "ocr_ms": get(&STAGE_OCR_MS),
         "unit_write_ms": get(&STAGE_WRITE_MS),
         "merge_ms": get(&STAGE_MERGE_MS),
+        "result_write_ms": get(&STAGE_RESULT_MS),
+        "derived_write_ms": get(&STAGE_DERIVED_MS),
     })
 }
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -632,6 +636,8 @@ pub fn extract(
         &STAGE_OCR_MS,
         &STAGE_WRITE_MS,
         &STAGE_MERGE_MS,
+        &STAGE_RESULT_MS,
+        &STAGE_DERIVED_MS,
     ] {
         counter.store(0, std::sync::atomic::Ordering::Relaxed);
     }
@@ -701,6 +707,7 @@ pub fn extract(
     // Streamed assembly with a size cap: unit payloads are copied from units/uN.json one at a
     // time instead of serializing the whole in-memory document; fails cleanly instead of
     // tripping RLIMIT_FSIZE.
+    let result_started = Instant::now();
     write_result_streamed(
         dir,
         &c.document,
@@ -708,9 +715,12 @@ pub fn extract(
             .output_bytes
             .saturating_sub(c.retained.min(c.limits.output_bytes)),
     )?;
+    time_stage(&STAGE_RESULT_MS, result_started);
     c.write_manifests(true)?;
-    atomic_json(&dir.join("timings.json"), &stage_timings())?;
+    let derived_started = Instant::now();
     write_derived(dir, &c.document)?;
+    time_stage(&STAGE_DERIVED_MS, derived_started);
+    atomic_json(&dir.join("timings.json"), &stage_timings())?;
     Ok(c.document)
 }
 /// Load a unit's full payload for derivation: released units read their unit file, everything
@@ -1836,16 +1846,22 @@ fn render_page_and_ocr(
     result
 }
 
-fn pdf_batch(
-    c: &mut ContextData,
-    input: &Path,
-    path: &str,
-    doctype: &regex::Regex,
-    dimensions: &regex::Regex,
-    batch_start: usize,
-    batch_end: usize,
-    missing: &[usize],
-) -> Result<()> {
+/// One batch of pages to extract: the 100-page Poppler range plus the missing page indices.
+struct Batch<'a> {
+    doctype: &'a regex::Regex,
+    dimensions: &'a regex::Regex,
+    start: usize,
+    end: usize,
+    missing: &'a [usize],
+}
+
+fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Result<()> {
+    let batch_start = batch.start;
+    let batch_end = batch.end;
+    let missing = batch.missing;
+    let doctype = batch.doctype;
+    let dimensions = batch.dimensions;
+
     let from = (batch_start + 1).to_string();
     let to = batch_end.to_string();
     let mut text_error = None;
@@ -2163,9 +2179,15 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
         let batches = std::sync::Arc::new(batches);
         let outcome: Result<()> = if workers <= 1 {
             let mut result = Ok(());
-            for (start, end, list) in batches.iter() {
-                if let Err(e) = pdf_batch(c, input, path, &doctype, &dimensions, *start, *end, list)
-                {
+            for batch in batches.iter() {
+                let batch = Batch {
+                    doctype: &doctype,
+                    dimensions: &dimensions,
+                    start: batch.0,
+                    end: batch.1,
+                    missing: &batch.2,
+                };
+                if let Err(e) = pdf_batch(c, input, path, &batch) {
                     result = Err(e);
                     break;
                 }
@@ -2186,19 +2208,17 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
                     handles.push(scope.spawn(move || -> Result<()> {
                         loop {
                             let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            let Some((start, end, list)) = batches.get(index) else {
+                            let Some(batch) = batches.get(index) else {
                                 return Ok(());
                             };
-                            pdf_batch(
-                                &mut worker,
-                                input,
-                                path,
+                            let batch = Batch {
                                 doctype,
                                 dimensions,
-                                *start,
-                                *end,
-                                list,
-                            )?;
+                                start: batch.0,
+                                end: batch.1,
+                                missing: &batch.2,
+                            };
+                            pdf_batch(&mut worker, input, path, &batch)?;
                         }
                     }));
                 }
