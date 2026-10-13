@@ -1,7 +1,7 @@
 {
- "date": "2026-10-13 08:59",
+ "date": "2026-10-13 09:15",
  "host": "MacBookAir10,1",
- "binary_sha256": "b24f886455dde15bb37012810051746652ab0167c808d33124bc66bfadf83153",
+ "binary_sha256": "b5172f0450582631e4e064890a8bb3ebb75169fddbb446b82899c70fc70a39fe",
  "tesseract_languages": [
   "eng",
   "osd",
@@ -26,7 +26,7 @@
   "skipped": [
    "OCR Hindi raster (skipped without hin traineddata)"
   ],
-  "elapsed_s": 15.8
+  "elapsed_s": 15.5
  },
  "checks": [
   {
@@ -117,7 +117,7 @@
    "pages_correct": 130,
    "passed": true,
    "detail": "",
-   "elapsed_ms": 1
+   "elapsed_ms": 0
   },
   {
    "name": "PDF pages with images (attribution)",

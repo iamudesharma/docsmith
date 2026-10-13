@@ -18,6 +18,10 @@ pub struct Options {
     /// formulas, unit spans). Smaller results for large delimited files; consumers treat a
     /// missing `value` as the raw string.
     pub compact_tables: bool,
+    /// Default representation of this job's result: `json` (canonical), `markdown` or
+    /// `text`. `GET .../result` uses it when no `?format=` query is given, so a job can be
+    /// requested in the form that will be shipped downstream (for example to object storage).
+    pub result_format: String,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -32,6 +36,7 @@ impl Default for Options {
             delimiter: None,
             flexible_rows: true,
             compact_tables: false,
+            result_format: "json".into(),
         }
     }
 }

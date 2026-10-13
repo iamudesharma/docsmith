@@ -10,6 +10,9 @@ scripts/cargo-local.sh build --locked
 # Native extraction, no OCR/model required:
 target/debug/doc-extractor extract fixtures/workbook.xlsx --output data/example
 
+# Result as text bytes on stdout (pipe-ready, for example to object storage later):
+target/debug/doc-extractor extract fixtures/quoted.csv --format text --stdout > quoted.txt
+
 # OCR (provision Tesseract and language packs first):
 target/debug/doc-extractor extract fixtures/mixed.pdf --ocr --output data/ocr
 
@@ -23,6 +26,8 @@ open http://127.0.0.1:8787/docs
 curl -F file=@fixtures/document.docx -F 'options={"ocr":false,"vision":false}' http://127.0.0.1:8787/v1/extractions
 # Use the returned id:
 curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result
+# Text instead of canonical JSON for this job: upload with -F 'options={"result_format":"text"}'
+# and GET .../result serves the derived text (all artifacts are still written to the job dir).
 # Preview rows without downloading a large result (streams the derived export):
 python3 scripts/preview.py JOB_ID                 # also: --unit u1, --markdown, --download out.json
 ```

@@ -962,3 +962,19 @@ fn sparse_text_pages_render_for_ocr_without_duplicating_native_text() {
         .count();
     assert_eq!(leftovers, 0);
 }
+#[test]
+fn result_format_option_is_validated() {
+    use doc_extractor::service::validate_options;
+    for format in ["json", "markdown", "text"] {
+        let options = Options {
+            result_format: format.into(),
+            ..Options::default()
+        };
+        assert!(validate_options(&options).is_ok(), "{format} accepted");
+    }
+    let bad = Options {
+        result_format: "pdf".into(),
+        ..Options::default()
+    };
+    assert!(validate_options(&bad).is_err(), "unknown format rejected");
+}

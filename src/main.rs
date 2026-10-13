@@ -33,6 +33,12 @@ enum Commands {
         interpret_diagrams: bool,
         #[arg(long)]
         compact_tables: bool,
+        /// Result representation: json (default), markdown or text.
+        #[arg(long, value_parser = ["json", "markdown", "text"])]
+        format: Option<String>,
+        /// Stream the selected result artifact to stdout (the path goes to stderr).
+        #[arg(long)]
+        stdout: bool,
         #[arg(long)]
         options: Option<PathBuf>,
     },
@@ -79,6 +85,8 @@ fn main() -> anyhow::Result<()> {
             vision,
             interpret_diagrams,
             compact_tables,
+            format,
+            stdout,
             options,
         } => {
             let opts = if let Some(path) = options {
@@ -91,6 +99,7 @@ fn main() -> anyhow::Result<()> {
                     vision,
                     interpret_diagrams,
                     compact_tables,
+                    result_format: format.unwrap_or_else(|| Options::default().result_format),
                     ..Default::default()
                 }
             };
@@ -105,7 +114,24 @@ fn main() -> anyhow::Result<()> {
             std::fs::copy(input, output.join("input"))?;
             // CLI uses exactly the service's isolated worker path, including resource limits and process tree cleanup.
             run_cli_worker(&output)?;
-            println!("{}", output.join("result.json").display());
+            let artifact = match opts.result_format.as_str() {
+                "markdown" | "md" => "result.md",
+                "text" | "txt" => "result.txt",
+                _ => "result.json",
+            };
+            let path = output.join(artifact);
+            if stdout {
+                // Bytes go to stdout so the artifact can be piped (for example to object storage);
+                // the path is only informational and goes to stderr.
+                use std::io::{copy, Write};
+                let mut file = std::fs::File::open(&path)?;
+                let mut out = std::io::stdout().lock();
+                copy(&mut file, &mut out)?;
+                out.flush()?;
+                eprintln!("{}", path.display());
+            } else {
+                println!("{}", path.display());
+            }
         }
         Commands::Worker { job_dir } => service::worker(&job_dir)?,
         Commands::Capabilities => println!(

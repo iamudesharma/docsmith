@@ -574,6 +574,13 @@ pub fn validate_options(options: &Options) -> ApiResult<()> {
             "Delimiter must be ASCII",
         ));
     }
+    if !["json", "markdown", "md", "text", "txt"].contains(&options.result_format.as_str()) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_options",
+            "Expected result_format json, markdown or text",
+        ));
+    }
     Ok(())
 }
 async fn status(
@@ -587,6 +594,18 @@ async fn status(
 #[derive(Deserialize)]
 struct Export {
     format: Option<String>,
+}
+/// `result_format` recorded at upload time; used when the request has no `?format=`.
+async fn job_result_format(app: &App, id: &str) -> Option<String> {
+    let bytes = tokio::fs::read(app.dir(id).join("request.json"))
+        .await
+        .ok()?;
+    let request: Value = serde_json::from_slice(&bytes).ok()?;
+    request
+        .get("options")?
+        .get("result_format")?
+        .as_str()
+        .map(str::to_owned)
 }
 async fn result(
     State(app): State<App>,
@@ -602,7 +621,13 @@ async fn result(
             "Result is not complete; use unit endpoint for checkpoints",
         ));
     }
-    match export.format.as_deref().unwrap_or("json") {
+    let default_format = job_result_format(&app, &id).await;
+    match export
+        .format
+        .as_deref()
+        .or(default_format.as_deref())
+        .unwrap_or("json")
+    {
         "json" => stream_file(app.dir(&id).join("result.json"), "application/json").await,
         "markdown" | "md" => {
             stream_file(
@@ -804,7 +829,7 @@ pub fn openapi() -> Value {
             }
         }
         if path.ends_with("/result") {
-            params.push(json!({"name":"format","in":"query","schema":{"type":"string","enum":["json","markdown","text"]}}));
+            params.push(json!({"name":"format","in":"query","description":"Export format; defaults to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text"]}}));
         }
         let mut responses =
             json!({code:{"description":summary,"content":{"application/json":{"schema":schema}}}});

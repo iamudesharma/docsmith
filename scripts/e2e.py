@@ -58,6 +58,11 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('unit endpoint',request(f'/v1/extractions/{id}/units/u1')[0]==200)
   check('derived markdown',b'0012' in request(f'/v1/extractions/{id}/result?format=markdown')[1])
   check('plain text includes cells',b'0012' in request(f'/v1/extractions/{id}/result?format=text')[1])
+  _,j=upload('quoted.csv',{'result_format':'text'});txtjob=j['id'];wait(txtjob)
+  txtbody=request(f'/v1/extractions/{txtjob}/result')[1]
+  check('result_format text is the default export',b'\t' in txtbody and b'0012' in txtbody and not txtbody.startswith(b'{'))
+  check('explicit format overrides the job default',request(f'/v1/extractions/{txtjob}/result?format=json')[1].startswith(b'{'))
+  check('invalid result_format rejected',upload('quoted.csv',{'result_format':'pdf'})[0]==400)
   _,j=upload('quoted.csv',{'compact_tables':True});compact=j['id'];wait(compact)
   raw=request(f'/v1/extractions/{compact}/result')[1]
   check('compact tables omit redundant cell fields',b'"value"' not in raw and b'"cached_value"' not in raw and b'"raw"' in raw)
