@@ -978,3 +978,38 @@ fn result_format_option_is_validated() {
     };
     assert!(validate_options(&bad).is_err(), "unknown format rejected");
 }
+#[test]
+fn page_range_specs_parse() {
+    use doc_extractor::model::parse_page_range;
+    assert_eq!(parse_page_range("1-3,5").unwrap(), vec![1, 2, 3, 5]);
+    assert_eq!(parse_page_range(" 7 ").unwrap(), vec![7]);
+    assert_eq!(parse_page_range("3,1-2,2").unwrap(), vec![1, 2, 3]);
+    assert_eq!(parse_page_range("10-").unwrap()[0], 10);
+    for bad in ["", "0", "5-2", "a", "1,,2", "-3"] {
+        assert!(parse_page_range(bad).is_err(), "{bad:?} rejected");
+    }
+}
+#[test]
+fn pdf_page_range_selects_only_requested_pages() {
+    if !doc_extractor::providers::available("pdftotext") {
+        return;
+    }
+    let d = fixture(
+        "digital.pdf",
+        Options {
+            pages: Some("2".into()),
+            ..Options::default()
+        },
+    );
+    assert_eq!(
+        d.units.len(),
+        1,
+        "{:?}",
+        d.units.iter().map(|u| &u.name).collect::<Vec<_>>()
+    );
+    assert_eq!(d.units[0].name, "Page 2");
+    assert!(text(&d).contains("Native page TWO"));
+    assert!(!text(&d).contains("Native page ONE"));
+    assert_eq!(d.metadata["pages_total"], 2);
+    assert_eq!(d.metadata["page_range"], "2");
+}

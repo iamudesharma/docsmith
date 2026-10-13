@@ -2113,6 +2113,28 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
     if pages > c.limits.units {
         bail!("limit_exceeded: PDF pages");
     }
+    // Optional 1-based page selection: only selected pages become units; checkpoints for
+    // other pages are ignored, and out-of-range pages are dropped.
+    let selected: Vec<usize> = match c.options.pages.as_deref() {
+        Some(spec) => {
+            let requested = crate::model::parse_page_range(spec)
+                .map_err(|e| anyhow::anyhow!("invalid_options: bad page range '{spec}': {e}"))?;
+            let selected = requested
+                .into_iter()
+                .filter(|page| *page <= pages)
+                .map(|page| page - 1)
+                .collect::<Vec<_>>();
+            if selected.is_empty() {
+                bail!(
+                    "invalid_options: page range '{spec}' selects no pages (document has {pages})"
+                );
+            }
+            selected
+        }
+        None => (0..pages).collect(),
+    };
+    c.document.metadata["pages_total"] = json!(pages);
+    c.document.metadata["page_range"] = json!(c.options.pages);
     let doctype = regex::Regex::new(r"(?s)<!DOCTYPE[^>]*>")?;
     let dimensions =
         regex::Regex::new(r"(?:Page\s+\d+\s+size:|Page size:)\s*([\d.]+)\s+x\s+([\d.]+)")?;
@@ -2124,13 +2146,12 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
     }
     c.write_checkpoint = false;
     // Completed pages are reused by identity; a fully resumed document never invokes Poppler.
-    let mut slots: Vec<Option<Unit>> = Vec::with_capacity(pages);
-    for p in 0..pages {
-        let unit = fs::read(c.dir.join("units").join(format!("u{}.json", p + 1)))
+    let mut slots: Vec<Option<Unit>> = (0..pages).map(|_| None).collect();
+    for &p in &selected {
+        slots[p] = fs::read(c.dir.join("units").join(format!("u{}.json", p + 1)))
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Unit>(&bytes).ok())
             .filter(|unit| c.identity_ok && unit.kind == "page" && unit.index == p);
-        slots.push(unit);
     }
     // Seed reused units into the in-memory document so checkpoints and the final result list
     // every page in order, not just newly processed ones.
@@ -2139,15 +2160,23 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
             board.publish(unit);
         }
     }
-    let missing: Vec<usize> = (0..pages).filter(|p| slots[*p].is_none()).collect();
+    let missing: Vec<usize> = selected
+        .iter()
+        .copied()
+        .filter(|p| slots[*p].is_none())
+        .collect();
     let mut worker_error = None;
     if !missing.is_empty() {
         let mut batches: Vec<(usize, usize, Vec<usize>)> = Vec::new();
+        // Group consecutive pages so Poppler slice indexes map 1:1; resumed and ranged
+        // selections skip pages that are already complete or out of range.
         for &p in &missing {
-            let start = (p / PDF_BATCH) * PDF_BATCH;
             match batches.last_mut() {
-                Some((known, _, list)) if *known == start => list.push(p),
-                _ => batches.push((start, (start + PDF_BATCH).min(pages), vec![p])),
+                Some((_, end, list)) if p == *end && *end - list[0] < PDF_BATCH => {
+                    list.push(p);
+                    *end = p + 1;
+                }
+                _ => batches.push((p, p + 1, vec![p])),
             }
         }
         let workers = c.limits.pdf_workers.clamp(1, 8).min(batches.len());
@@ -2264,13 +2293,13 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
         worker_error = outcome.err();
         let started = Instant::now();
         let mut missing_pages = Vec::new();
-        for (p, slot) in slots.iter_mut().enumerate() {
-            if slot.is_none() {
+        for &p in &selected {
+            if slots[p].is_none() {
                 match fs::read(c.dir.join("units").join(format!("u{}.json", p + 1)))
                     .ok()
                     .and_then(|bytes| serde_json::from_slice::<Unit>(&bytes).ok())
                 {
-                    Some(unit) => *slot = Some(unit),
+                    Some(unit) => slots[p] = Some(unit),
                     None => missing_pages.push(p + 1),
                 }
             }

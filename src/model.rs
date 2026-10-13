@@ -22,6 +22,9 @@ pub struct Options {
     /// `text`. `GET .../result` uses it when no `?format=` query is given, so a job can be
     /// requested in the form that will be shipped downstream (for example to object storage).
     pub result_format: String,
+    /// PDF page selection, 1-based: `"1-50,60"` (`N-` means to the end of the document).
+    /// Only the selected pages become units; checkpoints for other pages are ignored.
+    pub pages: Option<String>,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -37,6 +40,7 @@ impl Default for Options {
             flexible_rows: true,
             compact_tables: false,
             result_format: "json".into(),
+            pages: None,
         }
     }
 }
@@ -556,6 +560,54 @@ pub fn unit_jsonl(unit: &Unit, out: &mut String) -> std::result::Result<(), serd
         }
     }
     Ok(())
+}
+
+/// Parse `"1-50,60,70-"`-style page specs into sorted, deduplicated 1-based page numbers.
+/// `N-` runs to the end of the document; expansion is bounded so a pathological spec cannot
+/// allocate an unbounded list.
+pub fn parse_page_range(spec: &str) -> std::result::Result<Vec<usize>, String> {
+    let mut pages = Vec::new();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err("empty segment".into());
+        }
+        match part.split_once('-') {
+            None => {
+                let page: usize = part.parse().map_err(|_| format!("bad page '{part}'"))?;
+                if page == 0 {
+                    return Err("pages are 1-based".into());
+                }
+                pages.push(page);
+            }
+            Some((start, end)) => {
+                let start: usize = start
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("bad range '{part}'"))?;
+                if start == 0 {
+                    return Err("pages are 1-based".into());
+                }
+                let end = if end.trim().is_empty() {
+                    usize::MAX
+                } else {
+                    end.trim()
+                        .parse()
+                        .map_err(|_| format!("bad range '{part}'"))?
+                };
+                if end < start {
+                    return Err(format!("range '{part}' ends before it starts"));
+                }
+                pages.extend(start..=end.min(start.saturating_add(100_000)));
+            }
+        }
+    }
+    if pages.is_empty() {
+        return Err("no pages".into());
+    }
+    pages.sort_unstable();
+    pages.dedup();
+    Ok(pages)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

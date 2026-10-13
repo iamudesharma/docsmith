@@ -907,6 +907,15 @@ pub fn validate_options(options: &Options) -> ApiResult<()> {
             "Expected result_format json, markdown, text, jsonl or html",
         ));
     }
+    if let Some(spec) = &options.pages {
+        crate::model::parse_page_range(spec).map_err(|e| {
+            error(
+                StatusCode::BAD_REQUEST,
+                "invalid_options",
+                &format!("Invalid page range: {e}"),
+            )
+        })?;
+    }
     Ok(())
 }
 async fn status(
