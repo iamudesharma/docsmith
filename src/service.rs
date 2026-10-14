@@ -916,6 +916,38 @@ pub fn validate_options(options: &Options) -> ApiResult<()> {
             )
         })?;
     }
+    if let Some(target) = options.chunk_chars {
+        if !(16..=100_000).contains(&target) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_options",
+                "chunk_chars must be 16..=100000",
+            ));
+        }
+    }
+    if let Some(overlap) = options.chunk_overlap {
+        let target = options.chunk_chars.ok_or_else(|| {
+            error(
+                StatusCode::BAD_REQUEST,
+                "invalid_options",
+                "chunk_overlap requires chunk_chars",
+            )
+        })?;
+        if overlap >= target {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_options",
+                "chunk_overlap must be smaller than chunk_chars",
+            ));
+        }
+    }
+    if options.result_format == "chunks" && options.chunk_chars.is_none() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_options",
+            "result_format chunks requires chunk_chars",
+        ));
+    }
     Ok(())
 }
 async fn status(
@@ -968,6 +1000,7 @@ async fn result(
         "text" | "txt" => ("result.txt", "text/plain; charset=utf-8"),
         "jsonl" | "ndjson" => ("result.jsonl", "application/x-ndjson; charset=utf-8"),
         "html" => ("result.html", "text/html; charset=utf-8"),
+        "chunks" => ("result.chunks.jsonl", "application/x-ndjson; charset=utf-8"),
         _ => {
             return Err(error(
                 StatusCode::BAD_REQUEST,
@@ -1897,7 +1930,7 @@ pub fn openapi() -> Value {
             }
         }
         if path.ends_with("/result") {
-            params.push(json!({"name":"format","in":"query","description":"Export format; defaults to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl","html"]}}));
+            params.push(json!({"name":"format","in":"query","description":"Export format; defaults to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl","html","chunks"]}}));
         }
         if path.ends_with("/units/{unit_id}") {
             params.push(json!({"name":"from","in":"query","description":"First table row of the slice (used with count)","schema":{"type":"integer","minimum":0}}));

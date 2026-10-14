@@ -1,6 +1,6 @@
-# Extraction accuracy — 2026-10-13 21:03
+# Extraction accuracy — 2026-10-14 07:57
 
-Host `MacBookAir10,1`, binary `0870c8d788707585…`, Tesseract languages: eng, osd, snum.
+Host `MacBookAir10,1`, binary `3181063f0d8c06b9…`, Tesseract languages: eng, osd, snum.
 Synthetic fixtures with known content (see `scripts/generate-fixtures.py`); script: `scripts/accuracy.py`.
 
 | Metric | Result |

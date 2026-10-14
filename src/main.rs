@@ -33,9 +33,15 @@ enum Commands {
         interpret_diagrams: bool,
         #[arg(long)]
         compact_tables: bool,
-        /// Result representation: json (default), markdown, text, jsonl or html.
-        #[arg(long, value_parser = ["json", "markdown", "text", "jsonl", "html"])]
+        /// Result representation: json (default), markdown, text, jsonl, html or chunks.
+        #[arg(long, value_parser = ["json", "markdown", "text", "jsonl", "html", "chunks"])]
         format: Option<String>,
+        /// Opt-in RAG chunking: write result.chunks.jsonl windows of about this many characters.
+        #[arg(long)]
+        chunk_chars: Option<usize>,
+        /// Overlap between chunks in characters (default chunk_chars / 8).
+        #[arg(long)]
+        chunk_overlap: Option<usize>,
         /// Stream the selected result artifact to stdout (the path goes to stderr).
         #[arg(long)]
         stdout: bool,
@@ -109,6 +115,8 @@ fn main() -> anyhow::Result<()> {
             interpret_diagrams,
             compact_tables,
             format,
+            chunk_chars,
+            chunk_overlap,
             stdout,
             options,
         } => {
@@ -123,10 +131,15 @@ fn main() -> anyhow::Result<()> {
                     interpret_diagrams,
                     compact_tables,
                     result_format: format.unwrap_or_else(|| Options::default().result_format),
+                    chunk_chars,
+                    chunk_overlap,
                     ..Default::default()
                 }
             };
             let input = std::fs::canonicalize(input)?;
+            if opts.result_format == "chunks" && opts.chunk_chars.is_none() {
+                anyhow::bail!("--format chunks requires --chunk-chars");
+            }
             std::fs::create_dir_all(&output)?;
             let output = std::fs::canonicalize(output)?;
             let id = uuid::Uuid::new_v4().to_string();
@@ -142,6 +155,7 @@ fn main() -> anyhow::Result<()> {
                 "text" | "txt" => "result.txt",
                 "jsonl" | "ndjson" => "result.jsonl",
                 "html" => "result.html",
+                "chunks" => "result.chunks.jsonl",
                 _ => "result.json",
             };
             let path = output.join(artifact);

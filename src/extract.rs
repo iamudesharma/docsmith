@@ -718,7 +718,15 @@ pub fn extract(
     time_stage(&STAGE_RESULT_MS, result_started);
     c.write_manifests(true)?;
     let derived_started = Instant::now();
-    write_derived(dir, &c.document)?;
+    let chunking = c.options.chunk_chars.map(|target| {
+        let overlap = c
+            .options
+            .chunk_overlap
+            .unwrap_or(target / 8)
+            .min(target.saturating_sub(1));
+        (target, overlap)
+    });
+    write_derived(dir, &c.document, chunking)?;
     time_stage(&STAGE_DERIVED_MS, derived_started);
     atomic_json(&dir.join("timings.json"), &stage_timings())?;
     Ok(c.document)
@@ -738,13 +746,24 @@ fn load_unit_payload(dir: &Path, unit: &Unit) -> Result<Unit> {
 }
 /// Stream result.md/result.txt unit by unit so multi-million-row tables never build the whole
 /// derived text in memory. Output is byte-identical to `model::markdown`/`plaintext`.
-fn write_derived(dir: &Path, doc: &Document) -> Result<()> {
+fn write_derived(dir: &Path, doc: &Document, chunking: Option<(usize, usize)>) -> Result<()> {
     use std::io::{BufWriter, Write};
     let mut md = BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.md"))?);
     let mut txt = BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.txt"))?);
     let mut jsonl =
         BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.jsonl"))?);
     let mut html = BufWriter::with_capacity(256 * 1024, fs::File::create(dir.join("result.html"))?);
+    let mut chunks = match chunking {
+        Some((target, overlap)) => Some((
+            BufWriter::with_capacity(
+                256 * 1024,
+                fs::File::create(dir.join("result.chunks.jsonl"))?,
+            ),
+            target,
+            overlap,
+        )),
+        None => None,
+    };
     write!(md, "# {}\n\nStatus: {}\n\n", doc.filename, doc.status)?;
     write!(html, "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>body{{font:14px/1.5 -apple-system,system-ui,sans-serif;margin:2rem auto;max-width:70rem;padding:0 1rem}}table{{border-collapse:collapse;margin:.6rem 0}}td,th{{border:1px solid #bbb;padding:.2rem .45rem;vertical-align:top;max-width:28rem;overflow-wrap:anywhere}}tbody tr:nth-child(even){{background:rgba(127,127,127,.09)}}pre,p{{overflow-wrap:anywhere}}</style>\n</head>\n<body>\n<h1>{}</h1>\n<p>Status: {}</p>\n",
         crate::model::html_escape(&doc.filename), crate::model::html_escape(&doc.filename), crate::model::html_escape(&doc.status))?;
@@ -763,12 +782,20 @@ fn write_derived(dir: &Path, doc: &Document) -> Result<()> {
         buffer.clear();
         crate::model::unit_html(&full, &mut buffer);
         html.write_all(buffer.as_bytes())?;
+        if let Some((writer, target, overlap)) = &mut chunks {
+            buffer.clear();
+            crate::model::unit_chunks(&full, *target, *overlap, &mut buffer)?;
+            writer.write_all(buffer.as_bytes())?;
+        }
     }
     write!(html, "</body>\n</html>\n")?;
     md.flush()?;
     txt.flush()?;
     jsonl.flush()?;
     html.flush()?;
+    if let Some((writer, _, _)) = &mut chunks {
+        writer.flush()?;
+    }
     Ok(())
 }
 fn route(c: &mut ContextData, input: &Path, bytes: &[u8], ext: &str) -> Result<()> {

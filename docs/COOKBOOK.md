@@ -193,6 +193,23 @@ Selected pages keep their original numbering (`Page 60` stays `Page 60`), checkp
 pages are ignored, and the document metadata records `pages_total` and `page_range`. Applies to
 PDFs; other formats ignore the option.
 
+## RAG chunks
+
+```sh
+# Opt in per job; chunks window the plain-text view (the same text as format=text):
+curl -s -F file=@report.pdf -F 'options={"chunk_chars":2000,"chunk_overlap":200}' "$BASE/v1/extractions"
+curl -s "$BASE/v1/extractions/$ID/result?format=chunks"     # one JSON record per chunk
+
+# CLI:
+target/release/doc-extractor extract report.pdf --chunk-chars 2000 --format chunks --stdout
+```
+
+Records look like
+`{"unit":"u1","kind":"page","name":"Page 3","index":0,"offset":0,"chars":2000,"overlap":200,"text":"…"}`.
+Windows cut on character boundaries, overlap defaults to `chunk_chars / 8`, and table rows stay
+whole lines unless a single row exceeds the window (use `format=jsonl` for row-level records).
+Chunking is off by default and writes no artifact when unset.
+
 ## Cancel, delete, retry
 
 ```sh
