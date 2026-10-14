@@ -8,4 +8,5 @@ pub mod mcp;
 pub mod model;
 pub mod pdf_source;
 pub mod providers;
+pub mod s3;
 pub mod service;

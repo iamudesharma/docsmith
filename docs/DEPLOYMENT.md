@@ -74,6 +74,16 @@ Webhooks are opt-in per upload (`callback_url` multipart field). Deliveries are 
 
 MCP clients (Claude Code, Cursor, LM Studio, ...) can use the extractor as a local tool server: `doc-extractor mcp` runs extraction offline through the same CLI/worker path, and `doc-extractor mcp --url http://127.0.0.1:8787` proxies a running service (which also enables `job_status`, `get_result`, `list_jobs` and `stats`). Tool output is truncated to `max_chars` (default 20 000) so large results never flood an agent context. The offline result viewer at `/view/{id}` renders paged tables and text with download links (bearer token supported in-page), and `/metrics` exposes Prometheus gauges (jobs by state, workers, pending webhooks/sinks, disk, uptime).
 
+Results can leave the host automatically in three ways; `sink_command` wins when several are configured:
+
+| Mechanism | Config | Notes |
+|---|---|---|
+| Shell command | `sink_command` (`DOC_SINK_CMD`) | Any CLI (`aws`, `rclone`, `mc`, `scp`); runs as the service user |
+| Native S3 | `s3` (`DOC_S3` JSON via run.sh) | SigV4-signed PUT of the result artifact (and `upload_archive`); `bucket`, `prefix`, `region`, optional `endpoint`/`path_style` for MinIO-class servers; credentials from config or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` |
+| Webhook | `callback_url` per upload | Notifies your endpoint; the receiving service does the copying |
+
+`watch_dir` polls a folder: a file whose size/mtime stops changing is ingested as a job for `watch_tenant` (default `local`) with `watch_options`, then moved to `<watch_dir>/processed/`. Ingest failures (queue full, quota) leave the file in place and retry on the next scan.
+
 The server defaults to loopback. A non-loopback bind requires bearer tokens. Place a TLS reverse proxy in front for network deployment and apply connection/body/rate limits there. Do not share one SQLite directory across multiple servers. Run as an unprivileged service user. A container/cgroup or OS sandbox adds a strict memory and filesystem/network security boundary; process isolation here contains parser crashes but is not a security sandbox.
 
 Job state, input, checkpoints, logs and assets are retained until DELETE, expiry of `retention_seconds`, or (optionally) the per-tenant `disk_bytes` quota limiting new storage. Back up the SQLite database and its job directories as one consistent snapshot while stopped, or use SQLite's backup API and matching immutable job snapshots. Restore into a private stopped directory, then restart. Interrupted jobs requeue and PDF checkpoints can resume completed pages; other formats safely reparse retained input. Long-soak, backup restoration and multi-host deployments have not been validated.

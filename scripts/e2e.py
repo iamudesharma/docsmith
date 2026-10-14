@@ -7,7 +7,7 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
  tmp=pathlib.Path(tmp)
  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
  base=f'http://127.0.0.1:{port}'
- config={'data_dir':str(tmp/'data'),'bind':f'127.0.0.1:{port}','tokens':{'a-token':'tenant-a','b-token':'tenant-b'},'webhook_secret':'e2e-secret','webhook_allow_private':True,'sink_command':'cp {result} sink-{state}.out','limits':{'workers':1,'timeout_seconds':4,'queued_jobs':3,'upload_bytes':131072}}
+ config={'data_dir':str(tmp/'data'),'bind':f'127.0.0.1:{port}','tokens':{'a-token':'tenant-a','b-token':'tenant-b'},'webhook_secret':'e2e-secret','webhook_allow_private':True,'sink_command':'cp {result} sink-{state}.out','watch_dir':str(tmp/'watch'),'watch_options':{'result_format':'markdown'},'watch_tenant':'tenant-a','limits':{'workers':1,'timeout_seconds':4,'queued_jobs':3,'upload_bytes':131072}}
  (tmp/'config.json').write_text(json.dumps(config))
  # Slow OCR provider makes cancellation/timeout tests deterministic and tests whole process groups.
  (tmp/'bin').mkdir();(tmp/'bin/tesseract').write_text('#!/bin/sh\nif [ "$1" = --list-langs ]; then printf "List\\neng\\n"; exit 0; fi\nif [ "$1" = --version ]; then echo "tesseract mock"; exit 0; fi\nsleep 20\n');(tmp/'bin/tesseract').chmod(0o755)
@@ -67,7 +67,7 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
    time.sleep(.25)
   return False
  def check(name,condition):assert condition,name;results.append(name)
- p=None;p2=None;p3=None
+ p=None;p2=None;p3=None;p4=None
  try:
   p=start();check('health readiness',request('/health/ready',token=None)[0]==200)
   check('unauthorized upload rejected',upload('quoted.csv',token=None)[0]==401)
@@ -160,6 +160,15 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   chunk_records=[json.loads(line) for line in request(f'/v1/extractions/{chunkjob}/result?format=chunks')[1].splitlines()]
   check('chunk export windows plain text',len(chunk_records)>=2 and all(r['chars']<=30 and r['text'] for r in chunk_records))
   check('chunks require chunk_chars',upload('quoted.csv',{'result_format':'chunks'})[0]==400 and request(f'/v1/extractions/{jsonljob}/result?format=chunks')[0]==404)
+  (tmp/'watch').mkdir(exist_ok=True)
+  (tmp/'watch'/'dropped.csv').write_bytes((ROOT/'fixtures'/'quoted.csv').read_bytes())
+  deadline=time.time()+20;watched=None
+  while time.time()<deadline:
+   listing=json.loads(request('/v1/extractions?limit=200')[1])
+   watched=next((j for j in listing['jobs'] if j['filename']=='dropped.csv' and j['state']=='completed'),None)
+   if watched:break
+   time.sleep(.3)
+  check('folder watch ingests dropped files',watched is not None and (tmp/'watch'/'processed'/'dropped.csv').exists())
   _,j=upload('flexible.tsv',callback=f'http://127.0.0.1:{hook_port}/hook');hookjob=j['id'];wait(hookjob)
   deadline=time.time()+10
   while not received and time.time()<deadline:time.sleep(.1)
@@ -216,10 +225,41 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('cache hits ignore the disk quota',upload('digital.pdf',token=None,root=base3)[1]['cached'] is True)
   check('tenant disk quota rejects new storage',upload('mixed.pdf',token=None,root=base3)[0]==507)
   p3.send_signal(signal.SIGINT);p3.wait(timeout=10);p3=None
+  # Fourth instance proves native S3 uploads against a local S3-compatible mock.
+  s3_received=[]
+  class _S3(http.server.BaseHTTPRequestHandler):
+   def do_PUT(self):
+    body=self.rfile.read(int(self.headers.get('content-length',0)))
+    s3_received.append((self.path,{k.lower():v for k,v in self.headers.items()},body))
+    self.send_response(200);self.end_headers()
+   def log_message(self,*_a):pass
+  s3_mock=http.server.HTTPServer(('127.0.0.1',0),_S3);s3_port=s3_mock.server_address[1]
+  threading.Thread(target=s3_mock.serve_forever,daemon=True).start()
+  with socket.socket() as s4:s4.bind(('127.0.0.1',0));port4=s4.getsockname()[1]
+  base4=f'http://127.0.0.1:{port4}'
+  (tmp/'config4.json').write_text(json.dumps({'data_dir':str(tmp/'data4'),'bind':f'127.0.0.1:{port4}','s3':{'bucket':'test-bucket','prefix':'results','region':'us-east-1','endpoint':f'http://127.0.0.1:{s3_port}','path_style':True,'access_key':'AKIDEXAMPLE','secret_key':'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY'},'limits':{'workers':1,'timeout_seconds':30,'queued_jobs':10,'upload_bytes':131072}}))
+  p4=subprocess.Popen([str(BIN),'serve','--config',str(tmp/'config4.json')],env=env,stdout=subprocess.DEVNULL,stderr=open(tmp/'server4.log','a'))
+  for _ in range(100):
+   try:
+    if request('/health/live',token=None,root=base4)[0]==200:break
+   except OSError:pass
+   time.sleep(.05)
+  _,j=upload('quoted.csv',token=None,root=base4);s3job=j['id'];wait(s3job,root=base4)
+  deadline=time.time()+15
+  while not s3_received and time.time()<deadline:time.sleep(.2)
+  if s3_received:
+   s3_path,s3_headers,s3_body=s3_received[0]
+   s3_ok=(s3_path.startswith('/test-bucket/results/')
+          and s3_headers.get('authorization','').startswith('AWS4-HMAC-SHA256')
+          and hashlib.sha256(s3_body).hexdigest()==s3_headers.get('x-amz-content-sha256'))
+  else:s3_ok=False
+  check('native S3 upload signs and PUTs the result',s3_ok)
+  p4.send_signal(signal.SIGINT);p4.wait(timeout=10);p4=None
  finally:
   if sys.exc_info()[0]:
    print((tmp/'server.log').read_text());
    for f in (tmp/'data/jobs').glob('*/worker.log'):print(f, f.read_text())
+  if p4 and p4.poll() is None:p4.send_signal(signal.SIGINT);p4.wait(timeout=10)
   if p3 and p3.poll() is None:p3.send_signal(signal.SIGINT);p3.wait(timeout=10)
   if p2 and p2.poll() is None:p2.send_signal(signal.SIGINT);p2.wait(timeout=10)
   if p and p.poll() is None:p.send_signal(signal.SIGINT);p.wait(timeout=10)

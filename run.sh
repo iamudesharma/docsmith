@@ -7,6 +7,13 @@
 #   DOC_DATA_DIR=/tmp/dsmith ./run.sh         runtime state location (jobs, units, results)
 #   DOC_BIND=0.0.0.0:8787 DOC_TOKENS=secret1:tenant-a ./run.sh
 #                                             non-loopback bind (tokens required)
+#   DOC_WEBHOOK_SECRET=dev ./run.sh           sign webhook deliveries (HMAC-SHA256)
+#   DOC_SINK_CMD='aws s3 cp {result} s3://bucket/{id}.{format}' ./run.sh
+#                                             run a command per completed job
+#   DOC_S3='{"bucket":"b","prefix":"results","region":"eu-west-1"}' ./run.sh
+#                                             native SigV4 upload (AWS_* env for credentials)
+#   DOC_WATCH_DIR=/srv/inbox ./run.sh         ingest files dropped in a folder
+#   DOC_LOG_JSON=1 ./run.sh                   JSON logs on stderr
 #   DOC_REBUILD=1 ./run.sh                    force a fresh release build
 #
 # API: /health/live, /health/ready, /v1/capabilities, /openapi.json,
@@ -47,9 +54,9 @@ esac
 
 mkdir -p "$DATA_DIR"
 CONFIG="$DATA_DIR/config.json"
-python3 - "$CONFIG" "$DATA_DIR" "$BIND" "$WORKERS" "${DOC_TOKENS:-}" "${DOC_WEBHOOK_SECRET:-}" "${DOC_SINK_CMD:-}" <<'PY'
+python3 - "$CONFIG" "$DATA_DIR" "$BIND" "$WORKERS" "${DOC_TOKENS:-}" "${DOC_WEBHOOK_SECRET:-}" "${DOC_SINK_CMD:-}" "${DOC_WATCH_DIR:-}" "${DOC_S3:-}" <<'PY'
 import json, sys
-config_path, data_dir, bind, workers, tokens, webhook_secret, sink_command = sys.argv[1:8]
+config_path, data_dir, bind, workers, tokens, webhook_secret, sink_command, watch_dir, s3 = sys.argv[1:10]
 config = {"data_dir": data_dir, "bind": bind, "limits": {"workers": int(workers)}}
 if tokens:
     config["tokens"] = {}
@@ -63,6 +70,13 @@ if webhook_secret:
     config["webhook_secret"] = webhook_secret
 if sink_command:
     config["sink_command"] = sink_command
+if watch_dir:
+    config["watch_dir"] = watch_dir
+if s3:
+    try:
+        config["s3"] = json.loads(s3)
+    except ValueError as error:
+        raise SystemExit(f"DOC_S3 must be JSON (for example '{{\"bucket\":\"my-bucket\"}}'): {error}")
 # Callbacks to loopback are allowed only while the server itself is loopback-bound.
 config["webhook_allow_private"] = (
     bind.startswith("127.0.0.1") or bind.startswith("localhost") or bind.startswith("[::1]")
