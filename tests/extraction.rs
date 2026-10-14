@@ -1013,3 +1013,44 @@ fn pdf_page_range_selects_only_requested_pages() {
     assert_eq!(d.metadata["pages_total"], 2);
     assert_eq!(d.metadata["page_range"], "2");
 }
+#[test]
+fn chunk_artifact_windows_plain_text() {
+    let input = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("document.md");
+    let dir = tempfile::tempdir().unwrap();
+    let doc = extract::extract(
+        &input,
+        "document.md",
+        dir.path(),
+        Options {
+            chunk_chars: Some(40),
+            chunk_overlap: Some(10),
+            ..Options::default()
+        },
+        Limits::default(),
+        "test",
+    )
+    .unwrap();
+    let raw = std::fs::read_to_string(dir.path().join("result.chunks.jsonl")).unwrap();
+    let chunks = raw
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(chunks.len() >= 2, "{chunks:?}");
+    assert!(chunks.iter().all(|c| c["chars"].as_u64().unwrap() <= 40
+        && c["unit"] == doc.units[0].id
+        && !c["text"].as_str().unwrap().is_empty()));
+    // Chunking is opt-in: without chunk_chars no artifact is written.
+    let plain = tempfile::tempdir().unwrap();
+    extract::extract(
+        &input,
+        "document.md",
+        plain.path(),
+        Options::default(),
+        Limits::default(),
+        "test",
+    )
+    .unwrap();
+    assert!(!plain.path().join("result.chunks.jsonl").exists());
+}

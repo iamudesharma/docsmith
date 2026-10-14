@@ -27,7 +27,8 @@ curl -F file=@fixtures/document.docx -F 'options={"ocr":false,"vision":false}' h
 # Use the returned id:
 curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result
 # Text instead of canonical JSON for this job: upload with -F 'options={"result_format":"text"}'
-# (formats: json | markdown | text | jsonl | html) — GET .../result serves that representation.
+# (formats: json | markdown | text | jsonl | html, plus ?format=chunks with chunking enabled).
+# RAG chunks: -F 'options={"chunk_chars":2000}' then GET .../result?format=chunks
 # Batch: repeat the file field (max 32); each file becomes a job:
 curl -F file=@fixtures/digital.pdf -F file=@fixtures/quoted.csv http://127.0.0.1:8787/v1/extractions
 # Deploy: docker compose up --build   |   deploy/doc-extractor.service (systemd, see docs/DEPLOYMENT.md)

@@ -25,6 +25,11 @@ pub struct Options {
     /// PDF page selection, 1-based: `"1-50,60"` (`N-` means to the end of the document).
     /// Only the selected pages become units; checkpoints for other pages are ignored.
     pub pages: Option<String>,
+    /// Opt-in RAG chunking: when set, `result.chunks.jsonl` windows the plain-text view of
+    /// every unit into chunks of about this many characters.
+    pub chunk_chars: Option<usize>,
+    /// Overlap between chunks in characters (default `chunk_chars / 8`).
+    pub chunk_overlap: Option<usize>,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -41,6 +46,8 @@ impl Default for Options {
             compact_tables: false,
             result_format: "json".into(),
             pages: None,
+            chunk_chars: None,
+            chunk_overlap: None,
         }
     }
 }
@@ -608,6 +615,55 @@ pub fn parse_page_range(spec: &str) -> std::result::Result<Vec<usize>, String> {
     pages.sort_unstable();
     pages.dedup();
     Ok(pages)
+}
+
+/// Opt-in RAG chunking: window one unit's plain-text view into chunks of about `target`
+/// characters with `overlap` characters of context, one JSON record per chunk. Table rows
+/// stay whole lines unless a single row exceeds the window; row-level records are available
+/// via `result.jsonl` instead.
+pub fn unit_chunks(
+    unit: &Unit,
+    target: usize,
+    overlap: usize,
+    out: &mut String,
+) -> std::result::Result<(), serde_json::Error> {
+    use std::fmt::Write;
+    let mut text = String::new();
+    unit_plaintext(unit, &mut text);
+    if text.is_empty() {
+        return Ok(());
+    }
+    let target = target.max(16);
+    let overlap = overlap.min(target.saturating_sub(1));
+    let mut start = 0usize;
+    let mut index = 0usize;
+    loop {
+        let mut end = (start + target).min(text.len());
+        while end > start && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            break;
+        }
+        let record = serde_json::json!({
+            "unit": unit.id,
+            "kind": unit.kind,
+            "name": unit.name,
+            "index": index,
+            "offset": start,
+            "chars": end - start,
+            "overlap": overlap,
+            "text": &text[start..end],
+        });
+        writeln!(out, "{}", serde_json::to_string(&record)?).ok();
+        index += 1;
+        if end == text.len() {
+            break;
+        }
+        let next = end.saturating_sub(overlap);
+        start = if next <= start { end } else { next };
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

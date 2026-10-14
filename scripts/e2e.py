@@ -156,6 +156,10 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   ranged_doc=json.loads(request(f'/v1/extractions/{ranged}/result')[1])
   check('page range selects requested pages',len(ranged_doc['units'])==1 and ranged_doc['units'][0]['name']=='Page 2' and ranged_doc['metadata']['pages_total']==2)
   check('invalid page range rejected',upload('digital.pdf',{'pages':'5-2'})[0]==400)
+  _,j=upload('quoted.csv',{'chunk_chars':30});chunkjob=j['id'];wait(chunkjob)
+  chunk_records=[json.loads(line) for line in request(f'/v1/extractions/{chunkjob}/result?format=chunks')[1].splitlines()]
+  check('chunk export windows plain text',len(chunk_records)>=2 and all(r['chars']<=30 and r['text'] for r in chunk_records))
+  check('chunks require chunk_chars',upload('quoted.csv',{'result_format':'chunks'})[0]==400 and request(f'/v1/extractions/{jsonljob}/result?format=chunks')[0]==404)
   _,j=upload('flexible.tsv',callback=f'http://127.0.0.1:{hook_port}/hook');hookjob=j['id'];wait(hookjob)
   deadline=time.time()+10
   while not received and time.time()<deadline:time.sleep(.1)
