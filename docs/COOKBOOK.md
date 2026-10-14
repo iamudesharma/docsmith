@@ -210,6 +210,34 @@ Windows cut on character boundaries, overlap defaults to `chunk_chars / 8`, and 
 whole lines unless a single row exceeds the window (use `format=jsonl` for row-level records).
 Chunking is off by default and writes no artifact when unset.
 
+## Watch a folder (drop-in ingestion)
+
+```sh
+DOC_WATCH_DIR=/srv/inbox DOC_REBUILD=1 ./run.sh
+# or in config.json:
+#   "watch_dir": "/srv/inbox",
+#   "watch_options": {"ocr": true},
+#   "watch_tenant": "tenant-a"
+cp report.pdf /srv/inbox/           # picked up once the writer stops (~1-2 s)
+curl -s "$BASE/v1/extractions?state=completed" | python3 -m json.tool | head
+ls /srv/inbox/processed/            # source file moved here after queueing
+```
+
+Files that cannot be queued (queue full, disk quota) stay in the inbox and retry.
+
+## Native S3 upload
+
+```sh
+DOC_S3='{"bucket":"my-bucket","prefix":"results","region":"eu-west-1"}' \
+AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... DOC_REBUILD=1 ./run.sh
+# -> after each completed job: PUT /<bucket>/results/<job>/result.<format>
+```
+
+`upload_archive: true` also ships `<job>/archive.zip`. For S3-compatible servers (MinIO,
+Ceph) add `"endpoint": "http://127.0.0.1:9000", "path_style": true`. Signing is AWS
+SigV4 (HMAC-SHA256); credentials can also live in the config (`access_key`/`secret_key`/
+`session_token`). `sink_command` takes precedence when both are configured.
+
 ## Cancel, delete, retry
 
 ```sh

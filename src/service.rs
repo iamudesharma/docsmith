@@ -47,6 +47,21 @@ pub struct Config {
     /// Example: `aws s3 cp {result} s3://bucket/results/{id}.{format}`.
     #[serde(default)]
     pub sink_command: Option<String>,
+    /// Directory polled for new files; a file whose size/mtime stops changing is ingested as
+    /// a job (tenant `local`) and moved to `<watch_dir>/processed/`.
+    #[serde(default)]
+    pub watch_dir: Option<PathBuf>,
+    /// Options applied to watched files (for example `{"ocr": true}`).
+    #[serde(default)]
+    pub watch_options: Options,
+    /// Tenant that owns watched jobs (default `local`).
+    #[serde(default)]
+    pub watch_tenant: Option<String>,
+    /// Native S3 upload of result artifacts after completion (alternative to `sink_command`;
+    /// `sink_command` wins when both are configured). Credentials fall back to
+    /// `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`.
+    #[serde(default)]
+    pub s3: Option<crate::s3::S3Config>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -58,9 +73,15 @@ impl Default for Config {
             webhook_secret: None,
             webhook_allow_private: false,
             sink_command: None,
+            watch_dir: None,
+            watch_options: Options::default(),
+            watch_tenant: None,
+            s3: None,
         }
     }
 }
+/// Last (size, mtime) per watched file; a stable pair means the writer finished.
+type WatchSeen = Arc<Mutex<HashMap<PathBuf, (u64, Option<std::time::SystemTime>)>>>;
 #[derive(Clone)]
 pub struct App {
     pub config: Arc<Config>,
@@ -68,6 +89,7 @@ pub struct App {
     running: Arc<Mutex<HashMap<String, u32>>>,
     provider_fingerprint: String,
     started_at: i64,
+    watch_seen: WatchSeen,
 }
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Job {
@@ -181,6 +203,7 @@ impl App {
             running: Arc::new(Mutex::new(HashMap::new())),
             provider_fingerprint: extract::hash(providers::identity().to_string().as_bytes()),
             started_at: epoch(),
+            watch_seen: Arc::new(Mutex::new(HashMap::new())),
         })
     }
     fn tenant(&self, headers: &HeaderMap) -> ApiResult<String> {
@@ -415,9 +438,11 @@ impl App {
     /// Run the configured `sink_command` once per completed job (for example an upload to
     /// object storage). Failures retry three times; the log stays in the job directory.
     async fn sink_cycle(&self) {
-        let Some(command) = self.config.sink_command.clone() else {
+        let command = self.config.sink_command.clone();
+        let s3 = self.config.s3.clone();
+        if command.is_none() && s3.is_none() {
             return;
-        };
+        }
         let pending: Vec<(String, String)> = {
             let db = self.db.lock().unwrap();
             let mut statement = match db.prepare(
@@ -470,12 +495,20 @@ impl App {
         for (job_id, filename, state, attempts) in due {
             let dir = self.dir(&job_id);
             let command = command.clone();
+            let s3 = s3.clone();
             let id = job_id.clone();
-            let outcome = tokio::task::spawn_blocking(move || {
-                run_sink(&command, &id, &state, &filename, &dir)
-            })
-            .await
-            .unwrap_or_else(|e| Err(e.to_string()));
+            let outcome =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+                    match (&command, &s3) {
+                        (Some(command), _) => run_sink(command, &id, &state, &filename, &dir),
+                        (None, Some(s3)) => upload_to_s3(s3, &id, &dir)
+                            .map(|_| ())
+                            .map_err(|e| format!("{e:#}")),
+                        (None, None) => Ok(()),
+                    }
+                })
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
             let db = self.db.lock().unwrap();
             let updated = match outcome {
                 Ok(()) => db.execute(
@@ -500,10 +533,124 @@ impl App {
             [],
         );
     }
+    /// Ingest files dropped into `watch_dir`: a file whose size/mtime is unchanged since the
+    /// previous scan is staged and queued (tenant `local`), then moved to `processed/`.
+    async fn watch_cycle(&self) {
+        let Some(dir) = self.config.watch_dir.clone() else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        let mut candidates: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| !name.to_string_lossy().starts_with('.'))
+            })
+            .collect();
+        candidates.sort();
+        for path in candidates {
+            let Ok(metadata) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let stamp = (metadata.len(), metadata.modified().ok());
+            let stable = {
+                let mut seen = self.watch_seen.lock().unwrap();
+                seen.insert(path.clone(), stamp) == Some(stamp)
+            };
+            if !stable {
+                continue;
+            }
+            match self.ingest_watched(&path).await {
+                Ok(()) => {
+                    self.watch_seen.lock().unwrap().remove(&path);
+                }
+                Err(e) => tracing::info!("watch: {} not ingested yet: {e:#}", path.display()),
+            }
+        }
+    }
+    async fn ingest_watched(&self, path: &std::path::Path) -> Result<()> {
+        let Some(name) = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+        else {
+            return Ok(());
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        let job_dir = self.dir(&id);
+        tokio::fs::create_dir_all(&job_dir).await?;
+        let staged = async {
+            tokio::fs::copy(path, job_dir.join("input")).await?;
+            let digest_path = job_dir.join("input");
+            let digest = tokio::task::spawn_blocking(move || -> Result<String> {
+                use sha2::Digest;
+                use std::io::Read;
+                let mut hasher = sha2::Sha256::new();
+                let mut buffer = vec![0u8; 1 << 20];
+                let mut file = std::fs::File::open(&digest_path)?;
+                loop {
+                    let read = file.read(&mut buffer)?;
+                    if read == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..read]);
+                }
+                Ok(hex::encode(hasher.finalize()))
+            })
+            .await??;
+            let size = tokio::fs::metadata(path).await?.len();
+            let options = self.config.watch_options.clone();
+            let options_json = serde_json::to_string(&options)?;
+            match queue_job(
+                self,
+                self.config.watch_tenant.as_deref().unwrap_or("local"),
+                &job_dir,
+                &id,
+                &name,
+                size,
+                &digest,
+                &options,
+                &options_json,
+                None,
+            ) {
+                Ok(cached) => Ok(cached),
+                Err(e) => {
+                    let _ = tokio::fs::remove_dir_all(&job_dir).await;
+                    anyhow::bail!("{}: {}", e.0, e.2)
+                }
+            }
+        }
+        .await;
+        match staged {
+            Ok(cached) => {
+                if let Some(cached) = cached {
+                    let _ = tokio::fs::remove_dir_all(&job_dir).await;
+                    tracing::info!("watch: {name} matched cached job {cached}");
+                } else {
+                    tracing::info!("watch: queued {name} as {id}");
+                }
+                let processed = path
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .join("processed");
+                tokio::fs::create_dir_all(&processed).await?;
+                tokio::fs::rename(path, unique_target(&processed, &name)).await?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(&job_dir).await;
+                Err(e)
+            }
+        }
+    }
     async fn webhook_worker(self) {
         loop {
             self.webhook_cycle().await;
             self.sink_cycle().await;
+            self.watch_cycle().await;
             tokio::time::sleep(Duration::from_millis(1000)).await;
         }
     }
@@ -783,59 +930,19 @@ async fn upload_inner(
     let options_json = serde_json::to_string(&options).map_err(anyhow::Error::from)?;
     let mut results: Vec<Value> = Vec::new();
     for file in files {
-        atomic_json(
-            &file.dir.join("request.json"),
-            &json!({"id":file.id,"filename":file.filename,"options":options,"limits":app.config.limits,"callback_url":callback_url}),
-        )?;
-        let key = extract::hash(
-            format!(
-                "{}:{}:{}:{}:{}",
-                hex::encode(file.digest.finalize()),
-                file.filename,
-                options_json,
-                extract::parser_fingerprint(),
-                app.provider_fingerprint
-            )
-            .as_bytes(),
-        );
-        let cached = {
-            let db = app.db.lock().unwrap();
-            let cached:Option<String>=db.query_row("SELECT id FROM jobs WHERE tenant=?1 AND cache_key=?2 AND state='completed' ORDER BY created_at DESC LIMIT 1",params![tenant,key],|r|r.get(0)).ok();
-            let cached = if options.vision && std::env::var("DOC_VLM_REVISION").is_err() {
-                None
-            } else {
-                cached
-            };
-            if cached.is_none() {
-                let queued: i64 = db.query_row(
-                    "SELECT count(*) FROM jobs WHERE state IN ('queued','running')",
-                    [],
-                    |r| r.get(0),
-                )?;
-                if queued >= app.config.limits.queued_jobs as i64 {
-                    return Err(error(
-                        StatusCode::TOO_MANY_REQUESTS,
-                        "queue_full",
-                        "Job queue full",
-                    ));
-                }
-                // Quota applies to newly stored jobs; cache hits above are free. Retained bytes
-                // include this upload plus everything already kept for the tenant.
-                let used = tenant_usage(&app.config.data_dir, &db, tenant)?;
-                if app.config.limits.disk_bytes > 0
-                    && used.saturating_add(file.size) > app.config.limits.disk_bytes
-                {
-                    return Err(error(
-                        StatusCode::INSUFFICIENT_STORAGE,
-                        "quota_exceeded",
-                        "Tenant disk quota exceeded; DELETE completed jobs or raise disk_bytes",
-                    ));
-                }
-                db.execute("INSERT INTO jobs(id,tenant,filename,cache_key,options,state,created_at,updated_at,callback_url) VALUES(?1,?2,?3,?4,?5,'queued',?6,?6,?7)",params![file.id,tenant,file.filename,key,options_json,epoch(),callback_url])?;
-            }
-            cached
-        };
-        match cached {
+        let digest_hex = hex::encode(file.digest.finalize());
+        match queue_job(
+            app,
+            tenant,
+            &file.dir,
+            &file.id,
+            &file.filename,
+            file.size,
+            &digest_hex,
+            &options,
+            &options_json,
+            callback_url.as_deref(),
+        )? {
             Some(cached) => {
                 tokio::fs::remove_dir_all(&file.dir).await?;
                 results.push(json!({"id":cached,"cached":true,"filename":file.filename}));
@@ -857,6 +964,104 @@ async fn upload_inner(
         )
             .into_response())
     }
+}
+
+/// `<dir>/<name>` or `<dir>/<stem>.<n><ext>` so watched files never overwrite each other.
+fn unique_target(dir: &std::path::Path, name: &str) -> PathBuf {
+    let candidate = dir.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let path = std::path::Path::new(name);
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| name.to_owned());
+    let ext = path
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    for n in 1..1000 {
+        let candidate = dir.join(format!("{stem}.{n}{ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("{stem}.{}{ext}", epoch()))
+}
+
+/// Shared job-queueing path for uploads and the folder watcher: writes `request.json`,
+/// computes the cache key and enforces queue/disk limits. `Ok(Some(id))` means a completed
+/// job with the same content+options exists and the caller should drop the staged directory.
+#[allow(clippy::too_many_arguments)]
+fn queue_job(
+    app: &App,
+    tenant: &str,
+    dir: &std::path::Path,
+    id: &str,
+    filename: &str,
+    size: u64,
+    digest_hex: &str,
+    options: &Options,
+    options_json: &str,
+    callback_url: Option<&str>,
+) -> ApiResult<Option<String>> {
+    atomic_json(
+        &dir.join("request.json"),
+        &json!({"id":id,"filename":filename,"options":options,"limits":app.config.limits,"callback_url":callback_url}),
+    )?;
+    let key = extract::hash(
+        format!(
+            "{}:{}:{}:{}:{}",
+            digest_hex,
+            filename,
+            options_json,
+            extract::parser_fingerprint(),
+            app.provider_fingerprint
+        )
+        .as_bytes(),
+    );
+    let db = app.db.lock().unwrap();
+    let cached: Option<String> = db
+        .query_row(
+            "SELECT id FROM jobs WHERE tenant=?1 AND cache_key=?2 AND state='completed' ORDER BY created_at DESC LIMIT 1",
+            params![tenant, key],
+            |r| r.get(0),
+        )
+        .ok();
+    let cached = if options.vision && std::env::var("DOC_VLM_REVISION").is_err() {
+        None
+    } else {
+        cached
+    };
+    if cached.is_none() {
+        let queued: i64 = db.query_row(
+            "SELECT count(*) FROM jobs WHERE state IN ('queued','running')",
+            [],
+            |r| r.get(0),
+        )?;
+        if queued >= app.config.limits.queued_jobs as i64 {
+            return Err(error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "queue_full",
+                "Job queue full",
+            ));
+        }
+        // Quota applies to newly stored jobs; cache hits above are free. Retained bytes
+        // include this upload plus everything already kept for the tenant.
+        let used = tenant_usage(&app.config.data_dir, &db, tenant)?;
+        if app.config.limits.disk_bytes > 0
+            && used.saturating_add(size) > app.config.limits.disk_bytes
+        {
+            return Err(error(
+                StatusCode::INSUFFICIENT_STORAGE,
+                "quota_exceeded",
+                "Tenant disk quota exceeded; DELETE completed jobs or raise disk_bytes",
+            ));
+        }
+        db.execute("INSERT INTO jobs(id,tenant,filename,cache_key,options,state,created_at,updated_at,callback_url) VALUES(?1,?2,?3,?4,?5,'queued',?6,?6,?7)",params![id,tenant,filename,key,options_json,epoch(),callback_url])?;
+    }
+    Ok(cached)
 }
 
 pub fn validate_options(options: &Options) -> ApiResult<()> {
@@ -1106,6 +1311,74 @@ fn is_private_host(host: &str) -> bool {
         Err(_) => false,
     }
 }
+/// Upload the job's result artifact (and optionally the zip archive) to S3 using static
+/// credentials from config or the standard `AWS_*` environment variables.
+fn upload_to_s3(
+    config: &crate::s3::S3Config,
+    job_id: &str,
+    dir: &std::path::Path,
+) -> Result<Vec<String>> {
+    let access_key = config
+        .access_key
+        .clone()
+        .or_else(|| std::env::var("AWS_ACCESS_KEY_ID").ok())
+        .context("s3.access_key or AWS_ACCESS_KEY_ID is required")?;
+    let secret_key = config
+        .secret_key
+        .clone()
+        .or_else(|| std::env::var("AWS_SECRET_ACCESS_KEY").ok())
+        .context("s3.secret_key or AWS_SECRET_ACCESS_KEY is required")?;
+    let session_token = config
+        .session_token
+        .clone()
+        .or_else(|| std::env::var("AWS_SESSION_TOKEN").ok());
+    if config.bucket.trim().is_empty() {
+        anyhow::bail!("s3.bucket is required");
+    }
+    let base = crate::s3::S3Upload {
+        bucket: config.bucket.trim(),
+        prefix: &config.prefix,
+        region: if config.region.trim().is_empty() {
+            "us-east-1"
+        } else {
+            config.region.trim()
+        },
+        endpoint: config.endpoint.as_deref(),
+        path_style: config.path_style,
+        access_key: &access_key,
+        secret_key: &secret_key,
+        session_token: session_token.as_deref(),
+    };
+    let prefix = normalized_prefix(&config.prefix);
+    let (result, _format) = result_artifact(dir);
+    let name = result
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "result.json".into());
+    let mut uploaded = vec![crate::s3::put_object(
+        &base,
+        &format!("{prefix}{job_id}/{name}"),
+        &result,
+    )?];
+    if config.upload_archive {
+        let archive = build_archive(dir, false)?;
+        uploaded.push(crate::s3::put_object(
+            &base,
+            &format!("{prefix}{job_id}/archive.zip"),
+            &archive,
+        )?);
+    }
+    Ok(uploaded)
+}
+fn normalized_prefix(prefix: &str) -> String {
+    let trimmed = prefix.trim_matches('/');
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{trimmed}/")
+    }
+}
+
 /// Stored artifact matching the job's `result_format` (falls back to canonical JSON).
 fn result_artifact(dir: &std::path::Path) -> (PathBuf, String) {
     let format = std::fs::read(dir.join("request.json"))
