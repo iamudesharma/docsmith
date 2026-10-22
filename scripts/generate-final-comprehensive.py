@@ -419,13 +419,13 @@ def page_diagrams():
             t(field)
     # relationships
     draw.line((MARGIN + 250, 404, MARGIN + 400, 404), fill=PURPLE, width=2)
-    mixed(draw, (MARGIN + 300, 380), "1..*", 14, PURPLE, True, "mm")
+    mixed(draw, (MARGIN + 300, 380), "1..*", 28, PURPLE, True, "mm")
     t("CUSTOMER 1..* INVOICE")
     draw.line((MARGIN + 660, 416, MARGIN + 800, 416), fill=PURPLE, width=2)
-    mixed(draw, (MARGIN + 730, 392), "1..*", 14, PURPLE, True, "mm")
+    mixed(draw, (MARGIN + 730, 392), "1..*", 28, PURPLE, True, "mm")
     t("INVOICE 1..* LINE_ITEM")
     draw.line((MARGIN + 940, 492, MARGIN + 940, 570), fill=PURPLE, width=2)
-    mixed(draw, (MARGIN + 950, 525), "1..*", 14, PURPLE, True)
+    mixed(draw, (MARGIN + 950, 525), "1..*", 28, PURPLE, True)
     t("PRODUCT 1..* LINE_ITEM")
 
     mixed(draw, (MARGIN, 740), t("Legend / संकेत"), 20, INK, True)
@@ -727,7 +727,7 @@ def main():
                         ["उदेश शर्मा", "7534469", "PASSED", "79.33%", "476 / 600", "सत्यापित", "STATE EDUCATION BOARD", "B2", "A1"],
                         ["INV-2026-0042", "51,330.00", "Doc Extractor Supplies", "GSTIN", "PAID", "Fifty-one thousand"],
                         ["CUSTOMER", "INVOICE", "LINE_ITEM", "PRODUCT", "1..*", "Canonical JSON", "Data Model"],
-                        ["Q1", "Q4", "96% accuracy", "Language mix", "Hindi", "English", "Summary table"],
+                        ["Q1", "Q4", "96%", "Language mix", "Hindi", "English", "Summary table"],
                         ["E = mc²", "क्षेत्रफल = πr²", "H2O + CO2", "1/2 + 1/3 = 5/6", "Merged total row", "Footnotes"],
                         ["Compliance Inspection", "Dr. Anita Verma", "SATISFACTORY", "Yes", "No", "INSPECTED"],
                     ],

@@ -1676,6 +1676,70 @@ fn scanned_table_pages_promote_printed_grids_to_structured_tables() {
 }
 
 #[test]
+fn refinement_recovers_formulas_stamps_and_cardinality() {
+    if !doc_extractor::providers::available("tesseract") || !pdftoppm_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = extract::extract(
+        std::path::Path::new("fixtures/final-comprehensive.pdf"),
+        "final-comprehensive.pdf",
+        dir.path(),
+        Options {
+            ocr: true,
+            languages: "eng+hin".into(),
+            ocr_auto_rotate: true,
+            pages: Some("3,5,6".into()),
+            ..Options::default()
+        },
+        Limits {
+            ocr_threads: 1,
+            ..Default::default()
+        },
+        "ocr-refine",
+    )
+    .unwrap();
+    let text = d
+        .units
+        .iter()
+        .flat_map(|unit| unit.blocks.iter())
+        .map(|block| block.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Printed math glyphs are recovered from shapes, not from a symbol-capable text model.
+    assert!(text.contains("E = mc²"), "superscript formula: {text}");
+    assert!(
+        text.contains("क्षेत्रफल = πr²"),
+        "pi glyph and superscript: {text}"
+    );
+    assert!(text.contains("H2O + CO2"), "chemical glyphs: {text}");
+    assert!(
+        text.contains("1/2 + 1/3 = 5/6"),
+        "line-level formula re-read: {text}"
+    );
+    assert!(
+        text.contains("1..*"),
+        "diagram cardinality from a binarized crop: {text}"
+    );
+    // Seal text is recovered from text bands inside the ring (or by the primary pass on a
+    // lucky segmentation); either way it must be OCR evidence, not native content.
+    let stamp = d
+        .units
+        .iter()
+        .flat_map(|unit| unit.blocks.iter())
+        .find(|block| block.text.to_uppercase().contains("INSPECTED"))
+        .expect("seal text recovered");
+    assert_eq!(stamp.provenance.method, "ocr");
+    // Refined text stays OCR evidence, never native content.
+    assert!(d
+        .units
+        .iter()
+        .flat_map(|unit| unit.blocks.iter())
+        .filter(|block| block.attributes.get("ocr_refined").is_some())
+        .all(|block| block.provenance.method == "ocr"));
+}
+
+#[test]
 fn absent_smoldocling_server_falls_back_to_tesseract() {
     if !doc_extractor::providers::available("tesseract") {
         return;

@@ -3,22 +3,22 @@
   "status": "partial",
   "pages": 3,
   "expected_pages": 3,
-  "elapsed_ms": 29418,
+  "elapsed_ms": 20250,
   "units": [
     {
       "page": 1,
       "name": "Page 1",
-      "ocr_chars": 875,
+      "ocr_chars": 887,
       "truth_chars": 715,
-      "cer": 0.1161,
-      "wer": 0.3934,
+      "cer": 0.1287,
+      "wer": 0.4016,
       "char_recall": 0.9119,
-      "char_precision": 0.9631,
+      "char_precision": 0.9504,
       "word_recall": 0.6393,
-      "word_precision": 0.624,
+      "word_precision": 0.619,
       "devanagari_chars": 255,
-      "latin_chars": 359,
-      "blocks": 18,
+      "latin_chars": 368,
+      "blocks": 19,
       "table_blocks": 1,
       "errors": [],
       "warnings": [
@@ -88,7 +88,7 @@
           "found": true
         }
       ],
-      "text": "॥ सत्यमेव जयते ॥ माध्यमिक शिक्षा परिषद, उत्तर प्रदेश Board of High School and Intermediate Education प्रमाणपत्र-सह-अंकतालिका | CERTIFICATE-CUM-MARKS SHEET नाम / Name: उदेश शर्मा (Udesh Sharma) पिता का नाम / Father's Name: श्रीकांत शर्मा (Shrikant Sharma) माता का नाम / Mother's Name: इंद्रावती gt (Indrawati Devi) अनुक्रमांक | Roll No.: 7534469 जन्म तिथि / Date of Birth: 17 November 2000 विद्यालय / School: ST MARY'S C GORAKHPUR विषय / Subject अधिकतम / Max olka pau कुल Total Avi) Grade हिंदी / Hindi 0 40 28 co B2 अंग्रेज़ी English 0 so 29 79 81 गणित / Mathematics wo 52 29 81 A2 विज्ञान / Science 100 Ee 28 les At सामाजिक Science विज्ञान / Social jo Eee 28 les At चित्रकला / Drawing 10 53 29 82 A2 परिणाम / Result: PASSED यह प्रमाणपत्र केवल शैक्षणिक परीक्षण के लिए है। / This certificate is for educational testing only. VERIFIED सत्यापित 7534469 - 2497006 - TEST DOCUMENT"
+      "text": "॥ सत्यमेव जयते ॥ माध्यमिक शिक्षा परिषद, उत्तर प्रदेश Board of High School and Intermediate Education प्रमाणपत्र-सह-अंकतालिका | CERTIFICATE-CUM-MARKS SHEET नाम / Name: उदेश शर्मा (Udesh Sharma) पिता का नाम / Father's Name: श्रीकांत शर्मा (Shrikant Sharma) माता का नाम / Mother's Name: इंद्रावती gt (Indrawati Devi) अनुक्रमांक | Roll No.: 7534469 जन्म तिथि / Date of Birth: 17 November 2000 विद्यालय / School: ST MARY'S C GORAKHPUR विषय / Subject अधिकतम / Max olka pau कुल Total Avi) Grade हिंदी / Hindi 0 40 28 co B2 अंग्रेज़ी English 0 so 29 79 81 गणित / Mathematics wo 52 29 81 A2 विज्ञान / Science 100 Ee 28 les At सामाजिक Science विज्ञान / Social jo Eee 28 les At चित्रकला / Drawing 10 53 29 82 A2 परिणाम / Result: PASSED यह प्रमाणपत्र केवल शैक्षणिक परीक्षण के लिए है। / This certificate is for educational testing only. F/ VERIFIED VERIFIED सत्यापित 7534469 - 2497006 - TEST DOCUMENT"
     },
     {
       "page": 2,
@@ -158,17 +158,17 @@
     {
       "page": 3,
       "name": "Page 3",
-      "ocr_chars": 603,
+      "ocr_chars": 678,
       "truth_chars": 548,
-      "cer": 0.2354,
-      "wer": 0.1828,
-      "char_recall": 0.8741,
-      "char_precision": 0.9917,
+      "cer": 0.2536,
+      "wer": 0.2366,
+      "char_recall": 0.9526,
+      "char_precision": 0.9685,
       "word_recall": 0.8387,
-      "word_precision": 0.8764,
-      "devanagari_chars": 194,
-      "latin_chars": 286,
-      "blocks": 11,
+      "word_precision": 0.8125,
+      "devanagari_chars": 216,
+      "latin_chars": 321,
+      "blocks": 14,
       "table_blocks": 1,
       "errors": [],
       "warnings": [
@@ -206,19 +206,19 @@
           "found": false
         }
       ],
-      "text": "m अनुपालन प्रमाण / COMPLIANCE CERTIFICATE यह प्रमाणित किया जाता है कि यह दस्तावेज़ OCR परीक्षण के लिए तैयार है। इसमें हिंदी और अंग्रेज़ी दोनों भाषाओं का पाठ, एक तालिका और आधिकारिक मुद्रा है। This is to certify that the document is ready for OCR testing. It contains Hindi and English text, a table and an official stamp. The page was scanned sideways to exercise automatic rotation. degrees 90 3 English Hindi + Value / मान / पुनर्प्राप्त Recovered qf Complete / सत्यापित Verified / Status / स्थिति प्रमाणित करने वाला अधिकारी / Certifying Officer रजिस्ट्रार / Registrar है) TEST ONLY - NO LEGAL VALIDITY"
+      "text": "अनुपालन प्रमाण / COMPLIANCE CERTIFICATE यह प्रमाणित किया जाता है कि यह दस्तावेज़ OCR परीक्षण के लिए तैयार है। इसमें हिंदी और अंग्रेज़ी दोनों भाषाओं का पाठ, एक तालिका और आधिकारिक मुद्रा है। This is to certify that the document is ready for OCR testing. It contains Hindi and English text, a table and an official stamp. The page was scanned sideways to exercise automatic rotation. Parameter / मापदंड degrees 90 English Hindi + Value / मान gutta Recovered / पूर्ण Complete / सत्यापित Verified / Status / स्थिति Language / भाषा Pages / पृष्ठ Rotation / घूर्णन प्रमाणित करने वाला अधिकारी / Certifying Officer रजिस्ट्रार / Registrar TEST ONLY - NO LEGAL VALIDITY iz t= है हैण्ण है ह"
     }
   ],
   "overall": {
-    "cer": 0.0898,
-    "wer": 0.23,
-    "char_recall": 0.9501,
-    "char_precision": 0.9925,
+    "cer": 0.0978,
+    "wer": 0.245,
+    "char_recall": 0.9643,
+    "char_precision": 0.9795,
     "word_recall": 0.7975,
-    "word_precision": 0.7896,
-    "devanagari_ocr": 985,
+    "word_precision": 0.7743,
+    "devanagari_ocr": 1007,
     "devanagari_truth": 1047,
-    "latin_ocr": 1165,
+    "latin_ocr": 1209,
     "latin_truth": 1180,
     "markers_found": 27,
     "markers_total": 32,
@@ -233,7 +233,7 @@
     "Only 8/12 expected table tokens were found; small grid text is the weakest region.",
     "Missing critical fields: 83, A1, Hindi + English, 90 degrees, TESTED"
   ],
-  "elapsed_wall_s": 29.75,
+  "elapsed_wall_s": 20.52,
   "options": {
     "ocr": true,
     "languages": "eng+hin",

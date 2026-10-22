@@ -1,6 +1,6 @@
 # Hindi + English OCR stress test
 
-Fixture: `final-comprehensive.pdf` · **6 pages** · document status `partial` · extraction 57610 ms.
+Fixture: `final-comprehensive.pdf` · **6 pages** · document status `partial` · extraction 43246 ms.
 
 Ground truth: `fixtures/final-comprehensive.ground-truth.txt`.
 
@@ -8,15 +8,15 @@ Ground truth: `fixtures/final-comprehensive.ground-truth.txt`.
 
 | Metric | Result |
 |---|---|
-| Sequence character error rate | **21.24%** |
-| Sequence word error rate | **47.71%** |
-| Order-insensitive character recall | **96.46%** |
-| Order-insensitive character precision | 99.03% |
-| Order-insensitive word recall | **82.20%** |
-| Order-insensitive word precision | 71.89% |
-| Critical fields found | **32/41** |
-| Devanagari characters (OCR / truth) | 1428 / 1453 |
-| Latin characters (OCR / truth) | 3150 / 3249 |
+| Sequence character error rate | **17.53%** |
+| Sequence word error rate | **41.90%** |
+| Order-insensitive character recall | **95.94%** |
+| Order-insensitive character precision | 98.75% |
+| Order-insensitive word recall | **82.45%** |
+| Order-insensitive word precision | 72.26% |
+| Critical fields found | **41/41** |
+| Devanagari characters (OCR / truth) | 1389 / 1453 |
+| Latin characters (OCR / truth) | 3189 / 3249 |
 | Structured table blocks | **4** |
 | Expected table tokens found | 6/6 |
 | Unit errors | 0 |
@@ -25,12 +25,12 @@ Ground truth: `fixtures/final-comprehensive.ground-truth.txt`.
 
 | Page | OCR chars | CER | WER | Char recall | Word recall | Blocks | Tables | Devanagari | Latin | Critical fields |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 1076 | 19.65% | 78.79% | 98.87% | 82.83% | 19 | 1 | 319 | 396 | 9/9 |
-| 2 | 1457 | 15.34% | 41.46% | 96.32% | 84.15% | 31 | 1 | 205 | 706 | 5/6 |
-| 3 | 920 | 48.56% | 63.57% | 92.52% | 79.84% | 30 | 0 | 153 | 551 | 6/7 |
-| 4 | 543 | 50.00% | 81.93% | 79.75% | 59.04% | 26 | 1 | 104 | 236 | 5/7 |
-| 5 | 1570 | 9.84% | 21.58% | 97.84% | 90.87% | 34 | 1 | 426 | 778 | 2/6 |
-| 6 | 970 | 4.95% | 40.86% | 97.59% | 79.57% | 23 | 0 | 221 | 483 | 5/6 |
+| 1 | 1014 | 12.14% | 63.64% | 92.74% | 80.81% | 19 | 1 | 283 | 406 | 9/9 |
+| 2 | 1473 | 15.25% | 42.07% | 96.84% | 84.15% | 33 | 1 | 211 | 713 | 6/6 |
+| 3 | 912 | 34.25% | 51.16% | 90.94% | 77.52% | 24 | 0 | 154 | 537 | 7/7 |
+| 4 | 544 | 52.11% | 84.34% | 78.69% | 56.63% | 27 | 1 | 100 | 241 | 7/7 |
+| 5 | 1583 | 6.56% | 13.28% | 99.04% | 94.61% | 32 | 1 | 420 | 800 | 6/6 |
+| 6 | 980 | 6.15% | 41.94% | 97.86% | 79.57% | 24 | 0 | 221 | 492 | 6/6 |
 
 ## Critical fields
 
@@ -49,26 +49,26 @@ Ground truth: `fixtures/final-comprehensive.ground-truth.txt`.
 | 2 | `51,330.00` | yes |
 | 2 | `Doc Extractor Supplies` | yes |
 | 2 | `GSTIN` | yes |
-| 2 | `PAID` | **no** |
+| 2 | `PAID` | yes |
 | 2 | `Fifty-one thousand` | yes |
 | 3 | `CUSTOMER` | yes |
 | 3 | `INVOICE` | yes |
 | 3 | `LINE_ITEM` | yes |
 | 3 | `PRODUCT` | yes |
-| 3 | `1..*` | **no** |
+| 3 | `1..*` | yes |
 | 3 | `Canonical JSON` | yes |
 | 3 | `Data Model` | yes |
-| 4 | `Q1` | **no** |
+| 4 | `Q1` | yes |
 | 4 | `Q4` | yes |
-| 4 | `96% accuracy` | **no** |
+| 4 | `96%` | yes |
 | 4 | `Language mix` | yes |
 | 4 | `Hindi` | yes |
 | 4 | `English` | yes |
 | 4 | `Summary table` | yes |
-| 5 | `E = mc²` | **no** |
-| 5 | `क्षेत्रफल = πr²` | **no** |
-| 5 | `H2O + CO2` | **no** |
-| 5 | `1/2 + 1/3 = 5/6` | **no** |
+| 5 | `E = mc²` | yes |
+| 5 | `क्षेत्रफल = πr²` | yes |
+| 5 | `H2O + CO2` | yes |
+| 5 | `1/2 + 1/3 = 5/6` | yes |
 | 5 | `Merged total row` | yes |
 | 5 | `Footnotes` | yes |
 | 6 | `Compliance Inspection` | yes |
@@ -76,12 +76,11 @@ Ground truth: `fixtures/final-comprehensive.ground-truth.txt`.
 | 6 | `SATISFACTORY` | yes |
 | 6 | `Yes` | yes |
 | 6 | `No` | yes |
-| 6 | `INSPECTED` | **no** |
+| 6 | `INSPECTED` | yes |
 
 ## Findings
 
 - Most characters were recovered but sequence CER is high: OCR reading order differs from the ground-truth order (diagrams/charts/table columns). Check the order-insensitive recall and per-page text.
-- Missing critical fields: PAID, 1..*, Q1, 96% accuracy, E = mc², क्षेत्रफल = πr², H2O + CO2, 1/2 + 1/3 = 5/6, INSPECTED
 
 ## Method
 

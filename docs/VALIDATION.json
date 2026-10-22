@@ -41,5 +41,5 @@
  "accuracy_evidence": "docs/ACCURACY.md / docs/accuracy-results.json (13 October 2026: cells 29/29, PDF pages 138/138, content checks 25/25, English OCR CER 0 over 5 raster cases)",
  "concurrency_report": "docs/CONCURRENCY.md / docs/concurrency-results.json (2026-10-21: 20 synthetic PDFs / 316 pages, 3 repetitions per config; default median 22.5 s, tuned 17.1 s; 20/20 documents and all page/table/OCR checks pass)",
  "hindi_english_ocr": "fixtures/hindi-english-complex.pdf + .ground-truth.txt; 3 pages, 0 unit errors, CER 3.94%, WER 19.50%, 29/32 fields, page 2 CER 0.27%; scanned tables not promoted to structured Table blocks. Report: docs/hindi-english-ocr.md",
- "final_comprehensive_ocr": "fixtures/final-comprehensive.pdf + .ground-truth.txt; 6 pages, 0 unit failures, 6 page images, 4 structured tables (printed grid rules), 6/6 table tokens; order-insensitive char recall 96.46%, word recall 82.20%, sequence CER 21.24% (17.05% at DOC_OCR_DPI=200), 32/41 fields. Report: docs/final-comprehensive-ocr.md; manual copies in ~/Downloads."
+ "final_comprehensive_ocr": "6 pages, 0 unit failures, 6 page images, 4 structured tables, 6/6 table tokens; 41/41 critical fields (E = mc², πr², H2O + CO2, 1/2 + 1/3 = 5/6, PAID, INSPECTED, 1..*); char recall 95.94%, word recall 82.45%, sequence CER 17.53%, WER 41.90%. Report: docs/final-comprehensive-ocr.md."
 }

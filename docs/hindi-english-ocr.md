@@ -1,6 +1,6 @@
 # Hindi + English OCR stress test
 
-Fixture: `hindi-english-complex.pdf` · **3 pages** · document status `partial` · extraction 29418 ms.
+Fixture: `hindi-english-complex.pdf` · **3 pages** · document status `partial` · extraction 20250 ms.
 
 Ground truth: `/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/hindi-english-complex.ground-truth.txt`.
 
@@ -8,15 +8,15 @@ Ground truth: `/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/hindi-english-c
 
 | Metric | Result |
 |---|---|
-| Sequence character error rate | **8.98%** |
-| Sequence word error rate | **23.00%** |
-| Order-insensitive character recall | **95.01%** |
-| Order-insensitive character precision | 99.25% |
+| Sequence character error rate | **9.78%** |
+| Sequence word error rate | **24.50%** |
+| Order-insensitive character recall | **96.43%** |
+| Order-insensitive character precision | 97.95% |
 | Order-insensitive word recall | **79.75%** |
-| Order-insensitive word precision | 78.96% |
+| Order-insensitive word precision | 77.43% |
 | Critical fields found | **27/32** |
-| Devanagari characters (OCR / truth) | 985 / 1047 |
-| Latin characters (OCR / truth) | 1165 / 1180 |
+| Devanagari characters (OCR / truth) | 1007 / 1047 |
+| Latin characters (OCR / truth) | 1209 / 1180 |
 | Structured table blocks | **3** |
 | Expected table tokens found | 8/12 |
 | Unit errors | 0 |
@@ -25,9 +25,9 @@ Ground truth: `/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/hindi-english-c
 
 | Page | OCR chars | CER | WER | Char recall | Word recall | Blocks | Tables | Devanagari | Latin | Critical fields |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 875 | 11.61% | 39.34% | 91.19% | 63.93% | 18 | 1 | 255 | 359 | 13/15 |
+| 1 | 887 | 12.87% | 40.16% | 91.19% | 63.93% | 19 | 1 | 255 | 368 | 13/15 |
 | 2 | 1401 | 0.18% | 14.59% | 99.91% | 88.11% | 23 | 1 | 536 | 520 | 10/10 |
-| 3 | 603 | 23.54% | 18.28% | 87.41% | 83.87% | 11 | 1 | 194 | 286 | 4/7 |
+| 3 | 678 | 25.36% | 23.66% | 95.26% | 83.87% | 14 | 1 | 216 | 321 | 4/7 |
 
 ## Critical fields
 
