@@ -71,8 +71,14 @@ enum Commands {
     },
 }
 fn main() -> anyhow::Result<()> {
+    let filter = if std::env::var_os("RUST_LOG").is_some() {
+        tracing_subscriber::EnvFilter::from_default_env()
+    } else {
+        // Keep dependency noise quiet but always expose the extraction/timing trail.
+        tracing_subscriber::EnvFilter::new("doc_extractor=info")
+    };
     let builder = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .with_writer(std::io::stderr);
     if std::env::var("DOC_LOG_JSON").is_ok_and(|value| value == "1" || value == "true") {
         builder.json().init();
@@ -155,6 +161,7 @@ fn main() -> anyhow::Result<()> {
             std::fs::copy(input, output.join("input"))?;
             // CLI uses exactly the service's isolated worker path, including resource limits and process tree cleanup.
             run_cli_worker(&output)?;
+            print_page_timings(&output);
             let artifact = match opts.result_format.as_str() {
                 "markdown" | "md" => "result.md",
                 "text" | "txt" => "result.txt",
@@ -195,6 +202,63 @@ fn main() -> anyhow::Result<()> {
     }
     Ok(())
 }
+/// Print the per-page timing trail from `timings.json` to stderr. stdout stays reserved for the
+/// artifact path or piped bytes.
+fn print_page_timings(output: &std::path::Path) {
+    let Ok(bytes) = std::fs::read(output.join("timings.json")) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return;
+    };
+    let Some(pages) = value.get("pages") else {
+        return;
+    };
+    let number = |key: &str| {
+        pages
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    if let Some(per_page) = pages.get("per_page").and_then(serde_json::Value::as_array) {
+        eprintln!(
+            "{:>4}  {:<4}  {:<7} {:>9} {:>9} {:>9}  {:>7} {:>6}",
+            "page", "unit", "method", "total", "render", "ocr", "chars", "tables"
+        );
+        for page in per_page {
+            let num = |key: &str| {
+                page.get(key)
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+            };
+            let text = |key: &str| {
+                page.get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("-")
+            };
+            eprintln!(
+                "{:>4}  {:<4}  {:<7} {:>8.2}s {:>8.2}s {:>8.2}s  {:>7} {:>6}",
+                num("page"),
+                text("unit"),
+                text("method"),
+                num("total_ms") as f64 / 1000.0,
+                num("render_ms") as f64 / 1000.0,
+                num("ocr_ms") as f64 / 1000.0,
+                num("chars"),
+                num("tables")
+            );
+        }
+    }
+    eprintln!(
+        "timing: {} pages · {} OCR · {:.1}s page time ({:.1}s OCR) · wall {:.1}s",
+        number("pages"),
+        number("ocr_pages"),
+        number("page_total_ms") as f64 / 1000.0,
+        number("ocr_ms") as f64 / 1000.0,
+        number("wall_ms") as f64 / 1000.0
+    );
+}
+
 fn run_cli_worker(output: &std::path::Path) -> anyhow::Result<()> {
     let limits = Limits::default();
     tokio::runtime::Runtime::new()?.block_on(async {

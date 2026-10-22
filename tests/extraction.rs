@@ -1082,6 +1082,15 @@ fn pdf_parallel_and_sequential_batches_match() {
                 .unwrap();
         value["elapsed_ms"] = serde_json::json!(0);
         value["id"] = serde_json::json!("test");
+        // Wall and per-page timings depend on scheduling; compare the deterministic result.
+        value["metadata"]["timing"] = serde_json::Value::Null;
+        if let Some(units) = value["units"].as_array_mut() {
+            for unit in units {
+                if let Some(object) = unit.as_object_mut() {
+                    object.remove("timing");
+                }
+            }
+        }
         (value, d)
     };
     let (sequential, doc_a) = run(1, "seq");
@@ -1640,6 +1649,9 @@ fn scanned_table_pages_promote_printed_grids_to_structured_tables() {
     )
     .unwrap();
     let unit = &d.units[0];
+    let timing = unit.timing.as_ref().expect("page timing");
+    assert_eq!(timing.method, "ocr");
+    assert!(timing.ocr_ms > 0);
     let table = unit
         .blocks
         .iter()
@@ -1672,6 +1684,31 @@ fn scanned_table_pages_promote_printed_grids_to_structured_tables() {
             .iter()
             .any(|block| block.provenance.method == "inferred" && block.table.is_some()),
         "table proposals stay inferred"
+    );
+}
+
+#[test]
+fn pdf_units_report_per_page_timing() {
+    let d = fixture("digital.pdf", Options::default());
+    assert!(!d.units.is_empty());
+    for unit in &d.units {
+        let timing = unit.timing.as_ref().expect("page timing");
+        assert!(timing.total_ms >= timing.native_ms);
+        assert!(timing.chars > 0);
+        assert!(matches!(
+            timing.method.as_str(),
+            "native" | "ocr" | "hybrid" | "none"
+        ));
+    }
+    let summary = &d.metadata["timing"];
+    assert_eq!(summary["pages"], d.units.len());
+    assert!(summary["native_pages"].as_u64().unwrap_or(0) >= 1);
+    assert_eq!(
+        summary["per_page"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        d.units.len()
     );
 }
 

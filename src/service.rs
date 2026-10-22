@@ -698,6 +698,7 @@ impl App {
                 if let Err(e) = self.set_state(&id, "completed", None) {
                     tracing::error!("{e}");
                 }
+                log_job_timings(&self.dir(&id));
             }
             Err(e) => {
                 let _ = self.set_state(&id, "failed", Some(extract::failure(&e, None)));
@@ -727,6 +728,75 @@ impl App {
         supervise_worker(&dir, &self.config.limits, child).await
     }
 }
+/// Emit the per-page timing trail to the server log after a job completes. The same data is in
+/// the job's `timings.json` and each unit's `timing` object.
+fn log_job_timings(dir: &std::path::Path) {
+    let Ok(bytes) = std::fs::read(dir.join("timings.json")) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return;
+    };
+    let Some(pages) = value.get("pages") else {
+        return;
+    };
+    let job = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("-");
+    let number = |key: &str| {
+        pages
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    tracing::info!(
+        target: "doc_extractor::job",
+        job,
+        pages = number("pages"),
+        native_pages = number("native_pages"),
+        ocr_pages = number("ocr_pages"),
+        hybrid_pages = number("hybrid_pages"),
+        page_total_ms = number("page_total_ms"),
+        ocr_ms = number("ocr_ms"),
+        render_ms = number("render_ms"),
+        wall_ms = number("wall_ms"),
+        "job timing"
+    );
+    let Some(per_page) = pages.get("per_page").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    for page in per_page {
+        let text = |key: &str| {
+            page.get(key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("-")
+        };
+        let number = |key: &str| {
+            page.get(key)
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+        };
+        tracing::info!(
+            target: "doc_extractor::page",
+            job,
+            unit = text("unit"),
+            page = number("page"),
+            method = text("method"),
+            provider = text("provider"),
+            total_ms = number("total_ms"),
+            native_ms = number("native_ms"),
+            images_ms = number("images_ms"),
+            render_ms = number("render_ms"),
+            ocr_ms = number("ocr_ms"),
+            page_image_ms = number("page_image_ms"),
+            chars = number("chars"),
+            tables = number("tables"),
+            "page timing"
+        );
+    }
+}
+
 fn kill_group(pid: u32) {
     #[cfg(unix)]
     if pid > 0 {

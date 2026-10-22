@@ -1,6 +1,6 @@
 # Hindi + English OCR stress test
 
-Fixture: `final-comprehensive.pdf` · **6 pages** · document status `complete` · extraction 41323 ms.
+Fixture: `final-comprehensive.pdf` · **6 pages** · document status `complete` · extraction 43043 ms.
 
 Ground truth: `fixtures/final-comprehensive.ground-truth.txt`.
 

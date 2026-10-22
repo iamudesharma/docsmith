@@ -1,6 +1,6 @@
 # Hindi + English OCR stress test
 
-Fixture: `hindi-english-complex.pdf` · **3 pages** · document status `complete` · extraction 19244 ms.
+Fixture: `hindi-english-complex.pdf` · **3 pages** · document status `complete` · extraction 19778 ms.
 
 Ground truth: `/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/hindi-english-complex.ground-truth.txt`.
 

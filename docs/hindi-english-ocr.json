@@ -3,7 +3,7 @@
   "status": "complete",
   "pages": 3,
   "expected_pages": 3,
-  "elapsed_ms": 19244,
+  "elapsed_ms": 19778,
   "units": [
     {
       "page": 1,
@@ -233,7 +233,7 @@
     "Only 8/12 expected table tokens were found; small grid text is the weakest region.",
     "Missing critical fields: 83, A1, Hindi + English, 90 degrees, TESTED"
   ],
-  "elapsed_wall_s": 19.5,
+  "elapsed_wall_s": 20.1,
   "options": {
     "ocr": true,
     "languages": "eng+hin",

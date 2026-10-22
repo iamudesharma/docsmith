@@ -1021,6 +1021,39 @@
     renderBlocksSubtab(unit);
     renderTablesSubtab(unit);
     updateFilmstripActive();
+    updateUnitTimingBadge(unit);
+  }
+
+  function updateUnitTimingBadge(unit) {
+    var chip = document.getElementById("canvas-timing");
+    if (!chip) return;
+    var timing = unit && unit.timing;
+    if (!timing) {
+      chip.classList.add("hidden");
+      return;
+    }
+    chip.classList.remove("hidden");
+    chip.textContent =
+      (timing.method || "").toUpperCase() +
+      " · " +
+      (timing.total_ms / 1000).toFixed(1) +
+      " s";
+    chip.className =
+      "badge " +
+      (timing.method === "ocr"
+        ? "badge-primary"
+        : timing.method === "hybrid"
+        ? "badge-warn"
+        : "badge-success");
+    var parts = [];
+    if (timing.native_ms) parts.push("native " + (timing.native_ms / 1000).toFixed(2) + " s");
+    if (timing.render_ms) parts.push("render " + (timing.render_ms / 1000).toFixed(2) + " s");
+    if (timing.ocr_ms) parts.push("OCR " + (timing.ocr_ms / 1000).toFixed(2) + " s");
+    if (timing.page_image_ms)
+      parts.push("page image " + (timing.page_image_ms / 1000).toFixed(2) + " s");
+    if (timing.ocr_words) parts.push(timing.ocr_words + " OCR words");
+    if (timing.tables) parts.push(timing.tables + (timing.tables === 1 ? " table" : " tables"));
+    chip.title = parts.join(" · ");
   }
 
   function updateProvenanceCounts(stats) {
@@ -1386,6 +1419,14 @@
       statsByUnit[u.id] = stats;
       if (stats.chars > 0) extracted += 1;
     });
+    var totalTimingMs = 0;
+    var ocrTimingMs = 0;
+    units.forEach(function (u) {
+      if (u.timing) {
+        totalTimingMs += u.timing.total_ms || 0;
+        ocrTimingMs += u.timing.ocr_ms || 0;
+      }
+    });
     var summaryEl = document.getElementById("pages-text-summary");
     if (summaryEl) {
       summaryEl.textContent =
@@ -1395,7 +1436,13 @@
         " pages have extracted text · " +
         (manifest.count || 0) +
         (manifest.count === 1 ? " page image saved" : " page images saved") +
-        " for vision";
+        " for vision" +
+        (totalTimingMs
+          ? " · " +
+            (totalTimingMs / 1000).toFixed(1) +
+            " s page time" +
+            (ocrTimingMs ? " (" + (ocrTimingMs / 1000).toFixed(1) + " s OCR)" : "")
+          : "");
     }
 
     var gallery = document.getElementById("pages-gallery");
@@ -1423,13 +1470,25 @@
       var statusBadge = hasText
         ? "<span class='badge badge-success'>Text extracted</span>"
         : "<span class='badge badge-warn'>No text extracted</span>";
+      var timing = unit && unit.timing;
+      var timingNote = timing
+        ? " · " +
+          (timing.total_ms / 1000).toFixed(1) +
+          " s total" +
+          (timing.ocr_ms
+            ? " (OCR " + (timing.ocr_ms / 1000).toFixed(1) + " s)"
+            : timing.method
+            ? " (" + timing.method + ")"
+            : "")
+        : "";
       var statsLine = hasText
         ? stats.chars.toLocaleString() +
           " characters" +
           (stats.tables
             ? " · " + stats.tables + (stats.tables === 1 ? " table" : " tables")
-            : "")
-        : "OCR produced no text for this page";
+            : "") +
+          timingNote
+        : "OCR produced no text for this page" + timingNote;
       var preview = hasText
         ? "<div class='page-card-preview'>" + escapeHtml(unitSampleText(unit, 120)) + "</div>"
         : "";
