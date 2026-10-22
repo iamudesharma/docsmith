@@ -30,6 +30,11 @@ pub struct Options {
     pub chunk_chars: Option<usize>,
     /// Overlap between chunks in characters (default `chunk_chars / 8`).
     pub chunk_overlap: Option<usize>,
+    /// Rendered page images for downstream vision/LLM extraction: `none` (default),
+    /// `failed` (units with empty, sparse or errored text) or `all` pages. PDFs are
+    /// rendered with Poppler `pdftoppm`; image inputs link their original bytes. Images
+    /// are written to the job's `pages/` directory and indexed by `pages/manifest.json`.
+    pub page_images: String,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -48,6 +53,7 @@ impl Default for Options {
             pages: None,
             chunk_chars: None,
             chunk_overlap: None,
+            page_images: "none".into(),
         }
     }
 }
@@ -320,6 +326,70 @@ pub struct Failure {
     pub code: String,
     pub message: String,
     pub unit_id: Option<String>,
+}
+/// One page raster kept for downstream vision/LLM extraction (`pages/` plus the canonical
+/// document asset). `page` is 1-based for PDFs and always 1 for standalone images.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PageImage {
+    pub unit_id: String,
+    pub unit_name: String,
+    pub kind: String,
+    pub page: usize,
+    /// Why the raster was kept: `requested`, `no_text`, `sparse_text`,
+    /// `extraction_error` or `ocr_empty`.
+    pub reason: String,
+    pub path: String,
+    pub asset_id: String,
+    pub mime: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub bytes: u64,
+    pub hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpi: Option<u32>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PageImageManifest {
+    pub mode: String,
+    pub count: usize,
+    pub pages: Vec<PageImage>,
+}
+/// Build the page-image manifest from a canonical document's unit blocks and asset index.
+pub fn page_image_manifest(doc: &Document) -> PageImageManifest {
+    let mut pages = Vec::new();
+    for unit in &doc.units {
+        for block in &unit.blocks {
+            let Some(meta) = block.attributes.get("page_image") else {
+                continue;
+            };
+            let Some(asset_id) = meta["asset_id"].as_str() else {
+                continue;
+            };
+            let asset = doc.assets.iter().find(|a| a.id == asset_id);
+            pages.push(PageImage {
+                unit_id: unit.id.clone(),
+                unit_name: unit.name.clone(),
+                kind: unit.kind.clone(),
+                page: meta["page"].as_u64().unwrap_or(1) as usize,
+                reason: meta["reason"].as_str().unwrap_or("requested").to_owned(),
+                path: meta["path"].as_str().unwrap_or_default().to_owned(),
+                asset_id: asset_id.to_owned(),
+                mime: asset
+                    .map(|a| a.mime.clone())
+                    .unwrap_or_else(|| "image/png".into()),
+                width: asset.and_then(|a| a.width),
+                height: asset.and_then(|a| a.height),
+                bytes: asset.map(|a| a.bytes).unwrap_or(0),
+                hash: asset.map(|a| a.hash.clone()).unwrap_or_default(),
+                dpi: meta["dpi"].as_u64().map(|dpi| dpi as u32),
+            });
+        }
+    }
+    PageImageManifest {
+        mode: doc.options.page_images.clone(),
+        count: pages.len(),
+        pages,
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Document {
@@ -661,6 +731,10 @@ pub fn unit_chunks(
             break;
         }
         let next = end.saturating_sub(overlap);
+        let mut next = next;
+        while next > start && !text.is_char_boundary(next) {
+            next -= 1;
+        }
         start = if next <= start { end } else { next };
     }
     Ok(())

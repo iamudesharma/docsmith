@@ -1,0 +1,231 @@
+{
+  "pdf": "hindi-english-complex.pdf",
+  "status": "partial",
+  "pages": 3,
+  "expected_pages": 3,
+  "elapsed_ms": 25358,
+  "units": [
+    {
+      "page": 1,
+      "name": "Page 1",
+      "ocr_chars": 881,
+      "truth_chars": 715,
+      "cer": 0.0993,
+      "wer": 0.3232,
+      "devanagari_chars": 255,
+      "latin_chars": 359,
+      "blocks": 25,
+      "table_blocks": 0,
+      "errors": [],
+      "warnings": [
+        "Scanned page: embedded image extraction skipped; the rendered page is used for OCR",
+        "Embedded images retained; OCR coordinates refer to each asset, with PDF placement unresolved. Word-level native/OCR duplicates suppressed conservatively",
+        "Poppler reading order and text geometry retained; PDF table grids are conservative geometric proposals"
+      ],
+      "markers": [
+        {
+          "marker": "सत्यमेव जयते",
+          "found": true
+        },
+        {
+          "marker": "माध्यमिक शिक्षा परिषद",
+          "found": true
+        },
+        {
+          "marker": "CERTIFICATE-CUM-MARKS SHEET",
+          "found": true
+        },
+        {
+          "marker": "उदेश शर्मा",
+          "found": true
+        },
+        {
+          "marker": "उदेश शर्मा (Udesh Sharma)",
+          "found": true
+        },
+        {
+          "marker": "7534469",
+          "found": true
+        },
+        {
+          "marker": "17 November 2000",
+          "found": true
+        },
+        {
+          "marker": "ST MARY'S C GORAKHPUR",
+          "found": true
+        },
+        {
+          "marker": "PASSED",
+          "found": true
+        },
+        {
+          "marker": "हिंदी",
+          "found": true
+        },
+        {
+          "marker": "English",
+          "found": true
+        },
+        {
+          "marker": "Mathematics",
+          "found": true
+        },
+        {
+          "marker": "83",
+          "found": false
+        },
+        {
+          "marker": "A1",
+          "found": false
+        },
+        {
+          "marker": "सत्यापित",
+          "found": true
+        }
+      ],
+      "text": "॥ सत्यमेव जयते ॥ माध्यमिक शिक्षा परिषद, उत्तर प्रदेश Board of High School and Intermediate Education प्रमाणपत्र-सह-अंकतालिका | CERTIFICATE-CUM-MARKS SHEET नाम / Name: उदेश शर्मा (Udesh Sharma) पिता का नाम / Father's Name: श्रीकांत शर्मा (Shrikant Sharma) माता का नाम / Mother's Name: इंद्रावती gt (Indrawati Devi) अनुक्रमांक | Roll No.: 7534469 जन्म तिथि / Date of Birth: 17 November 2000 विद्यालय / School: ST MARY'S C GORAKHPUR विषय / Subject अधिकतम / Max olka pau कुल Total | Avi) Grade हिंदी / Hindi 0 40 28 co B2 अंग्रेज़ी English 0 so 29 79 81 गणित / Mathematics wo | 52 29 81 A2 विज्ञान / Science 100 Ee 28 les | At सामाजिक विज्ञान / Social Science jo Eee 28 les At चित्रकला / Drawing 10 53 29 82 A2 परिणाम / Result: PASSED यह प्रमाणपत्र केवल शैक्षणिक परीक्षण के लिए है। / This certificate is for educational testing only. VERIFIED सत्यापित 7534469 - 2497006 - TEST DOCUMENT"
+    },
+    {
+      "page": 2,
+      "name": "Page 2",
+      "ocr_chars": 1409,
+      "truth_chars": 1120,
+      "cer": 0.0027,
+      "wer": 0.1477,
+      "devanagari_chars": 537,
+      "latin_chars": 520,
+      "blocks": 27,
+      "table_blocks": 0,
+      "errors": [],
+      "warnings": [
+        "Scanned page: embedded image extraction skipped; the rendered page is used for OCR",
+        "Embedded images retained; OCR coordinates refer to each asset, with PDF placement unresolved. Word-level native/OCR duplicates suppressed conservatively",
+        "Poppler reading order and text geometry retained; PDF table grids are conservative geometric proposals"
+      ],
+      "markers": [
+        {
+          "marker": "जिला शिक्षा कार्यालय",
+          "found": true
+        },
+        {
+          "marker": "District Education Office",
+          "found": true
+        },
+        {
+          "marker": "SCHOOL INSPECTION REPORT",
+          "found": true
+        },
+        {
+          "marker": "92 प्रतिशत",
+          "found": true
+        },
+        {
+          "marker": "2,450",
+          "found": true
+        },
+        {
+          "marker": "Key Findings",
+          "found": true
+        },
+        {
+          "marker": "Computer Lab",
+          "found": true
+        },
+        {
+          "marker": "Needs Improvement",
+          "found": true
+        },
+        {
+          "marker": "डॉ. अनीता वर्मा",
+          "found": true
+        },
+        {
+          "marker": "APPROVED",
+          "found": true
+        }
+      ],
+      "text": "जिला शिक्षा कार्यालय, गोरखपुर District Education Office, Gorakhpur विद्यालय निरीक्षण रिपोर्ट / SCHOOL INSPECTION REPORT दिनांक / Date: 12 August 2026 दिनांक 12 अगस्त 2026 को विद्यालय का निरीक्षण किया गया। कक्षा 10 के विद्यार्थियों की उपस्थिति 92 प्रतिशत पाई गई। विज्ञान प्रयोगशाला में उपकरण पर्याप्त हैं, परंतु कंप्यूटर कक्ष में केवल आठ कार्यशील मशीनें थीं। पुस्तकालय में 2,450 पुस्तकें हैं और पेयजल की व्यवस्था संतोषजनक है। The school was inspected on 12 August 2026. Attendance in Grade 10 was 92 percent. Science laboratory equipment is adequate, but the computer laboratory has only eight working machines. The library holds 2,450 books and drinking water is satisfactory. मुख्य अवलोकन / Key Findings * पुस्तकालय में 2,450 पुस्तकें हैं। ॥ Library holds 2,450 books. *« पेयजल की व्यवस्था संतोषजनक है। / Drinking water is satisfactory. © शौचालयों की सफाई में सुधार आवश्यक है। / Toilets need cleaning improvements. © कंप्यूटर कक्ष में आठ मशीनें कार्यशील हैं। / Eight computers are working. क्र.सं. । No. मद / Item स्थिति / Status अंक | Score 1 Infrastructure / अधोसंरचना Good / अच्छा 8/10 2 | Library / पुस्तकालय Satisfactory / संतोषजनक 7/10 b | Laboratory / प्रयोगशाला Good / अच्छा 9/10 4 Computer Lab / कंप्यूटर कक्ष Needs Improvement / सुधार आवश्यक 5/10 निरीक्षण अधिकारी / Inspecting Officer डॉ. अनीता वर्मा (Dr. Anita Verma) हस्ताक्षर / Signature APPROVED स्वीकृत रिपोर्ट संख्या Report No.: DEO/2026/0812"
+    },
+    {
+      "page": 3,
+      "name": "Page 3",
+      "ocr_chars": 670,
+      "truth_chars": 548,
+      "cer": 0.0365,
+      "wer": 0.1111,
+      "devanagari_chars": 215,
+      "latin_chars": 316,
+      "blocks": 14,
+      "table_blocks": 0,
+      "errors": [],
+      "warnings": [
+        "Scanned page: embedded image extraction skipped; the rendered page is used for OCR",
+        "Embedded images retained; OCR coordinates refer to each asset, with PDF placement unresolved. Word-level native/OCR duplicates suppressed conservatively",
+        "Poppler reading order and text geometry retained; PDF table grids are conservative geometric proposals"
+      ],
+      "markers": [
+        {
+          "marker": "COMPLIANCE CERTIFICATE",
+          "found": true
+        },
+        {
+          "marker": "OCR परीक्षण",
+          "found": true
+        },
+        {
+          "marker": "Hindi + English",
+          "found": true
+        },
+        {
+          "marker": "90 degrees",
+          "found": true
+        },
+        {
+          "marker": "Recovered",
+          "found": true
+        },
+        {
+          "marker": "Registrar",
+          "found": true
+        },
+        {
+          "marker": "TESTED",
+          "found": false
+        }
+      ],
+      "text": "m अनुपालन प्रमाण / COMPLIANCE CERTIFICATE यह प्रमाणित किया जाता है कि यह दस्तावेज़ OCR परीक्षण के लिए तैयार है। इसमें हिंदी और अंग्रेज़ी दोनों भाषाओं का पाठ, एक तालिका और आधिकारिक मुद्रा है। This is to certify that the document is ready for OCR testing. It contains Hindi and English text, a table and an official stamp. The page was scanned sideways to exercise automatic rotation. Parameter / मापदंड Value / मान Status / स्थिति Language / भाषा Hindi + English Verified / सत्यापित Pages / पृष्ठ 3 Complete / qf Rotation / घूर्णन 90 degrees Recovered / पुनर्प्राप्त प्रमाणित करने वाला अधिकारी / Certifying Officer रजिस्ट्रार / Registrar है) TEST ONLY - NO LEGAL VALIDITY"
+    }
+  ],
+  "overall": {
+    "cer": 0.0394,
+    "wer": 0.195,
+    "devanagari_ocr": 1007,
+    "devanagari_truth": 1047,
+    "latin_ocr": 1195,
+    "latin_truth": 1180,
+    "markers_found": 29,
+    "markers_total": 32,
+    "table_blocks": 0,
+    "table_tokens_found": 8,
+    "table_tokens_total": 12,
+    "document_errors": 0,
+    "unit_errors": 0,
+    "warnings": []
+  },
+  "findings": [
+    "Scanned tables are not promoted to structured `Table` blocks; cells remain linearized OCR text.",
+    "Only 8/12 expected table tokens were found; small grid text is the weakest region.",
+    "Missing critical fields: 83, A1, TESTED"
+  ],
+  "elapsed_wall_s": 25.65,
+  "options": {
+    "ocr": true,
+    "languages": "eng+hin",
+    "ocr_auto_rotate": true,
+    "page_images": "all",
+    "chunk_chars": 1000,
+    "chunk_overlap": 80,
+    "result_format": "text"
+  }
+}

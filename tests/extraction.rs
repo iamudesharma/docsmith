@@ -662,6 +662,314 @@ fn pdf_batch_images_map_to_correct_pages() {
     assert_eq!(counts, vec![1, 1, 0, 0, 1, 0], "{:?}", d.errors);
     assert_eq!(d.assets.len(), 3, "original + two distinct images");
 }
+fn pdftoppm_available() -> bool {
+    // Poppler's pdftoppm exits 1 on `--version` but 0 on `-v`.
+    doc_extractor::providers::command("pdftoppm", &["-v"]).is_ok()
+}
+
+#[test]
+fn page_images_all_render_and_index_every_pdf_page() {
+    if !doc_extractor::providers::available("pdftotext") || !pdftoppm_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = extract::extract(
+        std::path::Path::new("fixtures/digital.pdf"),
+        "digital.pdf",
+        dir.path(),
+        Options {
+            page_images: "all".into(),
+            ..Options::default()
+        },
+        Limits::default(),
+        "page-images-all",
+    )
+    .unwrap();
+    assert_eq!(d.units.len(), 2);
+    for (index, unit) in d.units.iter().enumerate() {
+        let name = format!("pages/u{}.png", index + 1);
+        assert!(dir.path().join(&name).is_file(), "{name} written");
+        let block = unit.blocks.iter().find(|b| b.kind == "page_image").unwrap();
+        assert_eq!(block.attributes["page_image"]["path"], name);
+        assert_eq!(block.attributes["page_image"]["reason"], "requested");
+        assert!(d
+            .assets
+            .iter()
+            .any(|a| Some(&a.id) == block.asset_id.as_ref() && a.mime == "image/png"));
+    }
+    let manifest: PageImageManifest =
+        serde_json::from_slice(&std::fs::read(dir.path().join("pages/manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest.mode, "all");
+    assert_eq!(manifest.count, 2);
+    assert_eq!(manifest.pages.len(), 2);
+    assert_eq!(manifest.pages[0].page, 1);
+    assert_eq!(manifest.pages[1].page, 2);
+    assert!(manifest
+        .pages
+        .iter()
+        .all(|p| p.dpi == Some(150) && p.bytes > 0 && p.width.unwrap_or(0) > 0));
+}
+
+#[test]
+fn page_images_clear_stale_files_when_options_change() {
+    if !doc_extractor::providers::available("pdftotext") || !pdftoppm_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let first = Options {
+        page_images: "all".into(),
+        ..Options::default()
+    };
+    extract::extract(
+        std::path::Path::new("fixtures/digital.pdf"),
+        "digital.pdf",
+        dir.path(),
+        first,
+        Limits::default(),
+        "page-images-stale",
+    )
+    .unwrap();
+    assert!(dir.path().join("pages/u1.png").is_file());
+    assert!(dir.path().join("pages/u2.png").is_file());
+    // A different page range changes identity, so units are re-extracted and page 1's stale
+    // raster must not survive.
+    let second = Options {
+        page_images: "all".into(),
+        pages: Some("2".into()),
+        ..Options::default()
+    };
+    extract::extract(
+        std::path::Path::new("fixtures/digital.pdf"),
+        "digital.pdf",
+        dir.path(),
+        second,
+        Limits::default(),
+        "page-images-stale",
+    )
+    .unwrap();
+    assert!(!dir.path().join("pages/u1.png").exists(), "stale page 1");
+    assert!(dir.path().join("pages/u2.png").is_file());
+    let manifest: PageImageManifest =
+        serde_json::from_slice(&std::fs::read(dir.path().join("pages/manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest.count, 1);
+    assert_eq!(manifest.pages[0].page, 2);
+    assert_eq!(manifest.pages[0].path, "pages/u2.png");
+}
+
+#[test]
+fn page_images_all_reuse_the_ocr_render() {
+    if !doc_extractor::providers::available("pdftotext")
+        || !doc_extractor::providers::available("tesseract")
+        || !pdftoppm_available()
+    {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = extract::extract(
+        std::path::Path::new("fixtures/digital.pdf"),
+        "digital.pdf",
+        dir.path(),
+        Options {
+            ocr: true,
+            page_images: "all".into(),
+            // Page 2 is sparse and has no embedded image, so it exercises the OCR render path.
+            pages: Some("2".into()),
+            ..Options::default()
+        },
+        Limits {
+            ocr_threads: 1,
+            ..Limits::default()
+        },
+        "page-images-ocr",
+    )
+    .unwrap();
+    assert_eq!(d.units.len(), 1);
+    let annotated = d.units[0]
+        .blocks
+        .iter()
+        .filter(|b| b.attributes.get("page_image").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        annotated.len(),
+        1,
+        "one raster reference, no duplicate block"
+    );
+    // The OCR render block doubles as the page image.
+    assert_eq!(annotated[0].kind, "figure");
+    assert!(annotated[0].asset_id.is_some());
+    let manifest: PageImageManifest =
+        serde_json::from_slice(&std::fs::read(dir.path().join("pages/manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest.count, 1);
+    assert!(
+        d.units.iter().all(|u| u.errors.is_empty()),
+        "{:?}",
+        d.units
+            .iter()
+            .flat_map(|u| u.errors.iter())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn page_images_survive_pdf_resume() {
+    if !doc_extractor::providers::available("pdftotext") || !pdftoppm_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options {
+        page_images: "all".into(),
+        ..Options::default()
+    };
+    extract::extract(
+        std::path::Path::new("fixtures/digital.pdf"),
+        "digital.pdf",
+        dir.path(),
+        options.clone(),
+        Limits::default(),
+        "page-images-resume",
+    )
+    .unwrap();
+    let reused = dir.path().join("units/u1.json");
+    let modified = std::fs::metadata(&reused).unwrap().modified().unwrap();
+    std::fs::remove_file(dir.path().join("units/u2.json")).unwrap();
+    extract::extract(
+        std::path::Path::new("fixtures/digital.pdf"),
+        "digital.pdf",
+        dir.path(),
+        options,
+        Limits::default(),
+        "page-images-resume",
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::metadata(&reused).unwrap().modified().unwrap(),
+        modified,
+        "page 1 unit was reused"
+    );
+    assert!(dir.path().join("pages/u1.png").is_file());
+    assert!(dir.path().join("pages/u2.png").is_file());
+    let manifest: PageImageManifest =
+        serde_json::from_slice(&std::fs::read(dir.path().join("pages/manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest.count, 2, "manifest rebuilds from reused units");
+}
+
+#[test]
+fn page_images_failed_keeps_unreadable_pdf_pages_only() {
+    if !doc_extractor::providers::available("pdftotext") || !pdftoppm_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = extract::extract(
+        std::path::Path::new("fixtures/scanned.pdf"),
+        "scanned.pdf",
+        dir.path(),
+        Options {
+            page_images: "failed".into(),
+            ..Options::default()
+        },
+        Limits::default(),
+        "page-images-failed",
+    )
+    .unwrap();
+    assert_eq!(d.units.len(), 1);
+    let manifest: PageImageManifest =
+        serde_json::from_slice(&std::fs::read(dir.path().join("pages/manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest.mode, "failed");
+    assert_eq!(manifest.count, 1, "{manifest:?}");
+    assert_eq!(manifest.pages[0].reason, "no_text");
+    assert_eq!(manifest.pages[0].path, "pages/u1.png");
+    assert_eq!(manifest.pages[0].dpi, Some(150));
+    assert!(dir.path().join("pages/u1.png").is_file());
+    // The raster is also a regular downloadable asset.
+    assert!(d
+        .assets
+        .iter()
+        .any(|a| a.id == manifest.pages[0].asset_id && a.mime == "image/png"));
+}
+
+#[test]
+fn page_images_failed_reuses_original_image_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = extract::extract(
+        std::path::Path::new("fixtures/scan.png"),
+        "scan.png",
+        dir.path(),
+        Options {
+            page_images: "failed".into(),
+            ..Options::default()
+        },
+        Limits::default(),
+        "page-images-image",
+    )
+    .unwrap();
+    let manifest: PageImageManifest =
+        serde_json::from_slice(&std::fs::read(dir.path().join("pages/manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest.count, 1);
+    assert_eq!(manifest.pages[0].reason, "no_text");
+    assert_eq!(manifest.pages[0].path, "pages/u1.png");
+    assert_eq!(manifest.pages[0].dpi, None);
+    assert_eq!(
+        d.assets.len(),
+        1,
+        "page image is a link, not a second asset"
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("pages/u1.png")).unwrap(),
+        std::fs::read("fixtures/scan.png").unwrap()
+    );
+    // Default mode leaves no pages directory behind.
+    let plain = tempfile::tempdir().unwrap();
+    extract::extract(
+        std::path::Path::new("fixtures/scan.png"),
+        "scan.png",
+        plain.path(),
+        Options::default(),
+        Limits::default(),
+        "page-images-none",
+    )
+    .unwrap();
+    assert!(!plain.path().join("pages").exists());
+    // Formats that cannot produce page rasters ignore the option instead of writing an
+    // empty artifact directory.
+    let csv = tempfile::tempdir().unwrap();
+    extract::extract(
+        std::path::Path::new("fixtures/quoted.csv"),
+        "quoted.csv",
+        csv.path(),
+        Options {
+            page_images: "all".into(),
+            ..Options::default()
+        },
+        Limits::default(),
+        "page-images-csv",
+    )
+    .unwrap();
+    assert!(!csv.path().join("pages").exists());
+}
+
+#[test]
+fn page_images_option_is_validated() {
+    use doc_extractor::service::validate_options;
+    for mode in ["none", "failed", "all"] {
+        let options = Options {
+            page_images: mode.into(),
+            ..Options::default()
+        };
+        assert!(validate_options(&options).is_ok(), "{mode} accepted");
+    }
+    let bad = Options {
+        page_images: "sometimes".into(),
+        ..Options::default()
+    };
+    assert!(validate_options(&bad).is_err(), "unknown mode rejected");
+}
+
 #[test]
 fn large_csv_is_chunked_into_bounded_units() {
     let dir = tempfile::tempdir().unwrap();
@@ -752,6 +1060,7 @@ fn pdf_parallel_and_sequential_batches_match() {
     if !doc_extractor::providers::available("pdfinfo") {
         return;
     }
+    let _lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let input = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/long.pdf");
     let run = |workers: usize, name: &str| -> (serde_json::Value, Document) {
         let dir = tempfile::tempdir().unwrap();
@@ -1053,4 +1362,390 @@ fn chunk_artifact_windows_plain_text() {
     )
     .unwrap();
     assert!(!plain.path().join("result.chunks.jsonl").exists());
+}
+
+#[test]
+fn chunks_are_utf8_boundary_safe_for_hindi_text() {
+    let mut unit = Unit::new(0, "text", "Hindi OCR");
+    let hindi = "प्रमाणपत्र-सह-अंकपत्र यह प्रमाणित किया जाता है कि परिषद के अभिलेखानुसार ".repeat(6);
+    unit.text("text", &hindi, "test");
+    let mut out = String::new();
+    unit_chunks(&unit, 41, 9, &mut out).unwrap();
+    let chunks = out
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(chunks.len() >= 2, "{chunks:?}");
+    assert!(chunks.iter().all(|chunk| {
+        chunk["text"].as_str().is_some_and(|text| !text.is_empty())
+            && chunk["chars"].as_u64().unwrap_or(0) > 0
+    }));
+}
+
+#[test]
+fn wasm_engine_derives_formats_chunks_and_hit_tests_bounds() {
+    use doc_extractor::wasm;
+    let ping = wasm::invoke_op("ping", "{}").unwrap();
+    assert_eq!(ping["ok"], true);
+    assert_eq!(ping["engine"], "doc-extractor-wasm");
+
+    let valid = wasm::invoke_op(
+        "validate_options",
+        r#"{"options":{"page_images":"failed","pages":"1-3, 7"}}"#,
+    )
+    .unwrap();
+    assert_eq!(valid["valid"], true);
+    assert_eq!(valid["selected_pages_count"], 4);
+
+    let invalid = wasm::invoke_op(
+        "validate_options",
+        r#"{"options":{"page_images":"bogus","pages":"8-2"}}"#,
+    )
+    .unwrap();
+    assert_eq!(invalid["valid"], false);
+    assert_eq!(invalid["errors"].as_array().unwrap().len(), 2);
+
+    // Build a unit with positioned blocks and test spatial SVG + hit-testing + chunking.
+    let mut u = Unit::new(0, "page", "Page 1");
+    {
+        let b1 = u.text(
+            "text",
+            "Header block on page one with enough text for RAG chunking",
+            "pdftotext",
+        );
+        b1.provenance.bounds = Some(Bounds {
+            x: 40.0,
+            y: 50.0,
+            width: 300.0,
+            height: 24.0,
+            coordinate_space: "pdf_points_top_left".into(),
+        });
+    }
+    {
+        let b2 = u.text("text", "Invoice TOTAL 12345", "tesseract");
+        b2.provenance.method = "ocr".into();
+        b2.provenance.bounds = Some(Bounds {
+            x: 60.0,
+            y: 120.0,
+            width: 140.0,
+            height: 18.0,
+            coordinate_space: "pdf_points_top_left".into(),
+        });
+    }
+
+    let derived = wasm::invoke_op(
+        "derive_unit",
+        &serde_json::to_string(&serde_json::json!({
+            "unit": u,
+            "chunk_chars": 28,
+            "chunk_overlap": 6,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(derived["markdown"]
+        .as_str()
+        .unwrap()
+        .contains("Invoice TOTAL 12345"));
+    assert!(derived["page_svg"].as_str().unwrap().contains("<svg"));
+    assert!(derived["chunks"].as_array().unwrap().len() >= 2);
+    assert_eq!(derived["stats"]["native"], 1);
+    assert_eq!(derived["stats"]["ocr"], 1);
+
+    let hit = wasm::invoke_op(
+        "hit_test_page",
+        &serde_json::to_string(&serde_json::json!({
+            "unit": u,
+            "x": 80.0,
+            "y": 128.0,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(hit["hit"], "u1-b2");
+}
+
+#[test]
+fn wasm_playground_parses_diagrams_layout_and_packages_llm_payloads() {
+    use doc_extractor::wasm;
+    let dbml = wasm::invoke_op(
+        "playground_extract",
+        &serde_json::to_string(&serde_json::json!({
+            "format": "dbml",
+            "source": "Table users {\n  id uuid [pk]\n}\nTable orders {\n  id uuid [pk]\n  user_id uuid [ref: > users.id]\n}"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let diagrams = dbml["diagrams"].as_array().unwrap();
+    assert_eq!(diagrams.len(), 1);
+    assert_eq!(diagrams[0]["nodes"], 2);
+    assert_eq!(diagrams[0]["edges"], 1);
+    assert!(diagrams[0]["svg"].as_str().unwrap().contains("<svg"));
+
+    let layout_res = wasm::invoke_op(
+        "playground_extract",
+        &serde_json::to_string(&serde_json::json!({
+            "format": "pdf_layout",
+            "source": "Name, 40, 50, 40, 12\nAmount, 180, 50, 50, 12\nAda, 40, 72, 35, 12\n12, 180, 72, 24, 12\nLin, 40, 94, 35, 12\n34, 180, 94, 24, 12"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(layout_res["stats"]["tables"], 1);
+    assert!(layout_res["markdown"].as_str().unwrap().contains("Ada"));
+
+    let d = fixture(
+        "scan.png",
+        Options {
+            page_images: "failed".into(),
+            ..Options::default()
+        },
+    );
+    let inspected = wasm::invoke_op(
+        "inspect_document",
+        &serde_json::to_string(&serde_json::json!({ "document": d })).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(inspected["page_images"]["count"], 1);
+
+    let llm = wasm::invoke_op(
+        "build_llm_payload",
+        &serde_json::to_string(&serde_json::json!({
+            "document": d,
+            "base_url": "http://127.0.0.1:8787"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(llm["count"], 1);
+    assert_eq!(llm["items"][0]["reason"], "no_text");
+    assert!(llm["items"][0]["openai_vision_request"]["messages"].is_array());
+}
+
+#[test]
+fn oversized_ocr_images_are_downscaled_with_box_mapping() {
+    if !doc_extractor::providers::available("tesseract") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("scan.png");
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/scan.png"),
+        &path,
+    )
+    .unwrap();
+    let options = Options {
+        ocr: true,
+        ..Default::default()
+    };
+    // scan.png is 1200x360 (432k pixels); 300k forces a downscale for OCR.
+    let limits = Limits {
+        page_pixels: 300_000,
+        ocr_threads: 1,
+        ..Default::default()
+    };
+    let out = doc_extractor::providers::ocr_blocks(&path, &options, &limits).unwrap();
+    assert!(
+        out.warnings.iter().any(|w| w.contains("downscaled")),
+        "expected a downscale warning, got {:?}",
+        out.warnings
+    );
+    assert!(!out.blocks.is_empty());
+    let joined = out
+        .blocks
+        .iter()
+        .map(|b| b.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        joined.to_lowercase().contains("invoice") || joined.contains("12345"),
+        "OCR text after downscale: {joined:?}"
+    );
+    for block in &out.blocks {
+        if let Some(bounds) = &block.provenance.bounds {
+            assert!(
+                bounds.x <= 1200.0 && bounds.y <= 360.0,
+                "bounds must be mapped back to the original image: {bounds:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn tesseract_words_are_grouped_into_readable_lines() {
+    if !doc_extractor::providers::available("tesseract") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("scan.png");
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/scan.png"),
+        &path,
+    )
+    .unwrap();
+    let out = doc_extractor::providers::ocr_blocks(
+        &path,
+        &Options {
+            ocr: true,
+            ..Default::default()
+        },
+        &Limits {
+            ocr_threads: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        out.blocks
+            .iter()
+            .any(|block| block.text.split_whitespace().count() >= 2),
+        "OCR output should contain grouped lines, got {:?}",
+        out.blocks.iter().map(|b| &b.text).collect::<Vec<_>>()
+    );
+    assert!(
+        out.blocks.iter().all(|block| {
+            block
+                .attributes
+                .get("words")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                >= 1
+        }),
+        "each OCR block should record its word count"
+    );
+}
+
+#[test]
+fn absent_smoldocling_server_falls_back_to_tesseract() {
+    if !doc_extractor::providers::available("tesseract") {
+        return;
+    }
+    let _lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    struct RestoreEnv {
+        smoldocling: Option<String>,
+        vlm: Option<String>,
+    }
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            for (key, value) in [
+                ("DOC_SMOLDOCLING_URL", &self.smoldocling),
+                ("DOC_VLM_URL", &self.vlm),
+            ] {
+                match value {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+    let _restore = RestoreEnv {
+        smoldocling: std::env::var("DOC_SMOLDOCLING_URL").ok(),
+        vlm: std::env::var("DOC_VLM_URL").ok(),
+    };
+    std::env::remove_var("DOC_SMOLDOCLING_URL");
+    std::env::remove_var("DOC_VLM_URL");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("scan.png");
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/scan.png"),
+        &path,
+    )
+    .unwrap();
+    let options = Options {
+        ocr: true,
+        ocr_provider: "smoldocling".into(),
+        ..Default::default()
+    };
+    let out = doc_extractor::providers::ocr_blocks(&path, &options, &Limits::default()).unwrap();
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("SmolDocling-256M unavailable")),
+        "expected SmolDocling fallback warning, got {:?}",
+        out.warnings
+    );
+    assert!(
+        !out.blocks.is_empty(),
+        "Tesseract fallback returned no text"
+    );
+}
+
+#[test]
+fn wasm_ffi_memory_abi_roundtrips() {
+    use doc_extractor::wasm::*;
+    let op = b"ping";
+    let arg = b"{}";
+    unsafe {
+        let op_ptr = wasm_alloc(op.len());
+        let arg_ptr = wasm_alloc(arg.len());
+        std::ptr::copy_nonoverlapping(op.as_ptr(), op_ptr, op.len());
+        std::ptr::copy_nonoverlapping(arg.as_ptr(), arg_ptr, arg.len());
+        let ok = wasm_invoke(op_ptr, op.len(), arg_ptr, arg.len());
+        assert_eq!(ok, 1);
+        let out_slice = std::slice::from_raw_parts(wasm_output_ptr(), wasm_output_len());
+        let val: serde_json::Value = serde_json::from_slice(out_slice).unwrap();
+        assert_eq!(val["ok"], true);
+        wasm_dealloc(op_ptr, op.len());
+        wasm_dealloc(arg_ptr, arg.len());
+    }
+}
+
+#[test]
+fn smoldocling_doctags_parses_bounds_tables_and_merges_in_pure_rust() {
+    let sample = r#"<doctag>
+        <section_header_level_1><loc_50><loc_25><loc_350><loc_60>Invoice #INV-2026</section_header_level_1>
+        <text><loc_50><loc_80><loc_450><loc_110>Customer: Ada Lovelace</text>
+        <otsl><loc_50><loc_130><loc_450><loc_280>
+            <ched>Item<ched>Qty<ched>Amount<nl>
+            <fcel>Rust OCR<fcel>2<fcel>1200.50<nl>
+            <fcel>Total<lcel><fcel>1200.50<nl>
+        </otsl>
+    </doctag>"#;
+
+    let mut unit = Unit::new(0, "page", "Page 1");
+    doc_extractor::doctags::extract(sample, &mut unit, 1000, 1500, "ocr").unwrap();
+    assert_eq!(unit.blocks.len(), 3);
+    assert_eq!(unit.blocks[0].kind, "heading");
+    assert_eq!(unit.blocks[0].text, "Invoice #INV-2026");
+    let b0_bounds = unit.blocks[0].provenance.bounds.as_ref().unwrap();
+    assert_eq!(b0_bounds.coordinate_space, "image_pixels");
+    assert!((b0_bounds.x - 100.0).abs() < 0.01);
+    assert!((b0_bounds.y - 75.0).abs() < 0.01);
+
+    let table = unit.blocks[2].table.as_ref().unwrap();
+    assert_eq!(table.rows, 3);
+    assert_eq!(table.columns, 3);
+    assert_eq!(table.headers, vec![0]);
+    let total_label = table
+        .cells
+        .iter()
+        .find(|c| c.row == 2 && c.column == 0)
+        .unwrap();
+    assert_eq!(total_label.raw, "Total");
+    assert_eq!(total_label.column_span, 2);
+    let total_val = table
+        .cells
+        .iter()
+        .find(|c| c.row == 2 && c.column == 2)
+        .unwrap();
+    assert_eq!(total_val.value, serde_json::json!(1200.5));
+
+    // Verify WASM playground_extract also handles doctags end-to-end.
+    let wasm_out = doc_extractor::wasm::invoke_op(
+        "playground_extract",
+        &serde_json::to_string(&serde_json::json!({
+            "format": "doctags",
+            "source": sample,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(wasm_out["stats"]["tables"], 1);
+    assert_eq!(wasm_out["stats"]["bounds_blocks"], 3);
+    assert!(wasm_out["markdown"]
+        .as_str()
+        .unwrap()
+        .contains("Invoice #INV-2026"));
 }

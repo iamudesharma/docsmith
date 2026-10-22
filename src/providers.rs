@@ -25,7 +25,10 @@ pub fn command(program: &str, args: &[&str]) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 pub fn available(program: &str) -> bool {
+    // Poppler's pdftoppm exits 1 for `--version` but 0 for `-v`; `output()` is Ok whenever the
+    // executable spawns, so the fallback detects presence without depending on version flags.
     Command::new(program).arg("--version").output().is_ok()
+        || Command::new(program).arg("-v").output().is_ok()
 }
 pub fn languages() -> Vec<String> {
     command("tesseract", &["--list-langs"])
@@ -138,118 +141,255 @@ pub struct OcrOutput {
     pub blocks: Vec<Block>,
     pub warnings: Vec<String>,
 }
+struct OcrWord {
+    text: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    score: f64,
+}
+/// An OCR input that may have been downscaled to fit `Limits.page_pixels`. Bounds returned by
+/// providers are in the prepared image's pixel space and are scaled back to the original image
+/// before the output leaves [`ocr_blocks`].
+struct OcrImage {
+    path: std::path::PathBuf,
+    width: u32,
+    height: u32,
+    scale: Option<(f64, f64)>,
+    temporary: bool,
+}
+impl Drop for OcrImage {
+    fn drop(&mut self) {
+        if self.temporary {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+fn prepare_ocr_image(path: &Path, width: u32, height: u32, max_pixels: u64) -> Result<OcrImage> {
+    let pixels = width as u64 * height as u64;
+    if pixels <= max_pixels {
+        return Ok(OcrImage {
+            path: path.to_path_buf(),
+            width,
+            height,
+            scale: None,
+            temporary: false,
+        });
+    }
+    let max_pixels = max_pixels.max(1);
+    let ratio = (max_pixels as f64 / pixels as f64).sqrt();
+    let new_width = ((width as f64 * ratio).floor() as u32).max(1);
+    let new_height = ((height as f64 * ratio).floor() as u32).max(1);
+    let image = image::ImageReader::open(path)?
+        .with_guessed_format()?
+        .decode()
+        .context("corrupt or unsupported image")?;
+    let resized = image.resize(new_width, new_height, image::imageops::FilterType::Triangle);
+    let temporary = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(".ocr-{}.png", uuid::Uuid::new_v4()));
+    resized.save(&temporary)?;
+    Ok(OcrImage {
+        path: temporary,
+        width: new_width,
+        height: new_height,
+        scale: Some((
+            width as f64 / new_width as f64,
+            height as f64 / new_height as f64,
+        )),
+        temporary: true,
+    })
+}
 /// Run OCR for one image and return blocks without attaching them to a unit. Callers attach
 /// with [`attach_ocr`], which assigns per-unit IDs and applies native-text duplicate suppression.
+///
+/// Images above `Limits.page_pixels` are downscaled for OCR only (the original asset is
+/// untouched); any SmolDocling failure falls back to Tesseract when it is installed so OCR is not
+/// lost just because the optional model server is not running.
 pub fn ocr_blocks(path: &Path, opts: &Options, limits: &Limits) -> Result<OcrOutput> {
     let _slot = OcrSlot::acquire();
     let (width, height) = image::ImageReader::open(path)?
         .with_guessed_format()?
         .into_dimensions()
         .context("corrupt or unsupported image")?;
-    if width as u64 * height as u64 > limits.page_pixels {
-        bail!("limit_exceeded: image pixels");
-    }
-    let path = path.to_str().context("invalid image path")?;
-    let mut out = OcrOutput {
-        blocks: vec![],
-        warnings: vec![],
-    };
-    let block = |text: &str, source: &str| Block {
-        id: String::new(),
-        kind: "text".into(),
-        text: text.into(),
-        provenance: Provenance {
-            unit_id: String::new(),
-            method: "ocr".into(),
-            source: source.into(),
-            bounds: None,
-            cell_range: None,
-            evidence: vec![],
-        },
-        table: None,
-        asset_id: None,
-        diagram: None,
-        attributes: Value::Null,
-    };
-    if opts.ocr_provider == "apple_vision" {
-        #[cfg(target_os = "macos")]
-        {
-            let executable = std::env::var("DOC_APPLE_VISION").context(
-                "dependency_unavailable: provision Apple Vision helper and set DOC_APPLE_VISION",
-            )?;
-            let bytes = command(&executable, &[path, &opts.languages])?;
-            let rows: Vec<Value> = serde_json::from_slice(&bytes)?;
-            for row in rows {
-                let mut b = block(row["text"].as_str().unwrap_or(""), "Apple Vision");
-                b.provenance.bounds = serde_json::from_value(row["bounds"].clone()).ok();
-                b.attributes = row;
-                out.blocks.push(b);
-            }
-            return Ok(out);
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            bail!("unsupported: Apple Vision requires macOS");
-        }
-    }
-    if opts.ocr_provider != "tesseract" {
-        bail!("unsupported OCR provider");
-    }
-    let langs = languages();
-    if !opts
-        .languages
-        .split('+')
-        .all(|l| langs.iter().any(|v| v == l))
-    {
-        bail!("dependency_unavailable: requested Tesseract language data is not provisioned");
-    }
-    let (data, rotation) = tesseract_oriented(path, opts)?;
-    if !data.starts_with(b"level\tpage_num\t") {
-        bail!("provider_error: Tesseract did not return TSV");
-    }
-    let mut reader = csv::ReaderBuilder::new()
-        .delimiter(b'\t')
-        .from_reader(&data[..]);
-    let records = reader
-        .records()
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let tokens = records
-        .iter()
-        .filter(|r| r.get(0) == Some("5"))
-        .filter_map(|r| r.get(11))
-        .filter(|t| !t.trim().is_empty())
-        .map(|t| t.trim().to_lowercase())
-        .collect::<Vec<_>>();
-    if tokens.is_empty() {
-        out.warnings
-            .push("OCR returned no text; scan coverage is incomplete".into());
-    }
-    for r in records {
-        if r.get(0) != Some("5") {
-            continue;
-        }
-        let text = r.get(11).unwrap_or("").trim();
-        if text.is_empty() {
-            continue;
-        }
-        let number = |i| r.get(i).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.);
-        let mut b = block(text, "tesseract TSV");
-        let (x, y, w, h) = (number(6), number(7), number(8), number(9));
-        let (x, y, w, h) = match rotation {
-            90 => (y, height as f64 - x - w, h, w),
-            180 => (width as f64 - x - w, height as f64 - y - h, w, h),
-            270 => (width as f64 - y - h, x, h, w),
-            _ => (x, y, w, h),
+    let prepared = prepare_ocr_image(path, width, height, limits.page_pixels)?;
+    let path = prepared.path.to_str().context("invalid image path")?;
+    let prep_width = prepared.width;
+    let prep_height = prepared.height;
+    let mut provider_warning = None;
+    let mut out = (|| -> Result<OcrOutput> {
+        let mut out = OcrOutput {
+            blocks: vec![],
+            warnings: vec![],
         };
-        b.provenance.bounds = Some(Bounds {
-            x,
-            y,
-            width: w,
-            height: h,
-            coordinate_space: "image_pixels".into(),
-        });
-        b.attributes = json!({"ocr_score_uncalibrated":number(10),"rotation_degrees":rotation,"image_width":width,"image_height":height,"line":r.get(4),"paragraph":r.get(3),"block":r.get(2)});
-        out.blocks.push(b);
+        let block = |text: &str, source: &str| Block {
+            id: String::new(),
+            kind: "text".into(),
+            text: text.into(),
+            provenance: Provenance {
+                unit_id: String::new(),
+                method: "ocr".into(),
+                source: source.into(),
+                bounds: None,
+                cell_range: None,
+                evidence: vec![],
+            },
+            table: None,
+            asset_id: None,
+            diagram: None,
+            attributes: Value::Null,
+        };
+        if opts.ocr_provider == "apple_vision" {
+            #[cfg(target_os = "macos")]
+            {
+                let executable = std::env::var("DOC_APPLE_VISION").context(
+                    "dependency_unavailable: provision Apple Vision helper and set DOC_APPLE_VISION",
+                )?;
+                let bytes = command(&executable, &[path, &opts.languages])?;
+                let rows: Vec<Value> = serde_json::from_slice(&bytes)?;
+                for row in rows {
+                    let mut b = block(row["text"].as_str().unwrap_or(""), "Apple Vision");
+                    b.provenance.bounds = serde_json::from_value(row["bounds"].clone()).ok();
+                    b.attributes = row;
+                    out.blocks.push(b);
+                }
+                return Ok(out);
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                bail!("unsupported: Apple Vision requires macOS");
+            }
+        }
+        if opts.ocr_provider == "smoldocling" {
+            match smoldocling_ocr(&prepared.path, prep_width, prep_height) {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    if !available("tesseract") {
+                        return Err(error);
+                    }
+                    provider_warning = Some(format!(
+                        "SmolDocling-256M unavailable ({error:#}); OCR used Tesseract instead"
+                    ));
+                }
+            }
+        } else if opts.ocr_provider != "tesseract" {
+            bail!("unsupported OCR provider");
+        }
+        let langs = languages();
+        if !opts
+            .languages
+            .split('+')
+            .all(|l| langs.iter().any(|v| v == l))
+        {
+            bail!("dependency_unavailable: requested Tesseract language data is not provisioned");
+        }
+        let (data, rotation) = tesseract_oriented(path, opts)?;
+        if !data.starts_with(b"level\tpage_num\t") {
+            bail!("provider_error: Tesseract did not return TSV");
+        }
+        let mut reader = csv::ReaderBuilder::new()
+            .delimiter(b'\t')
+            .from_reader(&data[..]);
+        let records = reader
+            .records()
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        // Tesseract TSV is one row per word. Group words by (block, paragraph, line) so the
+        // canonical text is readable lines instead of one block per word. Without this, derived
+        // plain text, Markdown and RAG chunks place every word on its own line.
+        let mut lines: std::collections::BTreeMap<(u32, u32, u32), Vec<OcrWord>> =
+            std::collections::BTreeMap::new();
+        for r in records {
+            if r.get(0) != Some("5") {
+                continue;
+            }
+            let text = r.get(11).unwrap_or("").trim();
+            if text.is_empty() {
+                continue;
+            }
+            let number = |i| r.get(i).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.);
+            let (x, y, w, h) = (number(6), number(7), number(8), number(9));
+            let (x, y, w, h) = match rotation {
+                90 => (y, prep_height as f64 - x - w, h, w),
+                180 => (prep_width as f64 - x - w, prep_height as f64 - y - h, w, h),
+                270 => (prep_width as f64 - y - h, x, h, w),
+                _ => (x, y, w, h),
+            };
+            let key = (
+                r.get(2).and_then(|v| v.parse().ok()).unwrap_or(0),
+                r.get(3).and_then(|v| v.parse().ok()).unwrap_or(0),
+                r.get(4).and_then(|v| v.parse().ok()).unwrap_or(0),
+            );
+            lines.entry(key).or_default().push(OcrWord {
+                text: text.to_owned(),
+                x,
+                y,
+                width: w,
+                height: h,
+                score: number(10),
+            });
+        }
+        if lines.is_empty() {
+            out.warnings
+                .push("OCR returned no text; scan coverage is incomplete".into());
+        }
+        for ((block_num, paragraph, line_num), words) in lines {
+            let text = words
+                .iter()
+                .map(|word| word.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let x = words
+                .iter()
+                .map(|word| word.x)
+                .fold(f64::INFINITY, f64::min);
+            let y = words
+                .iter()
+                .map(|word| word.y)
+                .fold(f64::INFINITY, f64::min);
+            let x_max = words
+                .iter()
+                .map(|word| word.x + word.width)
+                .fold(0., f64::max);
+            let y_max = words
+                .iter()
+                .map(|word| word.y + word.height)
+                .fold(0., f64::max);
+            let score = if words.is_empty() {
+                0.
+            } else {
+                words.iter().map(|word| word.score).sum::<f64>() / words.len() as f64
+            };
+            let mut b = block(&text, "tesseract TSV");
+            b.provenance.bounds = Some(Bounds {
+                x,
+                y,
+                width: (x_max - x).max(1.),
+                height: (y_max - y).max(1.),
+                coordinate_space: "image_pixels".into(),
+            });
+            b.attributes = json!({"ocr_score_uncalibrated":score,"rotation_degrees":rotation,"image_width":prep_width,"image_height":prep_height,"line":line_num,"paragraph":paragraph,"block":block_num,"words":words.len()});
+            out.blocks.push(b);
+        }
+        Ok(out)
+    })()?;
+    if let Some((scale_x, scale_y)) = prepared.scale {
+        for block in &mut out.blocks {
+            if let Some(bounds) = &mut block.provenance.bounds {
+                bounds.x *= scale_x;
+                bounds.y *= scale_y;
+                bounds.width *= scale_x;
+                bounds.height *= scale_y;
+            }
+        }
+        out.warnings.push(format!(
+            "OCR image downscaled from {}x{} to {}x{} to fit the page pixel limit; boxes mapped back to the original image",
+            width, height, prepared.width, prepared.height
+        ));
+    }
+    if let Some(warning) = provider_warning {
+        out.warnings.push(warning);
     }
     Ok(out)
 }
@@ -286,6 +426,84 @@ pub fn ocr(path: &Path, u: &mut Unit, opts: &Options, limits: &Limits) -> Result
     let out = ocr_blocks(path, opts, limits)?;
     attach_ocr(u, out);
     Ok(())
+}
+fn smoldocling_ocr(path: &Path, width: u32, height: u32) -> Result<OcrOutput> {
+    let lockpath = std::env::var("DOC_VLM_LOCK").unwrap_or_else(|_| {
+        path.parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("vision.lock")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lockpath)?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            bail!("smoldocling lock failed");
+        }
+    }
+    let endpoint = std::env::var("DOC_SMOLDOCLING_URL")
+        .or_else(|_| std::env::var("DOC_VLM_URL"))
+        .context(
+            "dependency_unavailable: set DOC_SMOLDOCLING_URL or DOC_VLM_URL for SmolDocling-256M",
+        )?;
+    let url = reqwest::Url::parse(&endpoint)?;
+    let host = url.host_str().unwrap_or("");
+    if url.scheme() != "http"
+        || !["127.0.0.1", "[::1]", "::1"].contains(&host)
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        bail!("unsafe_endpoint: SmolDocling requires literal loopback HTTP");
+    }
+    let bytes = std::fs::read(path)?;
+    let mime = image::guess_format(&bytes)?.to_mime_type();
+    let image = format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    );
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(90))
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()?;
+    let model = std::env::var("DOC_SMOLDOCLING_MODEL")
+        .or_else(|_| std::env::var("DOC_VLM_MODEL"))
+        .unwrap_or_else(|_| "ds4sd/SmolDocling-256M-preview-mlx-bf16".into());
+    let request = json!({
+        "model": model,
+        "temperature": 0,
+        "max_tokens": 2048,
+        "messages": [{
+            "role": "user",
+            "content": [
+                { "type": "image_url", "image_url": { "url": image } },
+                { "type": "text", "text": "Convert this page to docling." }
+            ]
+        }]
+    });
+    let response = client
+        .post(url.join("/v1/chat/completions")?)
+        .json(&request)
+        .send()?
+        .error_for_status()?;
+    let mut body = vec![];
+    use std::io::Read;
+    response.take(1_048_577).read_to_end(&mut body)?;
+    if body.len() > 1_048_576 {
+        bail!("limit_exceeded: SmolDocling response");
+    }
+    let payload: Value = serde_json::from_slice(&body)?;
+    let content = payload["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("");
+    let (blocks, warnings) = crate::doctags::parse_blocks(content, width, height, "ocr")?;
+    Ok(OcrOutput { blocks, warnings })
 }
 pub fn vision(path: &Path, options: &Options) -> Result<Value> {
     let lockpath = std::env::var("DOC_VLM_LOCK").unwrap_or_else(|_| {

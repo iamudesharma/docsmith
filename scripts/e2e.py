@@ -143,6 +143,10 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('archive zip',arch[:2]==b'PK')
   view_code,view_page=request(f'/view/{jsonljob}')
   check('viewer page',view_code==200 and b'doc-extractor viewer' in view_page)
+  wasm_code,wasm_bytes=request('/wasm/doc_extractor.wasm')
+  js_code,js_bytes=request('/assets/web/app.js')
+  css_code,css_bytes=request('/assets/web/app.css')
+  check('rust wasm workbench bundle',wasm_code==200 and wasm_bytes[:4]==b'\x00asm' and js_code==200 and b'wasm_invoke' in js_bytes and css_code==200)
   metrics=request('/metrics')[1]
   check('prometheus metrics',b'doc_jobs{' in metrics and b'doc_workers_slots' in metrics)
   _,j=upload('quoted.csv',{'result_format':'html'});htmljob=j['id'];wait(htmljob)

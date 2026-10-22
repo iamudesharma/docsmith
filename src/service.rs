@@ -1072,7 +1072,7 @@ pub fn validate_options(options: &Options) -> ApiResult<()> {
             "Unknown parser",
         ));
     }
-    if !["tesseract", "apple_vision"].contains(&options.ocr_provider.as_str()) {
+    if !["tesseract", "apple_vision", "smoldocling"].contains(&options.ocr_provider.as_str()) {
         return Err(error(
             StatusCode::BAD_REQUEST,
             "invalid_options",
@@ -1110,6 +1110,13 @@ pub fn validate_options(options: &Options) -> ApiResult<()> {
             StatusCode::BAD_REQUEST,
             "invalid_options",
             "Expected result_format json, markdown, text, jsonl or html",
+        ));
+    }
+    if !["none", "failed", "all"].contains(&options.page_images.as_str()) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_options",
+            "Expected page_images none, failed or all",
         ));
     }
     if let Some(spec) = &options.pages {
@@ -1580,46 +1587,61 @@ fn cancel_job(app: &App, id: &str) -> ApiResult<()> {
     }
     Ok(())
 }
-const LANDING: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>doc-extractor</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { font: 15px/1.6 -apple-system, system-ui, sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1.2rem; }
-  code, pre { background: rgba(127,127,127,.16); border-radius: 6px; }
-  code { padding: .1rem .35rem; }
-  pre { padding: .8rem 1rem; overflow-x: auto; }
-  h1 { font-size: 1.5rem; }
-  li { margin: .25rem 0; }
-</style>
-</head>
-<body>
-<h1>doc-extractor</h1>
-<p>Offline-first document extraction service. JSON is canonical; Markdown, plain text and
-JSONL are derived. Nothing here downloads anything at runtime.</p>
-<ul>
-  <li><a href="/docs">/docs</a> &mdash; interactive API console (Swagger UI, works offline)</li>
-  <li><a href="/openapi.json">/openapi.json</a> &mdash; live OpenAPI contract</li>
-  <li><a href="/v1/stats">/v1/stats</a> &mdash; queue, job and disk statistics</li>
-  <li><a href="/v1/capabilities">/v1/capabilities</a> &mdash; formats and optional providers</li>
-  <li><a href="/health/ready">/health/ready</a> &mdash; readiness probe</li>
-</ul>
-<h2>Try it</h2>
-<pre>
-curl -F file=@document.pdf http://127.0.0.1:8787/v1/extractions
-curl http://127.0.0.1:8787/v1/extractions/&lt;id&gt;
-curl 'http://127.0.0.1:8787/v1/extractions/&lt;id&gt;/result?format=text'
-python3 scripts/preview.py &lt;id&gt;
-</pre>
-<p>Python client and streaming recipes: <code>clients/python/</code> and <code>docs/COOKBOOK.md</code>.</p>
-</body>
-</html>
-"#;
+const WEB_INDEX: &str = include_str!("../assets/web/index.html");
+const WEB_CSS: &str = include_str!("../assets/web/app.css");
+const WEB_JS: &str = include_str!("../assets/web/app.js");
+const WEB_WASM_GZ: &[u8] = include_bytes!("../assets/web/doc_extractor.wasm.gz");
+
 async fn landing() -> Html<&'static str> {
-    Html(LANDING)
+    Html(WEB_INDEX)
+}
+
+async fn web_css() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        WEB_CSS,
+    )
+        .into_response()
+}
+
+async fn web_js() -> Response {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        WEB_JS,
+    )
+        .into_response()
+}
+
+fn wasm_binary() -> &'static [u8] {
+    static WASM: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    WASM.get_or_init(|| {
+        use std::io::Read;
+        let mut out = Vec::new();
+        flate2::read::GzDecoder::new(WEB_WASM_GZ)
+            .read_to_end(&mut out)
+            .expect("embedded doc_extractor.wasm.gz is valid gzip");
+        out
+    })
+}
+
+async fn web_wasm() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "application/wasm"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        wasm_binary(),
+    )
+        .into_response()
 }
 #[derive(Deserialize)]
 struct ListQuery {
@@ -1833,144 +1855,8 @@ async fn events(
 struct ArchiveQuery {
     units: Option<bool>,
 }
-const VIEWER: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>doc-extractor viewer</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 0; }
-  header { position: sticky; top: 0; background: Canvas; border-bottom: 1px solid rgba(127,127,127,.4); padding: .6rem 1rem; display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
-  main { padding: 1rem; }
-  h1 { font-size: 1rem; margin: 0; }
-  button, input, select { font: inherit; padding: .25rem .5rem; }
-  table { border-collapse: collapse; font-size: 13px; }
-  td, th { border: 1px solid rgba(127,127,127,.45); padding: .2rem .45rem; max-width: 28rem; overflow-wrap: anywhere; vertical-align: top; }
-  tbody tr:nth-child(even) { background: rgba(127,127,127,.09); }
-  .muted { opacity: .7; }
-  pre { white-space: pre-wrap; background: rgba(127,127,127,.12); padding: .6rem; border-radius: 6px; }
-  .block { margin-bottom: 1.2rem; }
-  .pill { border: 1px solid rgba(127,127,127,.5); border-radius: 999px; padding: .1rem .6rem; font-size: 12px; }
-  .error { color: crimson; white-space: pre-wrap; }
-</style>
-</head>
-<body>
-<header>
-  <h1 id="title">doc-extractor viewer</h1>
-  <span class="pill" id="state">…</span>
-  <span class="muted" id="progress"></span>
-  <label class="muted">unit <input id="unit" size="4" value="u1"></label>
-  <label class="muted">rows <input id="from" size="6" value="0" title="first row"> + <input id="count" size="5" value="500" title="row count"></label>
-  <button id="load">Load</button>
-  <button id="prev">&larr;</button>
-  <button id="next">&rarr;</button>
-  <span style="flex:1"></span>
-  <label class="muted">token <input id="token" size="10" type="password" title="bearer token for protected servers"></label>
-  <span id="links" class="muted"></span>
-</header>
-<main id="body"><p class="muted">Loading…</p></main>
-<script>
-var job = decodeURIComponent(location.pathname.split('/').pop());
-var tokenBox = document.getElementById('token');
-tokenBox.value = localStorage.getItem('docsmith-token') || '';
-tokenBox.addEventListener('change', function () { localStorage.setItem('docsmith-token', tokenBox.value); });
-function headers() { var h = {}; if (tokenBox.value) h.Authorization = 'Bearer ' + tokenBox.value; return h; }
-function get(path) {
-  return fetch(path, { headers: headers() }).then(function (r) {
-    return r.text().then(function (body) {
-      if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + body.slice(0, 400));
-      try { return JSON.parse(body); } catch (e) { return body; }
-    });
-  });
-}
-function text(tag, value, cls) { var el = document.createElement(tag); el.textContent = value; if (cls) el.className = cls; return el; }
-function renderTable(table) {
-  var cells = {};
-  table.cells.forEach(function (c) { (cells[c.row] = cells[c.row] || {})[c.column] = c; });
-  var rows = Object.keys(cells).map(Number).sort(function (a, b) { return a - b; });
-  var el = document.createElement('table');
-  var thead = document.createElement('thead'), tr = document.createElement('tr');
-  tr.appendChild(text('th', 'row'));
-  for (var c = 0; c < table.columns; c++) tr.appendChild(text('th', 'col ' + (c + 1)));
-  thead.appendChild(tr); el.appendChild(thead);
-  var tbody = document.createElement('tbody');
-  rows.forEach(function (r) {
-    var row = document.createElement('tr');
-    row.appendChild(text('td', String(r), 'muted'));
-    for (var c = 0; c < table.columns; c++) {
-      var cell = cells[r][c];
-      row.appendChild(text('td', cell ? cell.raw : ''));
-    }
-    tbody.appendChild(row);
-  });
-  el.appendChild(tbody);
-  return el;
-}
-function renderUnit(unit, slice) {
-  var body = document.getElementById('body');
-  body.innerHTML = '';
-  if (slice) body.appendChild(text('p', 'rows ' + slice.from + '…' + (slice.from + slice.rows) + ' (table rows in this unit: ' + slice.rows + ')', 'muted'));
-  (unit.blocks || []).forEach(function (block) {
-    var div = document.createElement('div'); div.className = 'block';
-    if (block.table) div.appendChild(renderTable(block.table));
-    else if (block.text) div.appendChild(text('pre', block.text));
-    else if (block.asset_id) {
-      var link = text('a', 'asset ' + block.asset_id, '');
-      link.href = '/v1/extractions/' + job + '/assets/' + block.asset_id;
-      div.appendChild(link);
-    }
-    body.appendChild(div);
-  });
-  if (!body.childNodes.length) body.appendChild(text('p', 'No blocks in this unit.', 'muted'));
-}
-function load() {
-  var unit = document.getElementById('unit').value || 'u1';
-  var from = document.getElementById('from').value || '0';
-  var count = document.getElementById('count').value || '500';
-  var body = document.getElementById('body');
-  get('/v1/extractions/' + job + '/units/' + unit + '?from=' + from + '&count=' + count)
-    .then(function (data) { renderUnit(data.unit ? data.unit : data, data.slice); })
-    .catch(function (e) { body.innerHTML = ''; body.appendChild(text('pre', String(e.message || e), 'error')); });
-}
-var timer = null;
-function refresh() {
-  get('/v1/extractions/' + job).then(function (status) {
-    document.getElementById('title').textContent = status.filename + ' · ' + job.slice(0, 8);
-    document.getElementById('state').textContent = status.state;
-    document.getElementById('progress').textContent = 'units ' + status.progress + (status.result_status ? ' · ' + status.result_status : '');
-    document.getElementById('links').innerHTML = '';
-    [['json', 'JSON'], ['markdown', 'Markdown'], ['text', 'Text'], ['jsonl', 'JSONL'], ['html', 'HTML']].forEach(function (pair) {
-      var a = text('a', pair[1] + ' ', '');
-      a.href = '/v1/extractions/' + job + '/result?format=' + pair[0];
-      document.getElementById('links').appendChild(a);
-    });
-    var zip = text('a', 'zip', ''); zip.href = '/v1/extractions/' + job + '/archive';
-    document.getElementById('links').appendChild(zip);
-    if (['completed', 'failed', 'cancelled'].indexOf(status.state) >= 0) { clearInterval(timer); timer = null; }
-  }).catch(function (e) {
-    document.getElementById('body').innerHTML = '';
-    document.getElementById('body').appendChild(text('pre', String(e.message || e), 'error'));
-    if (timer) { clearInterval(timer); timer = null; }
-  });
-}
-document.getElementById('load').addEventListener('click', load);
-document.getElementById('prev').addEventListener('click', function () {
-  var n = Math.max(1, parseInt(document.getElementById('unit').value.replace(/\D/g, '') || '1', 10) - 1);
-  document.getElementById('unit').value = 'u' + n; load();
-});
-document.getElementById('next').addEventListener('click', function () {
-  var n = parseInt(document.getElementById('unit').value.replace(/\D/g, '') || '1', 10) + 1;
-  document.getElementById('unit').value = 'u' + n; load();
-});
-refresh(); load(); timer = setInterval(refresh, 1500);
-</script>
-</body>
-</html>
-"#;
 async fn view() -> Html<&'static str> {
-    Html(VIEWER)
+    Html(WEB_INDEX)
 }
 async fn archive(
     State(app): State<App>,
@@ -2032,7 +1918,7 @@ fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> 
             std::io::copy(&mut std::fs::File::open(&source)?, &mut zip)?;
         }
     }
-    for (folder, prefix) in [("assets", "assets"), ("units", "units")] {
+    for (folder, prefix) in [("assets", "assets"), ("pages", "pages"), ("units", "units")] {
         if folder == "units" && !include_units {
             continue;
         }
@@ -2089,7 +1975,7 @@ async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 pub fn capabilities() -> Value {
-    json!({"engine":ENGINE_VERSION,"xberg":{"configured":std::env::var("DOC_XBERG").is_ok(),"required_version":"1.3.8","mapping":"partial"},"native_formats":["txt","md","json","xml","html","csv","tsv","xlsx","xls","xlsm","xlsb","ods","docx","pptx","odt","odp","epub","eml","rtf","drawio","svg","mermaid","dot","plantuml","dbml","vsdx"],"pdf":{"available":providers::available("pdfinfo")&&providers::available("pdftotext")&&providers::available("pdfimages"),"backend":"poppler","tables":"unvalidated","page_geometry":true,"vector_source_preserved":true},"ocr":{"tesseract":providers::available("tesseract"),"languages":providers::languages(),"apple_vision":cfg!(target_os="macos")&&std::env::var("DOC_APPLE_VISION").is_ok(),"paddle_onnx":false},"vision":{"configured":std::env::var("DOC_VLM_URL").is_ok(),"model":std::env::var("DOC_VLM_MODEL").ok(),"automatic_downloads":false},"offline_default":true,"limitations":["Logical Word/ODT sections are not physical pages","Legacy DOC/PPT/VSD are unsupported","Visio/SmartArt source preserved; semantics unsupported","Text diagram parsers implement documented subsets","Spreadsheet formulas are not recalculated"]})
+    json!({"engine":ENGINE_VERSION,"xberg":{"configured":std::env::var("DOC_XBERG").is_ok(),"required_version":"1.3.8","mapping":"partial"},"native_formats":["txt","md","json","xml","html","csv","tsv","xlsx","xls","xlsm","xlsb","ods","docx","pptx","odt","odp","epub","eml","rtf","drawio","svg","mermaid","dot","plantuml","dbml","doctags","vsdx"],"pdf":{"available":providers::available("pdfinfo")&&providers::available("pdftotext")&&providers::available("pdfimages"),"backend":"poppler","tables":"unvalidated","page_geometry":true,"page_images":{"available":providers::available("pdftoppm"),"dpi":150},"vector_source_preserved":true},"ocr":{"tesseract":providers::available("tesseract"),"languages":providers::languages(),"apple_vision":cfg!(target_os="macos")&&std::env::var("DOC_APPLE_VISION").is_ok(),"smoldocling":std::env::var("DOC_SMOLDOCLING_URL").is_ok()||std::env::var("DOC_VLM_URL").is_ok(),"paddle_onnx":false},"vision":{"configured":std::env::var("DOC_VLM_URL").is_ok(),"model":std::env::var("DOC_VLM_MODEL").ok(),"automatic_downloads":false},"offline_default":true,"limitations":["Logical Word/ODT sections are not physical pages","Legacy DOC/PPT/VSD are unsupported","Visio/SmartArt source preserved; semantics unsupported","Text diagram parsers implement documented subsets","Spreadsheet formulas are not recalculated"]})
 }
 pub fn openapi() -> Value {
     let doc_schema = serde_json::to_value(schemars::schema_for!(Document)).unwrap();
@@ -2295,6 +2181,9 @@ pub fn router(app: App) -> Router {
     Router::new()
         .route("/", get(landing))
         .route("/view/{id}", get(view))
+        .route("/assets/web/app.css", get(web_css))
+        .route("/assets/web/app.js", get(web_js))
+        .route("/wasm/doc_extractor.wasm", get(web_wasm))
         .route("/v1/extractions", get(list).post(upload))
         .route("/v1/stats", get(stats))
         .route("/metrics", get(metrics))

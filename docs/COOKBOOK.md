@@ -193,6 +193,32 @@ Selected pages keep their original numbering (`Page 60` stays `Page 60`), checkp
 pages are ignored, and the document metadata records `pages_total` and `page_range`. Applies to
 PDFs; other formats ignore the option.
 
+## Page images for a later vision/LLM pass
+
+```sh
+# Keep rasters of pages whose text extraction is empty, sparse or errored:
+curl -s -F file=@report.pdf -F 'options={"page_images":"failed"}' "$BASE/v1/extractions"
+# Or keep every selected PDF page (for diagrams/charts and a full visual pass):
+curl -s -F file=@report.pdf -F 'options={"page_images":"all"}' "$BASE/v1/extractions"
+
+# CLI: writes pages/ next to result.json
+target/release/doc-extractor extract report.pdf --page-images failed --output data/report
+```
+
+`pages/` contains one 150 dpi PNG per kept page (`pages/u3.png`) and `pages/manifest.json`:
+
+```json
+{"mode":"failed","count":1,"pages":[{"unit_id":"u3","unit_name":"Page 3","kind":"page","page":3,
+  "reason":"no_text","path":"pages/u3.png","asset_id":"a1b2…","mime":"image/png",
+  "width":1275,"height":1650,"bytes":184320,"hash":"…","dpi":150}]}
+```
+
+Reasons are `requested` (`all`), `no_text`, `sparse_text` (under 24 extracted text characters),
+`extraction_error` (some provider/parse failure) and `ocr_empty`. Image inputs link their original
+bytes instead of re-encoding; the raster is also a normal asset, so
+`GET /v1/extractions/{id}/assets/{asset_id}` returns the same bytes. Pages are included in
+`GET .../archive`. This is opt-in: without `page_images` no `pages/` directory is written.
+
 ## RAG chunks
 
 ```sh

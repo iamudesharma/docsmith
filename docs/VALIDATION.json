@@ -1,13 +1,13 @@
 {
- "date": "2026-10-13",
+ "date": "2026-10-21",
  "platform": "aarch64-apple-darwin",
  "rust": "1.88.0",
- "tests_passed": 54,
+ "tests_passed": 61,
  "live_api_checks": 60,
  "build": "passed (--locked)",
  "format": "passed",
  "clippy": "passed (--all-targets -D warnings)",
- "binary_sha256": "1ac75b10c21a6dba8261cbdce548d1c44d79fd58daba6219fd9b8cd80c2be779",
+ "binary_sha256": "96bd57d4549cf1d837763bdc3cf57e392f24191076c6ded98079db48b63da836",
  "cargo_lock_sha256": "336ec5bf13c79657c2d161b4c00f0f673f74bddf81b21cfeb452e59b5a4ec5c9",
  "fixture_files": 44,
  "unrun": [
@@ -34,8 +34,11 @@
   "Phase 7: HTML derived export, batch upload (repeat the file field, one job per file), JSON log mode, docker-compose and systemd samples",
   "Phase 8: 1-based PDF page selection (options.pages, contiguous batch scheduling, ranged checkpoints)",
   "Phase 9: opt-in RAG chunking (chunk_chars/chunk_overlap, result.chunks.jsonl, ?format=chunks, CLI flags)",
-  "Phase 10: folder-watch ingestion (watch_dir/watch_options/watch_tenant) and native S3 uploads (SigV4 verified against botocore reference vectors; e2e PUT checked against a local S3-compatible mock)"
+  "Phase 10: folder-watch ingestion (watch_dir/watch_options/watch_tenant) and native S3 uploads (SigV4 verified against botocore reference vectors; e2e PUT checked against a local S3-compatible mock)",
+  "Phase 11: opt-in page images for downstream vision/LLM extraction (page_images none/failed/all, 150 dpi PDF rasters, pages/ directory with a manifest, hard-linked assets, stale-raster cleanup, archive inclusion)"
  ],
  "large_input_evidence": "docs/perf-large-inputs.json (2026-10-13: digital/scanned/mixed/image-heavy PDFs, 2M-row CSV, recovery, cancellation)",
- "accuracy_evidence": "docs/ACCURACY.md / docs/accuracy-results.json (13 October 2026: cells 29/29, PDF pages 138/138, content checks 25/25, English OCR CER 0 over 5 raster cases)"
+ "accuracy_evidence": "docs/ACCURACY.md / docs/accuracy-results.json (13 October 2026: cells 29/29, PDF pages 138/138, content checks 25/25, English OCR CER 0 over 5 raster cases)",
+ "concurrency_report": "docs/CONCURRENCY.md / docs/concurrency-results.json (2026-10-21: 20 synthetic PDFs / 316 pages, 3 repetitions per config; default median 22.5 s, tuned 17.1 s; 20/20 documents and all page/table/OCR checks pass)",
+ "hindi_english_ocr": "fixtures/hindi-english-complex.pdf + .ground-truth.txt; 3 pages, 0 unit errors, CER 3.94%, WER 19.50%, 29/32 fields, page 2 CER 0.27%; scanned tables not promoted to structured Table blocks. Report: docs/hindi-english-ocr.md"
 }

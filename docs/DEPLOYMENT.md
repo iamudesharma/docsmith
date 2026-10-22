@@ -4,7 +4,15 @@
 
 Rust 1.88+ and a compatible Xcode/Command Line Tools SDK are required. The observed host has Xcode's clang 17 plus SDK 27; their linker combination fails on the new `arm64e.x1` architecture in libSystem.tbd. `scripts/cargo-local.sh` selects installed SDK 26.5 per command and was used for local builds/tests. It does not change xcode-select, shell files or system SDKs.
 
-Provision native programs once, e.g. `brew install poppler tesseract`. These downloads are provisioning operations, never document-request behavior. English language data must be present. `TESSDATA_PREFIX=/absolute/local/tessdata` can select an isolated installation; provision `eng.traineddata`, `osd.traineddata` and `hin.traineddata` as needed. Training data licensing and checksums are listed in the vendor manifest.
+Provision native programs once, e.g. `brew install poppler tesseract`. These downloads are provisioning operations, never document-request behavior. English language data must be present. `TESSDATA_PREFIX=/absolute/local/tessdata` can select an isolated installation; provision `eng.traineddata`, `osd.traineddata` and `hin.traineddata` as needed. For English + Hindi on Homebrew, install the checked-in fast models and confirm discovery:
+
+```sh
+scripts/install-ocr-languages.sh eng hin
+tesseract --list-langs          # must list eng and hin
+# request OCR with {"languages":"eng+hin"}
+```
+
+Training data licensing and checksums are listed in the vendor manifest.
 
 Build Apple Vision with `scripts/build-apple-vision.sh`, then export its absolute executable path as `DOC_APPLE_VISION`. The helper queries supported languages and rejects unsupported selections. It uses a CPU request and a decoded CGImage, avoiding observed local Vision GPU execution errors. Apple SDK/platform terms apply; this helper is unavailable on Linux.
 
@@ -20,6 +28,15 @@ Use a provisioned llama.cpp server. The measured installation reports build 1114
 - matching `mmproj-SmolVLM2-2.2B-Instruct-Q8_0.gguf`
 
 The helper script does not download files. Weights are ignored by Git. Set `DOC_VLM_URL=http://127.0.0.1:8799`, `DOC_VLM_MODEL=SmolVLM2`, and an immutable `DOC_VLM_REVISION` (weights/projector/context/quantization identity) if enabling VLM result caching. A server-owned file lock admits one model request at a time across workers. Request cancellation closes the HTTP call; the external llama.cpp server owns its inference cancellation behavior. Server-side memory is outside the extraction worker memory quota.
+
+### SmolDocling-256M OCR (optional, ~350–500 MB)
+
+SmolDocling-256M is a document-specialist OCR model: it returns DocTags with normalized bounding boxes and OTSL tables, parsed in pure Rust by `src/doctags.rs`. It fits an 8 GB Apple Silicon machine and is much lighter than a general 3B vision model.
+
+- Apple MLX: `pip install mlx-vlm`, then `scripts/run-smoldocling.sh` (uses `ds4sd/SmolDocling-256M-preview-mlx-bf16`).
+- GGUF/llama.cpp: place `SmolDocling-256M-preview-Q8_0.gguf` and the matching `mmproj-…gguf` in `models/`, then run the same script.
+- Select it per request with `{"ocr": true, "ocr_provider": "smoldocling"}`. Set `DOC_SMOLDOCLING_URL` (defaults to `DOC_VLM_URL`) and optionally `DOC_SMOLDOCLING_MODEL`.
+- If the service is not running, extraction falls back to Tesseract when installed and records a warning; the page is not lost.
 
 The actual test host is **MacBookAir10,1, M1, 8 GB**, not the brief's M1 Pro 16 GB. See measured RSS and swap snapshots in benchmark-results.json. GGUF size, worker RSS and model-server RSS are distinct; Metal allocations and compressed memory need whole-system monitoring. Do not increase concurrency from this small synthetic experiment.
 
@@ -100,4 +117,4 @@ The Dockerfile and CI workflow install Poppler and English/Hindi Tesseract data.
 
 ## API status semantics
 
-POST `/v1/extractions` uses multipart `file` plus JSON-encoded `options` (empty means defaults) and an optional `callback_url`; success returns 202 `{id,cached}`. The `file` field may repeat (max 32 per request): each file becomes an independent job and the 202 body is then `{jobs:[{id,cached,filename}],total}`. Poll GET job for `queued`, `running`, `completed`, `failed` or `cancelled`, list with `GET /v1/extractions?state=&limit=&offset=`, or stream changes with `GET /v1/extractions/{id}/events` (server-sent events, closes on terminal state). `GET /v1/stats` reports per-state counts, active/slot workers, pending webhook deliveries and jobs-directory disk usage. GET result returns 409 until the job completes. It serves the job's `result_format` option (`json` canonical, `markdown`, `text`, `jsonl` — one JSON record per row — or `html`), and `?format=json|markdown|text|jsonl|html` overrides it per request. Unit checkpoints can be retrieved earlier, and `?from=&count=` returns a `{slice, unit}` table preview instead of a full multi-megabyte unit. `GET /v1/extractions/{id}/archive` streams a zip of the result artifacts (`?units=1` includes checkpoints). A completed job can have partial/unsupported/failed document coverage. GET assets returns original bytes as an attachment. POST cancel is idempotent. DELETE cancels, waits for worker termination, removes retained files/DB row and returns 204; if termination is still pending it returns retryable 409. Error responses have `{error:{code,message}}`. Limits produce 413 for upload bytes and 429 for queue saturation; document/unit failures retain successful units. The Swagger UI at `/docs` renders the same live contract (`/docs/openapi.json`) with try-it-out and a bearer-token `Authorize` field when tokens are configured; its assets are compiled into the binary, so it works offline.
+POST `/v1/extractions` uses multipart `file` plus JSON-encoded `options` (empty means defaults) and an optional `callback_url`; success returns 202 `{id,cached}`. The `file` field may repeat (max 32 per request): each file becomes an independent job and the 202 body is then `{jobs:[{id,cached,filename}],total}`. Poll GET job for `queued`, `running`, `completed`, `failed` or `cancelled`, list with `GET /v1/extractions?state=&limit=&offset=`, or stream changes with `GET /v1/extractions/{id}/events` (server-sent events, closes on terminal state). `GET /v1/stats` reports per-state counts, active/slot workers, pending webhook deliveries and jobs-directory disk usage. GET result returns 409 until the job completes. It serves the job's `result_format` option (`json` canonical, `markdown`, `text`, `jsonl` — one JSON record per row — or `html`), and `?format=json|markdown|text|jsonl|html` overrides it per request. Unit checkpoints can be retrieved earlier, and `?from=&count=` returns a `{slice, unit}` table preview instead of a full multi-megabyte unit. `GET /v1/extractions/{id}/archive` streams a zip of the result artifacts (`?units=1` includes checkpoints; opt-in `pages/` rasters are always included). A completed job can have partial/unsupported/failed document coverage. GET assets returns original bytes as an attachment. POST cancel is idempotent. DELETE cancels, waits for worker termination, removes retained files/DB row and returns 204; if termination is still pending it returns retryable 409. Error responses have `{error:{code,message}}`. Limits produce 413 for upload bytes and 429 for queue saturation; document/unit failures retain successful units. The Swagger UI at `/docs` renders the same live contract (`/docs/openapi.json`) with try-it-out and a bearer-token `Authorize` field when tokens are configured; its assets are compiled into the binary, so it works offline.

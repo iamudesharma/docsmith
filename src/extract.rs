@@ -24,6 +24,7 @@ pub fn parser_fingerprint() -> String {
             include_str!("model.rs"),
             include_str!("charts.rs"),
             include_str!("markup.rs"),
+            include_str!("doctags.rs"),
             include_str!("../Cargo.lock")
         )
         .as_bytes(),
@@ -446,21 +447,22 @@ impl ContextData {
         if self.document.assets.iter().any(|a| a.id == id) {
             return Ok(id);
         }
-        self.retained = self
+        let retained = self
             .retained
             .checked_add(bytes.len() as u64)
             .context("asset overflow")?;
-        if self.retained > self.limits.output_bytes {
+        if retained > self.limits.output_bytes {
             bail!("limit_exceeded: asset bytes");
         }
+        self.retained = retained;
         fs::write(self.dir.join("assets").join(&id), bytes)?;
         let dimensions = image::ImageReader::new(std::io::Cursor::new(bytes))
             .with_guessed_format()
             .ok()
             .and_then(|r| r.into_dimensions().ok());
-        if dimensions.is_some_and(|(w, h)| w as u64 * h as u64 > self.limits.page_pixels) {
-            bail!("limit_exceeded: image pixels");
-        }
+        // Keep the original asset regardless of its pixel count. `page_pixels` bounds OCR and
+        // render work (where images are decoded/downscaled), not cold storage; rejecting here
+        // discarded large scans before the page-render OCR path could recover them.
         let ext = name.rsplit('.').next().unwrap_or("");
         let provenance = Provenance {
             unit_id: u.id.clone(),
@@ -504,7 +506,68 @@ impl ContextData {
         u.text("figure", "", name).asset_id = Some(id.clone());
         Ok(id)
     }
-    pub(crate) fn figure(&mut self, bytes: &[u8], name: &str, u: &mut Unit) -> Result<()> {
+    /// Keep a raster of one page for downstream vision/LLM extraction. The bytes are stored
+    /// once as a content-addressed asset; `pages/<unit>.<ext>` is a hard link (copy fallback)
+    /// so consumers can ship the directory without parsing `result.json`.
+    pub(crate) fn page_image(
+        &mut self,
+        bytes: &[u8],
+        ext: &str,
+        page: usize,
+        reason: &str,
+        dpi: Option<u32>,
+        u: &mut Unit,
+    ) -> Result<()> {
+        let id = self.asset(bytes, &format!("page-{page}.{ext}"), u)?;
+        self.record_page_image(&id, ext, page, reason, dpi, u)
+    }
+    /// Link an existing asset into `pages/` and annotate the unit block that references it.
+    /// Used for standalone images whose original bytes are already the page raster.
+    pub(crate) fn record_page_image(
+        &mut self,
+        asset_id: &str,
+        ext: &str,
+        page: usize,
+        reason: &str,
+        dpi: Option<u32>,
+        u: &mut Unit,
+    ) -> Result<()> {
+        let pages = self.dir.join("pages");
+        fs::create_dir_all(&pages)?;
+        let path = format!("pages/{}.{ext}", u.id);
+        let destination = self.dir.join(&path);
+        if destination.exists() {
+            fs::remove_file(&destination)?;
+        }
+        let source = self.dir.join("assets").join(asset_id);
+        if fs::hard_link(&source, &destination).is_err() {
+            fs::copy(&source, &destination)?;
+        }
+        let meta = json!({
+            "page": page,
+            "reason": reason,
+            "path": path,
+            "asset_id": asset_id,
+            "dpi": dpi,
+        });
+        if let Some(block) = u
+            .blocks
+            .iter_mut()
+            .find(|b| b.asset_id.as_deref() == Some(asset_id))
+        {
+            if !block.attributes.is_object() {
+                block.attributes = json!({});
+            }
+            block.attributes["page_image"] = meta;
+        } else {
+            let block = u.text("page_image", "", "rendered page");
+            block.provenance.method = "rendered".into();
+            block.asset_id = Some(asset_id.to_owned());
+            block.attributes = json!({"page_image": meta});
+        }
+        Ok(())
+    }
+    pub(crate) fn figure(&mut self, bytes: &[u8], name: &str, u: &mut Unit) -> Result<String> {
         let id = self.figure_asset(bytes, name, u)?;
         let path = self.dir.join("assets").join(&id);
         if self.options.ocr {
@@ -522,32 +585,40 @@ impl ContextData {
         if self.options.vision {
             match providers::vision(&path, &self.options) {
                 Ok(v) => {
-                    let b = u.text(
-                        "caption",
-                        v["choices"][0]["message"]["content"].as_str().unwrap_or(""),
-                        "local vision",
-                    );
-                    b.provenance.method = "inferred".into();
-                    b.asset_id = Some(id);
-                    b.attributes = json!({"raw_response":v,"confidence_calibrated":false});
-                    if self.options.interpret_diagrams {
-                        match crate::diagrams::vision_graph(&b.text) {
-                            Ok(graph) => {
-                                b.kind = "diagram".into();
-                                let warnings = graph.warnings.clone();
-                                b.diagram = Some(graph);
-                                u.warnings.extend(warnings);
+                    let content = v["choices"][0]["message"]["content"].as_str().unwrap_or("");
+                    if crate::doctags::contains_doctags(content) {
+                        let before = u.blocks.len();
+                        if let Err(e) = crate::doctags::extract(content, u, 0, 0, "inferred") {
+                            u.warnings
+                                .push(format!("SmolDocling DocTags parse warning: {e}"));
+                        }
+                        for b in &mut u.blocks[before..] {
+                            b.asset_id = Some(id.clone());
+                        }
+                    } else {
+                        let b = u.text("caption", content, "local vision");
+                        b.provenance.method = "inferred".into();
+                        b.asset_id = Some(id.clone());
+                        b.attributes = json!({"raw_response":v,"confidence_calibrated":false});
+                        if self.options.interpret_diagrams {
+                            match crate::diagrams::vision_graph(&b.text) {
+                                Ok(graph) => {
+                                    b.kind = "diagram".into();
+                                    let warnings = graph.warnings.clone();
+                                    b.diagram = Some(graph);
+                                    u.warnings.extend(warnings);
+                                }
+                                Err(e) => u.warnings.push(format!(
+                                    "Vision graph JSON invalid; raw inferred description retained: {e}"
+                                )),
                             }
-                            Err(e) => u.warnings.push(format!(
-                                "Vision graph JSON invalid; raw inferred description retained: {e}"
-                            )),
                         }
                     }
                 }
                 Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
             }
         }
-        Ok(())
+        Ok(id)
     }
 }
 pub fn failure(e: &anyhow::Error, unit_id: Option<String>) -> Failure {
@@ -582,6 +653,10 @@ pub fn extract(
 ) -> Result<Document> {
     fs::create_dir_all(dir.join("assets"))?;
     fs::create_dir_all(dir.join("units"))?;
+    if options.page_images == "none" {
+        // A resumed/re-run job with page images disabled must not leave stale rasters behind.
+        let _ = fs::remove_dir_all(dir.join("pages"));
+    }
     let bytes = fs::read(input)?;
     if bytes.len() as u64 > limits.upload_bytes {
         bail!("limit_exceeded: upload bytes");
@@ -657,6 +732,15 @@ pub fn extract(
             }
         }
     }
+    // A non-matching identity (new options, page range or parser) re-extracts every unit, so
+    // stale rasters from the previous run must not survive in `pages/`. A matching PDF identity
+    // keeps them: a checkpointed unit always has its page image because it is written first.
+    if c.options.page_images != "none" && !c.identity_ok {
+        let _ = fs::remove_dir_all(dir.join("pages"));
+        if supports_page_images(&ext) {
+            fs::create_dir_all(dir.join("pages"))?;
+        }
+    }
     atomic_json(
         &dir.join("identity.json"),
         &json!({
@@ -728,8 +812,56 @@ pub fn extract(
     });
     write_derived(dir, &c.document, chunking)?;
     time_stage(&STAGE_DERIVED_MS, derived_started);
+    if supports_page_images(&ext) {
+        write_page_image_manifest(dir, &c.document, &c.options.page_images)?;
+    }
     atomic_json(&dir.join("timings.json"), &stage_timings())?;
     Ok(c.document)
+}
+/// Index the page rasters referenced by unit blocks. Written as `pages/manifest.json` next to
+/// the images so an LLM pipeline can consume the directory without parsing the full result.
+fn write_page_image_manifest(dir: &Path, doc: &Document, mode: &str) -> Result<()> {
+    if mode == "none" {
+        return Ok(());
+    }
+    fs::create_dir_all(dir.join("pages"))?;
+    let mut pages = Vec::new();
+    for unit in &doc.units {
+        for block in &unit.blocks {
+            let Some(meta) = block.attributes.get("page_image") else {
+                continue;
+            };
+            let Some(asset_id) = meta["asset_id"].as_str() else {
+                continue;
+            };
+            let Some(asset) = doc.assets.iter().find(|a| a.id == asset_id) else {
+                continue;
+            };
+            pages.push(PageImage {
+                unit_id: unit.id.clone(),
+                unit_name: unit.name.clone(),
+                kind: unit.kind.clone(),
+                page: meta["page"].as_u64().unwrap_or(1) as usize,
+                reason: meta["reason"].as_str().unwrap_or("requested").to_owned(),
+                path: meta["path"].as_str().unwrap_or_default().to_owned(),
+                asset_id: asset_id.to_owned(),
+                mime: asset.mime.clone(),
+                width: asset.width,
+                height: asset.height,
+                bytes: asset.bytes,
+                hash: asset.hash.clone(),
+                dpi: meta["dpi"].as_u64().map(|dpi| dpi as u32),
+            });
+        }
+    }
+    atomic_json(
+        &dir.join("pages/manifest.json"),
+        &PageImageManifest {
+            mode: mode.to_owned(),
+            count: pages.len(),
+            pages,
+        },
+    )
 }
 /// Load a unit's full payload for derivation: released units read their unit file, everything
 /// else is used from memory. One unit is materialized at a time.
@@ -819,7 +951,7 @@ fn route(c: &mut ContextData, input: &Path, bytes: &[u8], ext: &str) -> Result<(
                 bail!("limit_exceeded: image pixels");
             }
             let mut u = Unit::new(0, "image", "Image");
-            c.figure(bytes, &format!("original.{ext}"), &mut u)?;
+            let asset = c.figure(bytes, &format!("original.{ext}"), &mut u)?;
             if ext == "png" {
                 if let Some(source) = diagrams::embedded_png(bytes, c.limits.archive_bytes)? {
                     for (_, g) in diagrams::drawio(&source, c.limits.archive_bytes)? {
@@ -829,6 +961,25 @@ fn route(c: &mut ContextData, input: &Path, bytes: &[u8], ext: &str) -> Result<(
             }
             if !c.options.ocr {
                 u.status = "needs_ocr".into();
+            }
+            let reason = if c.options.page_images == "all" {
+                Some("requested")
+            } else if c.options.page_images == "failed" {
+                let recovered = c.options.ocr
+                    && u.errors.is_empty()
+                    && u.blocks
+                        .iter()
+                        .any(|b| b.provenance.method == "ocr" && !b.text.trim().is_empty());
+                if recovered {
+                    None
+                } else {
+                    Some(page_image_reason(&u, 0).unwrap_or("no_text"))
+                }
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                c.record_page_image(&asset, ext, 1, reason, None, &mut u)?;
             }
             c.checkpoint(u)
         }
@@ -850,6 +1001,14 @@ fn route(c: &mut ContextData, input: &Path, bytes: &[u8], ext: &str) -> Result<(
             c.checkpoint(u)
         }
         "svg" => svg(c, std::str::from_utf8(bytes)?, bytes),
+        "doctags" | "dt" => {
+            let mut u = Unit::new(0, "page", "DocTags Page");
+            crate::doctags::extract(std::str::from_utf8(bytes)?, &mut u, 0, 0, "native")?;
+            if !u.warnings.is_empty() {
+                u.status = "partial".into();
+            }
+            c.checkpoint(u)
+        }
         "eml" => email(c, bytes),
         "rtf" => rtf(c, bytes),
         "txt" | "md" | "markdown" | "json" | "xml" | "html" | "htm" => text_document(c, bytes, ext),
@@ -1811,6 +1970,39 @@ fn rtf(c: &mut ContextData, bytes: &[u8]) -> Result<()> {
 /// OCR enabled the page is rendered and OCR'd too. Duplicate words are suppressed by
 /// [`providers::attach_ocr`], so a page whose OCR matches its text layer gains no blocks.
 const OCR_RENDER_MAX_NATIVE_CHARS: usize = 24;
+/// Raster density for opt-in page images. Matches the OCR render path so a page that was
+/// OCR'd and a page kept for a downstream model share one rendering.
+const PAGE_IMAGE_DPI: u32 = 150;
+
+/// Formats whose units can produce a page raster: PDFs by rendering, standalone images by
+/// linking their original bytes. Other formats ignore `page_images`.
+fn supports_page_images(ext: &str) -> bool {
+    matches!(
+        ext,
+        "pdf" | "png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp" | "gif" | "webp"
+    )
+}
+
+/// Why a raster should be kept for downstream vision, if this unit's text is not trustworthy.
+/// Standalone images pass `native_text_chars = 0`.
+fn page_image_reason(u: &Unit, native_text_chars: usize) -> Option<&'static str> {
+    if !u.errors.is_empty() {
+        return Some("extraction_error");
+    }
+    if native_text_chars == 0 {
+        return Some("no_text");
+    }
+    if native_text_chars < OCR_RENDER_MAX_NATIVE_CHARS {
+        return Some("sparse_text");
+    }
+    if u.warnings
+        .iter()
+        .any(|w| w.starts_with("OCR returned no text"))
+    {
+        return Some("ocr_empty");
+    }
+    None
+}
 
 /// Resolve the `-bbox-layout` XML for one page of a batch. Poppler emits one `<page>` per
 /// requested page; if that invariant ever breaks, resolve the page individually instead of
@@ -1844,16 +2036,15 @@ fn page_slice_for(
     }
 }
 
-/// Render one page at 150 dpi and OCR the render. Errors are returned to the caller so a render
-/// failure marks the page partial instead of aborting the whole document.
-fn render_page_and_ocr(
-    c: &mut ContextData,
+/// Render one page at 150 dpi. Errors are returned to the caller so a render failure marks the
+/// page partial (OCR) or warns (page-image capture) instead of aborting the whole document.
+fn render_page(
+    c: &ContextData,
     path: &str,
     page: &str,
     dimensions: &regex::Regex,
     index: usize,
-    u: &mut Unit,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     let page_info = providers::command("pdfinfo", &["-f", page, "-l", page, path])?;
     let page_info = String::from_utf8_lossy(&page_info);
     let size = dimensions
@@ -1861,7 +2052,9 @@ fn render_page_and_ocr(
         .context("unsupported: PDF page dimensions unavailable")?;
     let w = size[1].parse::<f64>()?;
     let h = size[2].parse::<f64>()?;
-    if (w * 150. / 72.).ceil() * (h * 150. / 72.).ceil() > c.limits.page_pixels as f64 {
+    if (w * PAGE_IMAGE_DPI as f64 / 72.).ceil() * (h * PAGE_IMAGE_DPI as f64 / 72.).ceil()
+        > c.limits.page_pixels as f64
+    {
         bail!("limit_exceeded: PDF render pixels");
     }
     let prefix = c.dir.join(format!("render-{}", index + 1));
@@ -1874,7 +2067,7 @@ fn render_page_and_ocr(
             page,
             "-singlefile",
             "-r",
-            "150",
+            &PAGE_IMAGE_DPI.to_string(),
             "-png",
             path,
             prefix.to_str().unwrap(),
@@ -1882,9 +2075,8 @@ fn render_page_and_ocr(
     )?;
     let image = prefix.with_extension("png");
     let bytes = fs::read(&image)?;
-    let result = c.figure(&bytes, "page-render.png", u);
     let _ = fs::remove_file(&image);
-    result
+    Ok(bytes)
 }
 
 /// One batch of pages to extract: the 100-page Poppler range plus the missing page indices.
@@ -1931,32 +2123,48 @@ fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Re
     // extraction if that ever stops holding, rather than shifting text onto the wrong page.
     let per_page_fallback = text_error.is_none() && page_slices.len() != batch_end - batch_start;
     // One image extraction call per batch; `pdfimages -list` maps files back to pages.
+    // When OCR is on and the batch has no native words at all, it is a scanned document: render
+    // each page once and OCR that raster instead of decoding huge embedded images. `pdfimages
+    // -list` is still queried (fast) so the warning can mention skipped embedded images.
     let dir = c.dir.join(format!("batch-{}-images", batch_start + 1));
     fs::create_dir_all(&dir)?;
     let images_started = Instant::now();
     let list = providers::command("pdfimages", &["-list", "-f", &from, "-l", &to, path]);
-    let extracted = providers::command(
-        "pdfimages",
-        &[
-            "-png",
-            "-f",
-            &from,
-            "-l",
-            &to,
-            path,
-            dir.join("image").to_str().unwrap(),
-        ],
-    );
+    let scanned_batch = c.options.ocr && !page_slices.iter().any(|slice| slice.contains("<word"));
+    let embedded_images_present = list
+        .as_ref()
+        .map(|bytes| String::from_utf8_lossy(bytes).lines().count() > 2)
+        .unwrap_or(false);
+    let extracted = if scanned_batch {
+        None
+    } else {
+        Some(providers::command(
+            "pdfimages",
+            &[
+                "-png",
+                "-f",
+                &from,
+                "-l",
+                &to,
+                path,
+                dir.join("image").to_str().unwrap(),
+            ],
+        ))
+    };
     time_stage(&STAGE_IMAGES_MS, images_started);
-    if let (Ok(list), Ok(_)) = (list, extracted) {
-        match batch_image_map(&list, &dir) {
-            Ok(map) => {
-                page_images = map;
-                image_dir = Some(dir);
+    if let Some(Ok(_)) = extracted {
+        if let Ok(list) = list {
+            match batch_image_map(&list, &dir) {
+                Ok(map) => {
+                    page_images = map;
+                    image_dir = Some(dir);
+                }
+                Err(_) => {
+                    let _ = fs::remove_dir_all(&dir);
+                }
             }
-            Err(_) => {
-                let _ = fs::remove_dir_all(&dir);
-            }
+        } else {
+            let _ = fs::remove_dir_all(&dir);
         }
     } else {
         let _ = fs::remove_dir_all(&dir);
@@ -1969,12 +2177,7 @@ fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Re
         if i == 0 {
             let original = fs::read(input)?;
             let id = c.asset(&original, "original.pdf", &mut u)?;
-            u.text(
-                "figure",
-                "Original PDF preserves vector content",
-                "original.pdf",
-            )
-            .asset_id = Some(id);
+            u.text("figure", "", "original.pdf").asset_id = Some(id);
             if let Err(e) = crate::pdf_source::embedded(c, input, &mut u) {
                 u.errors.push(failure(&e, Some(u.id.clone())));
             }
@@ -2038,72 +2241,126 @@ fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Re
             u.warnings
                 .push("PDF batch text extraction omitted this page; text may be incomplete".into());
         }
-        if batch_images_active {
-            if let Some(images) = page_images.get(&(i + 1)) {
-                for image in images {
-                    let bytes = fs::read(image)?;
-                    if let Err(e) =
-                        c.figure(&bytes, image.file_name().unwrap().to_str().unwrap(), &mut u)
-                    {
-                        u.errors.push(failure(&e, Some(u.id.clone())));
-                    }
-                }
-            }
-        } else {
-            // Batch image extraction unavailable for this range; fall back to per-page Poppler.
-            let page_dir = c.dir.join(format!("page-{}-images", i + 1));
-            fs::create_dir_all(&page_dir)?;
-            let prefix = page_dir.join("image");
-            match providers::command(
-                "pdfimages",
-                &[
-                    "-f",
-                    &page,
-                    "-l",
-                    &page,
-                    "-png",
-                    path,
-                    prefix.to_str().unwrap(),
-                ],
-            ) {
-                Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
-                Ok(_) => {
-                    let mut paths = fs::read_dir(&page_dir)?
-                        .map(|p| p.map(|p| p.path()))
-                        .collect::<std::io::Result<Vec<_>>>()?;
-                    paths.sort();
-                    for image in paths {
-                        let bytes = fs::read(&image)?;
-                        if let Err(e) =
-                            c.figure(&bytes, image.file_name().unwrap().to_str().unwrap(), &mut u)
-                        {
-                            u.errors.push(failure(&e, Some(u.id.clone())));
-                        }
-                    }
-                }
-            }
-            fs::remove_dir_all(&page_dir)?;
-        }
         let native_text_chars: usize = u
             .blocks
             .iter()
             .filter(|b| b.kind == "text")
             .map(|b| b.text.chars().count())
             .sum();
-        let has_figures = u.blocks.iter().any(|b| b.kind == "figure");
-        if c.options.ocr {
-            // Render when the page has no native text at all, or when it carries almost none and
-            // no embedded images were extracted (a partial text layer over a scan). OCR output
-            // that duplicates the native text layer is suppressed downstream.
-            if native_text_chars == 0
-                || (!has_figures && native_text_chars < OCR_RENDER_MAX_NATIVE_CHARS)
-            {
-                if let Err(e) = render_page_and_ocr(c, path, &page, dimensions, i, &mut u) {
-                    u.errors.push(failure(&e, Some(u.id.clone())));
+        // A page with no native text is a scan: render the whole page once and OCR that raster
+        // instead of decoding a potentially huge embedded image. This keeps OCR page-scoped,
+        // avoids duplicate work, and bypasses embedded images above the page pixel limit.
+        let page_will_render_for_ocr = c.options.ocr && native_text_chars == 0;
+        if batch_images_active {
+            if let Some(images) = page_images.get(&(i + 1)) {
+                for image in images {
+                    let bytes = fs::read(image)?;
+                    let name = image.file_name().unwrap().to_str().unwrap();
+                    let result = if page_will_render_for_ocr {
+                        c.figure_asset(&bytes, name, &mut u)
+                    } else {
+                        c.figure(&bytes, name, &mut u)
+                    };
+                    if let Err(e) = result {
+                        u.errors.push(failure(&e, Some(u.id.clone())));
+                    }
                 }
             }
-        } else if native_text_chars == 0 {
+        } else {
+            // Batch image extraction unavailable for this range; fall back to per-page Poppler.
+            // Scanned batches deliberately skip embedded images and OCR the rendered page.
+            if scanned_batch {
+                if embedded_images_present {
+                    u.warnings.push(
+                        "Scanned page: embedded image extraction skipped; the rendered page is used for OCR".into(),
+                    );
+                }
+            } else {
+                let page_dir = c.dir.join(format!("page-{}-images", i + 1));
+                fs::create_dir_all(&page_dir)?;
+                let prefix = page_dir.join("image");
+                match providers::command(
+                    "pdfimages",
+                    &[
+                        "-f",
+                        &page,
+                        "-l",
+                        &page,
+                        "-png",
+                        path,
+                        prefix.to_str().unwrap(),
+                    ],
+                ) {
+                    Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
+                    Ok(_) => {
+                        let mut paths = fs::read_dir(&page_dir)?
+                            .map(|p| p.map(|p| p.path()))
+                            .collect::<std::io::Result<Vec<_>>>()?;
+                        paths.sort();
+                        for image in paths {
+                            let bytes = fs::read(&image)?;
+                            let name = image.file_name().unwrap().to_str().unwrap();
+                            let result = if page_will_render_for_ocr {
+                                c.figure_asset(&bytes, name, &mut u)
+                            } else {
+                                c.figure(&bytes, name, &mut u)
+                            };
+                            if let Err(e) = result {
+                                u.errors.push(failure(&e, Some(u.id.clone())));
+                            }
+                        }
+                    }
+                }
+                fs::remove_dir_all(&page_dir)?;
+            }
+        }
+        let has_figures = u.blocks.iter().any(|b| b.kind == "figure");
+        if !c.options.ocr && native_text_chars == 0 {
             u.status = "needs_ocr".into();
+        }
+        // Render when the page has no native text at all, or when it carries almost none and
+        // no embedded images were extracted (a partial text layer over a scan). The same raster
+        // is kept for downstream vision when `page_images` asks for it. OCR output that
+        // duplicates the native text layer is suppressed downstream.
+        let needs_ocr_render = c.options.ocr
+            && (native_text_chars == 0
+                || (!has_figures && native_text_chars < OCR_RENDER_MAX_NATIVE_CHARS));
+        let image_before_ocr = page_image_reason(&u, native_text_chars);
+        let wants_page_image = c.options.page_images == "all"
+            || (c.options.page_images == "failed" && image_before_ocr.is_some());
+        if needs_ocr_render || wants_page_image {
+            match render_page(c, path, &page, dimensions, i) {
+                Ok(bytes) => {
+                    if needs_ocr_render {
+                        if let Err(e) = c.figure(&bytes, "page-render.png", &mut u) {
+                            u.errors.push(failure(&e, Some(u.id.clone())));
+                        }
+                    }
+                    let reason = if c.options.page_images == "all" {
+                        Some("requested")
+                    } else if c.options.page_images == "failed" {
+                        // OCR can add errors/warnings (empty text, unavailable language), so
+                        // re-evaluate after the OCR pass.
+                        page_image_reason(&u, native_text_chars).or(image_before_ocr)
+                    } else {
+                        None
+                    };
+                    if let Some(reason) = reason {
+                        if let Err(e) =
+                            c.page_image(&bytes, "png", i + 1, reason, Some(PAGE_IMAGE_DPI), &mut u)
+                        {
+                            u.warnings.push(format!("page image unavailable: {e:#}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    if needs_ocr_render {
+                        u.errors.push(failure(&e, Some(u.id.clone())));
+                    } else {
+                        u.warnings.push(format!("page image render failed: {e:#}"));
+                    }
+                }
+            }
         }
         if u.blocks.iter().any(|b| b.kind == "figure") {
             u.warnings.push("Embedded images retained; OCR coordinates refer to each asset, with PDF placement unresolved. Word-level native/OCR duplicates suppressed conservatively".into());

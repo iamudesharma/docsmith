@@ -42,6 +42,9 @@ enum Commands {
         /// Overlap between chunks in characters (default chunk_chars / 8).
         #[arg(long)]
         chunk_overlap: Option<usize>,
+        /// Keep rendered page images for vision/LLM extraction: failed pages or all pages.
+        #[arg(long, value_parser = ["none", "failed", "all"])]
+        page_images: Option<String>,
         /// Stream the selected result artifact to stdout (the path goes to stderr).
         #[arg(long)]
         stdout: bool,
@@ -117,6 +120,7 @@ fn main() -> anyhow::Result<()> {
             format,
             chunk_chars,
             chunk_overlap,
+            page_images,
             stdout,
             options,
         } => {
@@ -133,6 +137,7 @@ fn main() -> anyhow::Result<()> {
                     result_format: format.unwrap_or_else(|| Options::default().result_format),
                     chunk_chars,
                     chunk_overlap,
+                    page_images: page_images.unwrap_or_else(|| Options::default().page_images),
                     ..Default::default()
                 }
             };
