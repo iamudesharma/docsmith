@@ -3,23 +3,23 @@
   "status": "partial",
   "pages": 6,
   "expected_pages": 6,
-  "elapsed_ms": 52913,
+  "elapsed_ms": 57610,
   "units": [
     {
       "page": 1,
       "name": "Page 1",
-      "ocr_chars": 1082,
+      "ocr_chars": 1076,
       "truth_chars": 799,
-      "cer": 0.2015,
-      "wer": 0.3896,
+      "cer": 0.1965,
+      "wer": 0.7879,
       "char_recall": 0.9887,
       "char_precision": 0.967,
-      "word_recall": 0.7792,
-      "word_precision": 0.8824,
+      "word_recall": 0.8283,
+      "word_precision": 0.5541,
       "devanagari_chars": 319,
       "latin_chars": 396,
-      "blocks": 32,
-      "table_blocks": 0,
+      "blocks": 19,
+      "table_blocks": 1,
       "errors": [],
       "warnings": [
         "Scanned page: embedded image extraction skipped; the rendered page is used for OCR",
@@ -45,7 +45,7 @@
         },
         {
           "marker": "476 / 600",
-          "found": false
+          "found": true
         },
         {
           "marker": "सत्यापित",
@@ -64,23 +64,23 @@
           "found": true
         }
       ],
-      "text": "हाई स्कूल प्रमाणपत्र | HIGH SCHOOL CERTIFICATE ॥ सत्यमेव जयते ॥ राज्य शिक्षा बोर्ड / STATE EDUCATION BOARD नाम / Name: उदेश शर्मा (Udesh Sharma) पिता का नाम / Father's Name: श्रीकांत शर्मा (Shrikant Sharma) माता का नाम / Mother's Name: इंद्रावती देवी (Indrawati Devi) / अनुक्रमांक / Roll No.: 7534469 जन्म तिथि / Date of Birth: 17 November 2000 विद्यालय / School: ST MARY'S C GORAKHPUR PHOTO / फोटो परीक्षा वर्ष / Exam Year: 2026 विषयवार अंक विवरण / SUBJECT-WISE MARKS f : अधिकतम / . न श्रेणी | विषय 1 Subject ies प्राप्तांक ॥ Marks Obtained Giade सैद्धांतिक / प्रयोगात्मक / = Theory Practical कुल / Total fat / Hindi 100 40 28 68 B2 [अंग्रेज़ी / English 100 50 29 79 81 गणित / Mathematics 100 52 29 81 A2 विज्ञान / Science 100 55 28 83 Al | : सामाजिक विज्ञान / Social | Science 100 55 28 83 Al चित्रकला / Drawing 100 53 29 82 A2 [कुल योग / Grand Total 476/600 |A1 परिणाम / Result: PASSED प्रतिशत / Percentage: 79.33% यह प्रमाणपत्र केवल शैक्षणिक परी क्षण के लिए है। / This certificate is for educational testing only. VERIFIED सत्यापित Roll 7534469 - Certificate 2497006 - TEST ONLY"
+      "text": "हाई स्कूल प्रमाणपत्र | HIGH SCHOOL CERTIFICATE ॥ सत्यमेव जयते ॥ राज्य शिक्षा बोर्ड / STATE EDUCATION BOARD नाम / Name: उदेश शर्मा (Udesh Sharma) पिता का नाम / Father's Name: श्रीकांत शर्मा (Shrikant Sharma) माता का नाम / Mother's Name: इंद्रावती देवी (Indrawati Devi) / अनुक्रमांक / Roll No.: 7534469 जन्म तिथि / Date of Birth: 17 November 2000 विद्यालय / School: ST MARY'S C GORAKHPUR PHOTO / फोटो परीक्षा वर्ष / Exam Year: 2026 विषयवार अंक विवरण / SUBJECT-WISE MARKS f विषय 1 Subject : अधिकतम ies / प्राप्तांक . ॥ Marks Obtained न श्रेणी Giade सैद्धांतिक Theory / Practical प्रयोगात्मक / कुल / = Total fat / Hindi 100 40 28 68 B2 [अंग्रेज़ी / English 100 50 29 79 81 गणित / Mathematics 100 52 29 81 A2 विज्ञान / Science 100 55 28 83 Al सामाजिक Science विज्ञान / Social : 100 55 28 83 Al चित्रकला / Drawing 100 53 29 82 A2 [कुल योग / Grand Total 476/600 |A1 परिणाम / Result: PASSED प्रतिशत / Percentage: 79.33% यह प्रमाणपत्र केवल शैक्षणिक परी क्षण के लिए है। / This certificate is for educational testing only. VERIFIED सत्यापित Roll 7534469 - Certificate 2497006 - TEST ONLY"
     },
     {
       "page": 2,
       "name": "Page 2",
-      "ocr_chars": 1475,
+      "ocr_chars": 1457,
       "truth_chars": 1141,
       "cer": 0.1534,
-      "wer": 0.3,
+      "wer": 0.4146,
       "char_recall": 0.9632,
       "char_precision": 0.976,
-      "word_recall": 0.7778,
-      "word_precision": 0.8787,
+      "word_recall": 0.8415,
+      "word_precision": 0.7077,
       "devanagari_chars": 205,
       "latin_chars": 706,
-      "blocks": 36,
-      "table_blocks": 0,
+      "blocks": 31,
+      "table_blocks": 1,
       "errors": [],
       "warnings": [
         "Scanned page: embedded image extraction skipped; the rendered page is used for OCR",
@@ -113,7 +113,7 @@
           "found": true
         }
       ],
-      "text": "Doc Extractor Supplies Pvt. Ltd. डॉक एक्सट्रैक्टर सप्लाईज़ प्राइवेट लिमिटेड 42 Knowledge Park, Gorakhpur, Uttar Pradesh 273001 GSTIN: 09AABCD1234E1Z5 - support@example.test TAX INVOICE / कर चालान Invoice No.: INV-2026-0042 Date: 22 October 2026 Place of Supply: Uttar Pradesh (09) Billed 10 । प्राप्तकर्ता Udesh Sharma 12 Civil Lines, Gorakhpur, Uttar Pradesh 273001 GSTIN: O9AAAPZ1234F1Z2 - +91 98765 43210 Shipped To / भेजा गया Same as billing address | Description / विवरण en | nae | GST snow | a Document OCR licence (annual) / दस्तावेज़ OCR 998314 24,000.00 |18% | 24,000.00 P Hindi + English language pack / हिंदी और अंग्रेज़ी भाषा पैक | 998314 6,500.00 |18% | 6,500.00 a On-site installation (2 days) / ऑन-साइट इंस्टॉलेशन 998313 3,000.00 18% 6,000.00 a Priority support (12 months) / प्राथमिकता सहायता 998314 4,500.00 18% | 4,500.00 S| Training workshop / प्रशिक्षण कार्यशाला 999293 2,500.00 18% | 2,500.00 Subtotal / उप-योग CGST @ 9% / केंद्रीय 937 SGST @ 9% / राज्य GST Grand Total / pa योग 43,500.00 3,915.00 3,915.00 51,330.00 Amount in words / at में राशि: Fifty-one thousand three hundred thirty rupees only. Terms / art: Payment due within 15 days. Goods once licensed are non-refundable. GST as applicable. Declaration / घोषणा: We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct, INV-2026-0042 - GSTIN O9AABCD1234E1Z5 - TEST ONLY 5 , Mnita Verma Authorised Signatory / अधिकृत हस्ताक्षरकर्ता"
+      "text": "Doc Extractor Supplies Pvt. Ltd. डॉक एक्सट्रैक्टर सप्लाईज़ प्राइवेट लिमिटेड 42 Knowledge Park, Gorakhpur, Uttar Pradesh 273001 GSTIN: 09AABCD1234E1Z5 - support@example.test TAX INVOICE / कर चालान Invoice No.: INV-2026-0042 Date: 22 October 2026 Place of Supply: Uttar Pradesh (09) Billed 10 । प्राप्तकर्ता Udesh Sharma 12 Civil Lines, Gorakhpur, Uttar Pradesh 273001 GSTIN: O9AAAPZ1234F1Z2 - +91 98765 43210 Shipped To / भेजा गया Same as billing address Description / विवरण en nae GST snow a Document OCR licence (annual) / दस्तावेज़ OCR 998314 24,000.00 |18% 24,000.00 P Hindi + English language pack / हिंदी और अंग्रेज़ी भाषा पैक 998314 6,500.00 |18% 6,500.00 a On-site installation (2 days) / ऑन-साइट इंस्टॉलेशन 998313 3,000.00 18% 6,000.00 a Priority support (12 months) / प्राथमिकता सहायता 998314 4,500.00 18% 4,500.00 S| Training workshop / प्रशिक्षण कार्यशाला 999293 2,500.00 18% 2,500.00 Subtotal / उप-योग CGST @ 9% / केंद्रीय 937 SGST @ 9% / राज्य GST Grand Total / pa योग 43,500.00 3,915.00 3,915.00 51,330.00 Amount in words / at में राशि: Fifty-one thousand three hundred thirty rupees only. Terms / art: Payment due within 15 days. Goods once licensed are non-refundable. GST as applicable. Declaration / घोषणा: We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct, INV-2026-0042 - GSTIN O9AABCD1234E1Z5 - TEST ONLY 5 , Mnita Verma Authorised Signatory / अधिकृत हस्ताक्षरकर्ता"
     },
     {
       "page": 3,
@@ -121,11 +121,11 @@
       "ocr_chars": 920,
       "truth_chars": 762,
       "cer": 0.4856,
-      "wer": 0.6048,
+      "wer": 0.6357,
       "char_recall": 0.9252,
       "char_precision": 0.9874,
-      "word_recall": 0.8084,
-      "word_precision": 0.8882,
+      "word_recall": 0.7984,
+      "word_precision": 0.8047,
       "devanagari_chars": 153,
       "latin_chars": 551,
       "blocks": 30,
@@ -174,15 +174,15 @@
       "ocr_chars": 543,
       "truth_chars": 474,
       "cer": 0.5,
-      "wer": 0.68,
+      "wer": 0.8193,
       "char_recall": 0.7975,
       "char_precision": 0.9643,
-      "word_recall": 0.616,
-      "word_precision": 0.6875,
+      "word_recall": 0.5904,
+      "word_precision": 0.5444,
       "devanagari_chars": 104,
       "latin_chars": 236,
-      "blocks": 30,
-      "table_blocks": 0,
+      "blocks": 26,
+      "table_blocks": 1,
       "errors": [],
       "warnings": [
         "Scanned page: embedded image extraction skipped; the rendered page is used for OCR",
@@ -224,18 +224,18 @@
     {
       "page": 5,
       "name": "Page 5",
-      "ocr_chars": 1572,
+      "ocr_chars": 1570,
       "truth_chars": 1250,
       "cer": 0.0984,
-      "wer": 0.1719,
+      "wer": 0.2158,
       "char_recall": 0.9784,
       "char_precision": 0.9911,
-      "word_recall": 0.9158,
-      "word_precision": 0.9388,
+      "word_recall": 0.9087,
+      "word_precision": 0.8656,
       "devanagari_chars": 426,
       "latin_chars": 778,
-      "blocks": 38,
-      "table_blocks": 0,
+      "blocks": 34,
+      "table_blocks": 1,
       "errors": [],
       "warnings": [
         "Scanned page: embedded image extraction skipped; the rendered page is used for OCR",
@@ -268,7 +268,7 @@
           "found": true
         }
       ],
-      "text": "Policy, Mathematics & Reading Order / नीति, गणित और पठन क्रम Two columns, formulas, lists, footnotes and a merged table यह दस्तावेज़ दो स्तंभों में व्यवस्थित है। बायाँ स्तंभ हिंदी पाठ, सूची और गणितीय सूत्र दिखाता है। OCR को पंक्तियों और स्तंभों का सही क्रम पहचानना चाहिए। दस्तावेज़ में तकनीकी शब्द, संख्याएँ और मिश्रित भाषा का प्रयोग किया गया है। मुख्य बिंदु | Key points १. पाठ की सटीकता और पठन क्रम दोनों महत्वपूर्ण हैं। २. तालिकाओं में मर्ज किए गए कक्षों का परी क्षण करें। ३. सूत्रों और विशेष fet को सुरक्षित रखें। गणितीय सूत्र ॥ Formulas E वाल क्षेत्रफल = गा? H20 + ८02 112 + 1/3 = 5/6 Merged summary table / मर्ज सारांश तालिका This page deliberately mixes two columns, a dense paragraph, numbered steps, mathematical formulas, footnotes and a table with a merged total row. The OCR engine must retain numbers, punctuation and Devanagari conjuncts while preserving a useful reading order. Column boundaries are marked by a vertical rule. Procedure / प्रक्रिया 1. Upload the document and select Hindi + English 2. Render scanned pages at 150 DPI and run OCR 3. Preserve native text, OCR text and inferred layout separately. 4. Download JSON, Markdown, plain text or the page archive. Notes / टिपणियाँ Footnotes: 1. OCR confidence is uncal inferred from scan lines. 3. Rotation is selected by r ted. 2. Table structure is not OCR scores. Metric / मापदंड Value / मान Status / स्थिति Native text pages / मूल पाठ Digital Pass | Scanned pages / स्कैन 3 Pass Table cells / तालिका कक्ष 30 Pass Merged total row / मर्ज पंक्ति Verified MULTI-COLUMN TEST - MC-2026-05 - TEST ONLY"
+      "text": "Policy, Mathematics & Reading Order / नीति, गणित और पठन क्रम Two columns, formulas, lists, footnotes and a merged table यह दस्तावेज़ दो स्तंभों में व्यवस्थित है। बायाँ स्तंभ हिंदी पाठ, सूची और गणितीय सूत्र दिखाता है। OCR को पंक्तियों और स्तंभों का सही क्रम पहचानना चाहिए। दस्तावेज़ में तकनीकी शब्द, संख्याएँ और मिश्रित भाषा का प्रयोग किया गया है। मुख्य बिंदु | Key points १. पाठ की सटीकता और पठन क्रम दोनों महत्वपूर्ण हैं। २. तालिकाओं में मर्ज किए गए कक्षों का परी क्षण करें। ३. सूत्रों और विशेष fet को सुरक्षित रखें। गणितीय सूत्र ॥ Formulas E वाल क्षेत्रफल = गा? H20 + ८02 112 + 1/3 = 5/6 Merged summary table / मर्ज सारांश तालिका This page deliberately mixes two columns, a dense paragraph, numbered steps, mathematical formulas, footnotes and a table with a merged total row. The OCR engine must retain numbers, punctuation and Devanagari conjuncts while preserving a useful reading order. Column boundaries are marked by a vertical rule. Procedure / प्रक्रिया 1. Upload the document and select Hindi + English 2. Render scanned pages at 150 DPI and run OCR 3. Preserve native text, OCR text and inferred layout separately. 4. Download JSON, Markdown, plain text or the page archive. Notes / टिपणियाँ Footnotes: 1. OCR confidence is uncal inferred from scan lines. 3. Rotation is selected by r ted. 2. Table structure is not OCR scores. Metric / मापदंड Value / मान Status / स्थिति Native text pages / मूल पाठ Digital Pass Scanned pages / स्कैन 3 Pass Table cells / तालिका कक्ष 30 Pass Merged total row / मर्ज पंक्ति Verified MULTI-COLUMN TEST - MC-2026-05 - TEST ONLY"
     },
     {
       "page": 6,
@@ -276,11 +276,11 @@
       "ocr_chars": 970,
       "truth_chars": 748,
       "cer": 0.0495,
-      "wer": 0.2515,
+      "wer": 0.4086,
       "char_recall": 0.9759,
       "char_precision": 0.9643,
-      "word_recall": 0.7914,
-      "word_precision": 0.8431,
+      "word_recall": 0.7957,
+      "word_precision": 0.6667,
       "devanagari_chars": 221,
       "latin_chars": 483,
       "blocks": 23,
@@ -321,32 +321,30 @@
     }
   ],
   "overall": {
-    "cer": 0.2132,
-    "wer": 0.3602,
+    "cer": 0.2124,
+    "wer": 0.4771,
     "char_recall": 0.9646,
     "char_precision": 0.9903,
-    "word_recall": 0.8066,
-    "word_precision": 0.8796,
+    "word_recall": 0.822,
+    "word_precision": 0.7189,
     "devanagari_ocr": 1428,
     "devanagari_truth": 1453,
     "latin_ocr": 3150,
     "latin_truth": 3249,
-    "markers_found": 31,
+    "markers_found": 32,
     "markers_total": 41,
-    "table_blocks": 0,
-    "table_tokens_found": 4,
+    "table_blocks": 4,
+    "table_tokens_found": 6,
     "table_tokens_total": 6,
     "document_errors": 0,
     "unit_errors": 0,
     "warnings": []
   },
   "findings": [
-    "Scanned tables are not promoted to structured `Table` blocks; cells remain linearized OCR text.",
-    "Only 4/6 expected table tokens were found; small grid text is the weakest region.",
     "Most characters were recovered but sequence CER is high: OCR reading order differs from the ground-truth order (diagrams/charts/table columns). Check the order-insensitive recall and per-page text.",
-    "Missing critical fields: 476 / 600, PAID, 1..*, Q1, 96% accuracy, E = mc², क्षेत्रफल = πr², H2O + CO2, 1/2 + 1/3 = 5/6, INSPECTED"
+    "Missing critical fields: PAID, 1..*, Q1, 96% accuracy, E = mc², क्षेत्रफल = πr², H2O + CO2, 1/2 + 1/3 = 5/6, INSPECTED"
   ],
-  "elapsed_wall_s": 53.31,
+  "elapsed_wall_s": 58.18,
   "options": {
     "ocr": true,
     "languages": "eng+hin",
@@ -356,5 +354,6 @@
     "chunk_overlap": 80,
     "result_format": "text"
   },
-  "truth": "fixtures/final-comprehensive.ground-truth.txt"
+  "truth": "fixtures/final-comprehensive.ground-truth.txt",
+  "ocr_dpi": 150
 }

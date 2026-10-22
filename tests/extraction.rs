@@ -1617,6 +1617,65 @@ fn tesseract_words_are_grouped_into_readable_lines() {
 }
 
 #[test]
+fn scanned_table_pages_promote_printed_grids_to_structured_tables() {
+    if !doc_extractor::providers::available("tesseract") || !pdftoppm_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = extract::extract(
+        std::path::Path::new("fixtures/final-comprehensive.pdf"),
+        "final-comprehensive.pdf",
+        dir.path(),
+        Options {
+            ocr: true,
+            languages: "eng+hin".into(),
+            pages: Some("1".into()),
+            ..Options::default()
+        },
+        Limits {
+            ocr_threads: 1,
+            ..Default::default()
+        },
+        "ocr-table",
+    )
+    .unwrap();
+    let unit = &d.units[0];
+    let table = unit
+        .blocks
+        .iter()
+        .find_map(|block| block.table.as_ref())
+        .expect("printed grid must be promoted to a table");
+    assert!(
+        table.rows >= 8 && table.columns >= 5,
+        "marks table grid: {table:?}"
+    );
+    let cells = table
+        .cells
+        .iter()
+        .map(|cell| cell.raw.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        cells.iter().any(|raw| raw.contains("100")),
+        "expected maximum marks column: {cells:?}"
+    );
+    assert!(
+        cells.iter().any(|raw| raw.contains("B2")),
+        "expected grade column: {cells:?}"
+    );
+    // Merged header and merged total row keep their span.
+    assert!(
+        table.cells.iter().any(|cell| cell.column_span > 1),
+        "merged cells keep their span: {cells:?}"
+    );
+    assert!(
+        unit.blocks
+            .iter()
+            .any(|block| block.provenance.method == "inferred" && block.table.is_some()),
+        "table proposals stay inferred"
+    );
+}
+
+#[test]
 fn absent_smoldocling_server_falls_back_to_tesseract() {
     if !doc_extractor::providers::available("tesseract") {
         return;

@@ -13,6 +13,7 @@ and every unit error/warning. Exit status is 1 only with --strict when a request
 import argparse
 import collections
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -88,6 +89,7 @@ def normalize(text):
     text = text.translate(DEVANAGARI_DIGITS)
     for old, new in [("’", "'"), ("‘", "'"), ("“", '"'), ("”", '"'), ("—", "-"), ("–", "-")]:
         text = text.replace(old, new)
+    text = re.sub(r"\s*([/|])\s*", r"\1", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -134,16 +136,19 @@ def load_truth(path):
     return [page.strip() for page in pages if page.strip()]
 
 
-def run_extraction(binary, pdf, options):
+def run_extraction(binary, pdf, options, ocr_dpi=150):
     work = pathlib.Path(tempfile.mkdtemp(prefix="hindi-english-ocr-"))
     options_path = work / "options.json"
     options_path.write_text(json.dumps(options), encoding="utf-8")
     output = work / "result"
+    env = dict(os.environ)
+    env["DOC_OCR_DPI"] = str(ocr_dpi)
     started = time.monotonic()
     process = subprocess.run(
         [str(binary), "extract", str(pdf), "--output", str(output), "--options", str(options_path)],
         capture_output=True,
         text=True,
+        env=env,
     )
     elapsed = time.monotonic() - started
     if not (output / "result.json").exists():
@@ -156,8 +161,16 @@ def run_extraction(binary, pdf, options):
 
 
 def text_of(unit):
-    # Blocks are grouped into lines; join with spaces so tables/paragraphs compare as text.
-    return " ".join(block.get("text", "") for block in unit.get("blocks", []) if block.get("text"))
+    # Blocks are grouped into lines; table cells carry the words of ruled table rows, so both
+    # are included to mirror what consumers receive from result.json.
+    parts = []
+    for block in unit.get("blocks", []):
+        if block.get("text"):
+            parts.append(block["text"])
+        for cell in (block.get("table") or {}).get("cells", []):
+            if cell.get("raw"):
+                parts.append(cell["raw"])
+    return " ".join(parts)
 
 
 def evaluate(document, truth, strict, markers, table_tokens):
@@ -361,7 +374,8 @@ def markdown(report):
         "",
         "## Method",
         "",
-        "- OCR uses `languages: eng+hin`, page rendering at 150 DPI, automatic rotation and `page_images: all`.",
+        "- OCR uses `languages: eng+hin`, page rendering at "
+        f"{report.get('ocr_dpi', 150)} DPI, automatic rotation and `page_images: all`.",
         "- Character/word rates ignore punctuation, normalize whitespace, map Devanagari digits to ASCII and compare against the committed TXT.",
         "- The PDF is raster-only by design (a scanner simulation), so every character is produced by OCR rather than a PDF text layer.",
         "- Page 3 is rotated 90° to exercise automatic rotation recovery.",
@@ -378,6 +392,7 @@ def main():
     parser.add_argument("--out-md", type=pathlib.Path, default=DEFAULT_MD)
     parser.add_argument("--out-json", type=pathlib.Path, default=DEFAULT_JSON)
     parser.add_argument("--markers", type=pathlib.Path)
+    parser.add_argument("--ocr-dpi", type=int, default=150)
     parser.add_argument("--strict", action="store_true")
     parser.add_argument("--languages", default="eng+hin")
     parser.add_argument("--no-rotate", action="store_true")
@@ -397,7 +412,7 @@ def main():
         "chunk_overlap": 80,
         "result_format": "text",
     }
-    document, elapsed, _, _ = run_extraction(args.binary, args.pdf, options)
+    document, elapsed, _, _ = run_extraction(args.binary, args.pdf, options, args.ocr_dpi)
     truth = load_truth(args.truth)
     markers, table_tokens = MARKERS, EXPECTED_TABLE_TOKENS
     if args.markers:
@@ -406,6 +421,7 @@ def main():
     report["elapsed_wall_s"] = round(elapsed, 2)
     report["options"] = options
     report["truth"] = str(args.truth)
+    report["ocr_dpi"] = args.ocr_dpi
 
     args.out_json.parent.mkdir(parents=True, exist_ok=True)
     args.out_json.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

@@ -2044,6 +2044,7 @@ fn render_page(
     page: &str,
     dimensions: &regex::Regex,
     index: usize,
+    dpi: u32,
 ) -> Result<Vec<u8>> {
     let page_info = providers::command("pdfinfo", &["-f", page, "-l", page, path])?;
     let page_info = String::from_utf8_lossy(&page_info);
@@ -2052,12 +2053,10 @@ fn render_page(
         .context("unsupported: PDF page dimensions unavailable")?;
     let w = size[1].parse::<f64>()?;
     let h = size[2].parse::<f64>()?;
-    if (w * PAGE_IMAGE_DPI as f64 / 72.).ceil() * (h * PAGE_IMAGE_DPI as f64 / 72.).ceil()
-        > c.limits.page_pixels as f64
-    {
+    if (w * dpi as f64 / 72.).ceil() * (h * dpi as f64 / 72.).ceil() > c.limits.page_pixels as f64 {
         bail!("limit_exceeded: PDF render pixels");
     }
-    let prefix = c.dir.join(format!("render-{}", index + 1));
+    let prefix = c.dir.join(format!("render-{}-{dpi}", index + 1));
     providers::command(
         "pdftoppm",
         &[
@@ -2067,7 +2066,7 @@ fn render_page(
             page,
             "-singlefile",
             "-r",
-            &PAGE_IMAGE_DPI.to_string(),
+            &dpi.to_string(),
             "-png",
             path,
             prefix.to_str().unwrap(),
@@ -2077,6 +2076,17 @@ fn render_page(
     let bytes = fs::read(&image)?;
     let _ = fs::remove_file(&image);
     Ok(bytes)
+}
+
+/// Resolution used for OCR rendering. Tesseract prefers roughly 300 dpi; small table cells,
+/// chart labels and stamps read much better above 150 dpi, at the cost of render and OCR time.
+/// `DOC_OCR_DPI` raises it for hard scans (default: the 150 dpi page-image resolution).
+fn ocr_render_dpi() -> u32 {
+    std::env::var("DOC_OCR_DPI")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .map(|dpi| dpi.clamp(96, 400))
+        .unwrap_or(PAGE_IMAGE_DPI)
 }
 
 /// One batch of pages to extract: the 100-page Poppler range plus the missing page indices.
@@ -2328,37 +2338,45 @@ fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Re
         let image_before_ocr = page_image_reason(&u, native_text_chars);
         let wants_page_image = c.options.page_images == "all"
             || (c.options.page_images == "failed" && image_before_ocr.is_some());
-        if needs_ocr_render || wants_page_image {
-            match render_page(c, path, &page, dimensions, i) {
+        let ocr_dpi = ocr_render_dpi();
+        let mut ocr_bytes: Option<Vec<u8>> = None;
+        if needs_ocr_render {
+            match render_page(c, path, &page, dimensions, i, ocr_dpi) {
                 Ok(bytes) => {
-                    if needs_ocr_render {
-                        if let Err(e) = c.figure(&bytes, "page-render.png", &mut u) {
-                            u.errors.push(failure(&e, Some(u.id.clone())));
-                        }
+                    if let Err(e) = c.figure(&bytes, "page-render.png", &mut u) {
+                        u.errors.push(failure(&e, Some(u.id.clone())));
                     }
-                    let reason = if c.options.page_images == "all" {
-                        Some("requested")
-                    } else if c.options.page_images == "failed" {
-                        // OCR can add errors/warnings (empty text, unavailable language), so
-                        // re-evaluate after the OCR pass.
-                        page_image_reason(&u, native_text_chars).or(image_before_ocr)
-                    } else {
-                        None
-                    };
-                    if let Some(reason) = reason {
+                    ocr_bytes = Some(bytes);
+                }
+                Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
+            }
+        }
+        if wants_page_image {
+            let reason = if c.options.page_images == "all" {
+                Some("requested")
+            } else if c.options.page_images == "failed" {
+                // OCR can add errors/warnings (empty text, unavailable language), so
+                // re-evaluate after the OCR pass.
+                page_image_reason(&u, native_text_chars).or(image_before_ocr)
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                // The downloadable page image stays at the documented 150 dpi; the OCR raster may
+                // be rendered at a higher resolution.
+                let rendered = match ocr_bytes.clone() {
+                    Some(bytes) if ocr_dpi == PAGE_IMAGE_DPI => Some(bytes),
+                    _ => render_page(c, path, &page, dimensions, i, PAGE_IMAGE_DPI).ok(),
+                };
+                match rendered {
+                    Some(bytes) => {
                         if let Err(e) =
                             c.page_image(&bytes, "png", i + 1, reason, Some(PAGE_IMAGE_DPI), &mut u)
                         {
                             u.warnings.push(format!("page image unavailable: {e:#}"));
                         }
                     }
-                }
-                Err(e) => {
-                    if needs_ocr_render {
-                        u.errors.push(failure(&e, Some(u.id.clone())));
-                    } else {
-                        u.warnings.push(format!("page image render failed: {e:#}"));
-                    }
+                    None => u.warnings.push("page image render failed".to_owned()),
                 }
             }
         }

@@ -18,4 +18,6 @@ pub mod providers;
 pub mod s3;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod service;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tables;
 pub mod wasm;

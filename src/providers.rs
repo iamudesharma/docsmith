@@ -300,6 +300,7 @@ pub fn ocr_blocks(path: &Path, opts: &Options, limits: &Limits) -> Result<OcrOut
         // plain text, Markdown and RAG chunks place every word on its own line.
         let mut lines: std::collections::BTreeMap<(u32, u32, u32), Vec<OcrWord>> =
             std::collections::BTreeMap::new();
+        let mut layout_words: Vec<crate::layout::Word> = Vec::new();
         for r in records {
             if r.get(0) != Some("5") {
                 continue;
@@ -328,6 +329,13 @@ pub fn ocr_blocks(path: &Path, opts: &Options, limits: &Limits) -> Result<OcrOut
                 width: w,
                 height: h,
                 score: number(10),
+            });
+            layout_words.push(crate::layout::Word {
+                text: text.to_owned(),
+                x,
+                y,
+                width: w,
+                height: h,
             });
         }
         if lines.is_empty() {
@@ -371,6 +379,57 @@ pub fn ocr_blocks(path: &Path, opts: &Options, limits: &Limits) -> Result<OcrOut
             });
             b.attributes = json!({"ocr_score_uncalibrated":score,"rotation_degrees":rotation,"image_width":prep_width,"image_height":prep_height,"line":line_num,"paragraph":paragraph,"block":block_num,"words":words.len()});
             out.blocks.push(b);
+        }
+        // Printed grid rules define the table on a scanned page: promote those rows to a
+        // structured table instead of leaving them as flat text.
+        let detected = crate::tables::detect(&prepared.path, &layout_words);
+        let mut emitted: Vec<usize> = Vec::new();
+        if !detected.is_empty() {
+            let remaining: Vec<_> = out.blocks.drain(..).collect();
+            let mut index = 0usize;
+            while index < remaining.len() {
+                let current = remaining[index].clone();
+                let table_index = detected.iter().position(|table| {
+                    current.provenance.bounds.as_ref().is_some_and(|bounds| {
+                        let cx = bounds.x + bounds.width / 2.0;
+                        let cy = bounds.y + bounds.height / 2.0;
+                        cx >= table.bounds.x - 2.0
+                            && cx <= table.bounds.x + table.bounds.width + 2.0
+                            && cy >= table.bounds.y - 2.0
+                            && cy <= table.bounds.y + table.bounds.height + 2.0
+                    })
+                });
+                match table_index {
+                    Some(table_index) if !emitted.contains(&table_index) => {
+                        emitted.push(table_index);
+                        let table = &detected[table_index];
+                        let mut b = block("", "OCR table grid proposal");
+                        b.kind = "table".into();
+                        b.provenance.method = "inferred".into();
+                        b.provenance.bounds = Some(table.bounds.clone());
+                        b.provenance.evidence = vec![
+                            "Printed grid rules define the row bands and column boundaries".into(),
+                        ];
+                        b.table = Some(table.table.clone());
+                        b.attributes = json!({
+                            "ocr_table": true,
+                            "rows": table.table.rows,
+                            "columns": table.table.columns,
+                            "words": table.words_placed,
+                        });
+                        out.blocks.push(b);
+                        index += 1;
+                    }
+                    Some(_) => {
+                        // The table block already carries these words.
+                        index += 1;
+                    }
+                    None => {
+                        out.blocks.push(current);
+                        index += 1;
+                    }
+                }
+            }
         }
         Ok(out)
     })()?;

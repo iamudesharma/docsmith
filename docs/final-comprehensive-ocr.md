@@ -1,6 +1,6 @@
 # Hindi + English OCR stress test
 
-Fixture: `final-comprehensive.pdf` · **6 pages** · document status `partial` · extraction 52913 ms.
+Fixture: `final-comprehensive.pdf` · **6 pages** · document status `partial` · extraction 57610 ms.
 
 Ground truth: `fixtures/final-comprehensive.ground-truth.txt`.
 
@@ -8,29 +8,29 @@ Ground truth: `fixtures/final-comprehensive.ground-truth.txt`.
 
 | Metric | Result |
 |---|---|
-| Sequence character error rate | **21.32%** |
-| Sequence word error rate | **36.02%** |
+| Sequence character error rate | **21.24%** |
+| Sequence word error rate | **47.71%** |
 | Order-insensitive character recall | **96.46%** |
 | Order-insensitive character precision | 99.03% |
-| Order-insensitive word recall | **80.66%** |
-| Order-insensitive word precision | 87.96% |
-| Critical fields found | **31/41** |
+| Order-insensitive word recall | **82.20%** |
+| Order-insensitive word precision | 71.89% |
+| Critical fields found | **32/41** |
 | Devanagari characters (OCR / truth) | 1428 / 1453 |
 | Latin characters (OCR / truth) | 3150 / 3249 |
-| Structured table blocks | **0** |
-| Expected table tokens found | 4/6 |
+| Structured table blocks | **4** |
+| Expected table tokens found | 6/6 |
 | Unit errors | 0 |
 
 ## Per page
 
 | Page | OCR chars | CER | WER | Char recall | Word recall | Blocks | Tables | Devanagari | Latin | Critical fields |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 1082 | 20.15% | 38.96% | 98.87% | 77.92% | 32 | 0 | 319 | 396 | 8/9 |
-| 2 | 1475 | 15.34% | 30.00% | 96.32% | 77.78% | 36 | 0 | 205 | 706 | 5/6 |
-| 3 | 920 | 48.56% | 60.48% | 92.52% | 80.84% | 30 | 0 | 153 | 551 | 6/7 |
-| 4 | 543 | 50.00% | 68.00% | 79.75% | 61.60% | 30 | 0 | 104 | 236 | 5/7 |
-| 5 | 1572 | 9.84% | 17.19% | 97.84% | 91.58% | 38 | 0 | 426 | 778 | 2/6 |
-| 6 | 970 | 4.95% | 25.15% | 97.59% | 79.14% | 23 | 0 | 221 | 483 | 5/6 |
+| 1 | 1076 | 19.65% | 78.79% | 98.87% | 82.83% | 19 | 1 | 319 | 396 | 9/9 |
+| 2 | 1457 | 15.34% | 41.46% | 96.32% | 84.15% | 31 | 1 | 205 | 706 | 5/6 |
+| 3 | 920 | 48.56% | 63.57% | 92.52% | 79.84% | 30 | 0 | 153 | 551 | 6/7 |
+| 4 | 543 | 50.00% | 81.93% | 79.75% | 59.04% | 26 | 1 | 104 | 236 | 5/7 |
+| 5 | 1570 | 9.84% | 21.58% | 97.84% | 90.87% | 34 | 1 | 426 | 778 | 2/6 |
+| 6 | 970 | 4.95% | 40.86% | 97.59% | 79.57% | 23 | 0 | 221 | 483 | 5/6 |
 
 ## Critical fields
 
@@ -40,7 +40,7 @@ Ground truth: `fixtures/final-comprehensive.ground-truth.txt`.
 | 1 | `7534469` | yes |
 | 1 | `PASSED` | yes |
 | 1 | `79.33%` | yes |
-| 1 | `476 / 600` | **no** |
+| 1 | `476 / 600` | yes |
 | 1 | `सत्यापित` | yes |
 | 1 | `STATE EDUCATION BOARD` | yes |
 | 1 | `B2` | yes |
@@ -80,10 +80,8 @@ Ground truth: `fixtures/final-comprehensive.ground-truth.txt`.
 
 ## Findings
 
-- Scanned tables are not promoted to structured `Table` blocks; cells remain linearized OCR text.
-- Only 4/6 expected table tokens were found; small grid text is the weakest region.
 - Most characters were recovered but sequence CER is high: OCR reading order differs from the ground-truth order (diagrams/charts/table columns). Check the order-insensitive recall and per-page text.
-- Missing critical fields: 476 / 600, PAID, 1..*, Q1, 96% accuracy, E = mc², क्षेत्रफल = πr², H2O + CO2, 1/2 + 1/3 = 5/6, INSPECTED
+- Missing critical fields: PAID, 1..*, Q1, 96% accuracy, E = mc², क्षेत्रफल = πr², H2O + CO2, 1/2 + 1/3 = 5/6, INSPECTED
 
 ## Method
 
