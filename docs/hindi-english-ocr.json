@@ -3,7 +3,7 @@
   "status": "partial",
   "pages": 3,
   "expected_pages": 3,
-  "elapsed_ms": 25358,
+  "elapsed_ms": 25712,
   "units": [
     {
       "page": 1,
@@ -12,6 +12,10 @@
       "truth_chars": 715,
       "cer": 0.0993,
       "wer": 0.3232,
+      "char_recall": 0.9119,
+      "char_precision": 0.9631,
+      "word_recall": 0.689,
+      "word_precision": 0.7063,
       "devanagari_chars": 255,
       "latin_chars": 359,
       "blocks": 25,
@@ -93,6 +97,10 @@
       "truth_chars": 1120,
       "cer": 0.0027,
       "wer": 0.1477,
+      "char_recall": 0.9991,
+      "char_precision": 0.9973,
+      "word_recall": 0.8523,
+      "word_precision": 0.8783,
       "devanagari_chars": 537,
       "latin_chars": 520,
       "blocks": 27,
@@ -154,6 +162,10 @@
       "truth_chars": 548,
       "cer": 0.0365,
       "wer": 0.1111,
+      "char_recall": 0.9653,
+      "char_precision": 0.9906,
+      "word_recall": 0.8974,
+      "word_precision": 0.8974,
       "devanagari_chars": 215,
       "latin_chars": 316,
       "blocks": 14,
@@ -200,6 +212,10 @@
   "overall": {
     "cer": 0.0394,
     "wer": 0.195,
+    "char_recall": 0.9664,
+    "char_precision": 0.9871,
+    "word_recall": 0.8127,
+    "word_precision": 0.8304,
     "devanagari_ocr": 1007,
     "devanagari_truth": 1047,
     "latin_ocr": 1195,
@@ -218,7 +234,7 @@
     "Only 8/12 expected table tokens were found; small grid text is the weakest region.",
     "Missing critical fields: 83, A1, TESTED"
   ],
-  "elapsed_wall_s": 25.65,
+  "elapsed_wall_s": 26.14,
   "options": {
     "ocr": true,
     "languages": "eng+hin",
@@ -227,5 +243,6 @@
     "chunk_chars": 1000,
     "chunk_overlap": 80,
     "result_format": "text"
-  }
+  },
+  "truth": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/hindi-english-complex.ground-truth.txt"
 }
