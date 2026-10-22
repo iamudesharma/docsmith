@@ -1284,6 +1284,35 @@
   }
 
   // ==================== SAVED PAGE IMAGES TAB ====================
+  function unitTextStats(unit) {
+    var chars = 0;
+    var textBlocks = 0;
+    var tables = 0;
+    ((unit && unit.blocks) || []).forEach(function (b) {
+      if (b.table) {
+        tables += 1;
+        (b.table.cells || []).forEach(function (cell) {
+          chars += (cell.raw || "").length;
+        });
+      } else if (b.text) {
+        chars += b.text.length;
+        textBlocks += 1;
+      }
+    });
+    return { chars: chars, textBlocks: textBlocks, tables: tables };
+  }
+
+  function unitSampleText(unit, limit) {
+    var parts = [];
+    ((unit && unit.blocks) || []).some(function (b) {
+      if (b.table) return false;
+      if (b.text) parts.push(b.text);
+      return parts.join(" ").length > limit;
+    });
+    var text = parts.join(" ").replace(/\s+/g, " ").trim();
+    return text.length > limit ? text.slice(0, limit) + "…" : text;
+  }
+
   function renderPagesQueueTab(doc, summary) {
     var manifest = (summary && summary.page_images) || { mode: doc.options.page_images, count: 0, pages: [] };
     document.getElementById("pages-tab-count").textContent = String(manifest.count || 0);
@@ -1296,6 +1325,26 @@
     document.getElementById("pages-manifest-mode").textContent = "Setting: " + modeLabel;
     document.getElementById("pages-manifest-count").textContent =
       (manifest.count || 0) + (manifest.count === 1 ? " saved page" : " saved pages");
+
+    var units = doc.units || [];
+    var statsByUnit = {};
+    var extracted = 0;
+    units.forEach(function (u) {
+      var stats = unitTextStats(u);
+      statsByUnit[u.id] = stats;
+      if (stats.chars > 0) extracted += 1;
+    });
+    var summaryEl = document.getElementById("pages-text-summary");
+    if (summaryEl) {
+      summaryEl.textContent =
+        extracted +
+        " of " +
+        units.length +
+        " pages have extracted text · " +
+        (manifest.count || 0) +
+        (manifest.count === 1 ? " page image saved" : " page images saved") +
+        " for vision";
+    }
 
     var gallery = document.getElementById("pages-gallery");
     gallery.innerHTML = "";
@@ -1314,6 +1363,24 @@
         "/assets/" +
         encodeURIComponent(p.asset_id);
       var friendlyReason = FRIENDLY_REASON[p.reason] || p.reason;
+      var unit = units.find(function (u) {
+        return u.id === p.unit_id;
+      });
+      var stats = statsByUnit[p.unit_id] || { chars: 0, textBlocks: 0, tables: 0 };
+      var hasText = stats.chars > 0;
+      var statusBadge = hasText
+        ? "<span class='badge badge-success'>Text extracted</span>"
+        : "<span class='badge badge-warn'>No text extracted</span>";
+      var statsLine = hasText
+        ? stats.chars.toLocaleString() +
+          " characters" +
+          (stats.tables
+            ? " · " + stats.tables + (stats.tables === 1 ? " table" : " tables")
+            : "")
+        : "OCR produced no text for this page";
+      var preview = hasText
+        ? "<div class='page-card-preview'>" + escapeHtml(unitSampleText(unit, 120)) + "</div>"
+        : "";
       card.innerHTML =
         "<img class='page-card-thumb' src='" +
         imgUrl +
@@ -1321,19 +1388,28 @@
         p.page +
         "'>" +
         "<div class='page-card-body'>" +
-        "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px'>" +
+        "<div style='display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px'>" +
         "<strong>" +
         escapeHtml(p.unit_name || "Page " + p.page) +
         "</strong>" +
-        "<span class='badge badge-warn'>" +
-        escapeHtml(friendlyReason) +
-        "</span></div>" +
+        statusBadge +
+        "</div>" +
         "<div class='muted' style='font-size:12px'>" +
         (p.width ? p.width + " × " + p.height + " px" : "") +
         (p.dpi ? " · " + p.dpi + " DPI" : "") +
         " · " +
         formatBytes(p.bytes) +
         "</div>" +
+        "<div class='page-card-stats'>" +
+        escapeHtml(statsLine) +
+        "</div>" +
+        preview +
+        "<div class='muted' style='font-size:11.5px;margin-top:4px'>Saved as image · " +
+        escapeHtml(friendlyReason) +
+        "</div>" +
+        "<div class='page-card-actions'><button class='btn btn-sm' data-open-text='" +
+        escapeHtml(p.unit_id) +
+        "'>View extracted text</button></div>" +
         "</div>";
 
       card.addEventListener("click", function () {
@@ -1341,23 +1417,48 @@
           c.classList.remove("is-active");
         });
         card.classList.add("is-active");
+        var allBox = document.getElementById("llm-payload-all");
+        if (allBox) allBox.checked = false;
         renderLlmPayloadForUnit(doc, p.unit_id);
+      });
+      card.querySelector("[data-open-text]").addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        selectUnit(p.unit_id);
+        switchTab("inspector");
       });
       gallery.appendChild(card);
     });
 
-    renderLlmPayloadForUnit(doc, manifest.pages[0].unit_id);
+    state.activePageUnit = manifest.pages[0].unit_id;
+    var allBox = document.getElementById("llm-payload-all");
+    if (allBox) allBox.checked = true;
+    renderLlmPayloadForUnit(doc, null);
   }
 
   function renderLlmPayloadForUnit(doc, unitId) {
     if (!state.wasmReady || !doc) return;
+    var allBox = document.getElementById("llm-payload-all");
+    var all = allBox ? allBox.checked : true;
+    if (unitId) state.activePageUnit = unitId;
+    var target = all ? null : unitId || state.activePageUnit || null;
     try {
       var payload = wasmCall("build_llm_payload", {
         document: doc,
-        unit_id: unitId,
+        unit_id: target,
         base_url: location.origin,
       });
       document.getElementById("llm-payload-viewer").textContent = JSON.stringify(payload, null, 2);
+      var scope = document.getElementById("llm-payload-scope");
+      if (scope) {
+        if (all) {
+          scope.textContent =
+            "All " + payload.count + (payload.count === 1 ? " saved page" : " saved pages");
+        } else if (payload.items && payload.items.length) {
+          scope.textContent = "Page " + payload.items[0].page;
+        } else {
+          scope.textContent = "No saved page selected";
+        }
+      }
     } catch (e) {
       document.getElementById("llm-payload-viewer").textContent = String(e.message || e);
     }
@@ -1596,6 +1697,12 @@
       });
     });
     document.getElementById("fmt-compact-toggle").addEventListener("change", renderCurrentUnit);
+
+    document.getElementById("llm-payload-all").addEventListener("change", function () {
+      if (state.currentDoc) {
+        renderLlmPayloadForUnit(state.currentDoc, state.activePageUnit);
+      }
+    });
 
     document.getElementById("copy-llm-payload-btn").addEventListener("click", function () {
       var txt = document.getElementById("llm-payload-viewer").textContent;

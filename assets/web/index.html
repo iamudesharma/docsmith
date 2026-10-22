@@ -429,8 +429,9 @@
               <div>
                 <h2 class="card-title">Saved Page Images for AI Vision</h2>
                 <p class="card-desc">
-                  Whenever a page is blank, unreadable, or contains complex diagrams, it is saved here as a clean 150 DPI image. Click any page below to get a ready-to-use AI prompt.
+                  Every page is extracted to text. This tab also keeps a clean 150 DPI image of pages that are blank, scanned or contain complex diagrams, so a vision model can take a closer look.
                 </p>
+                <p class="muted" id="pages-text-summary" style="margin:0 0 0.75rem"></p>
               </div>
               <div class="inline-controls">
                 <span class="badge" id="pages-manifest-mode">Mode: Automatic</span>
@@ -447,9 +448,17 @@
                 <div class="card-head-row compact">
                   <div>
                     <h3 class="card-title">Ready-to-Use AI Vision Request</h3>
-                    <p class="card-desc">Includes the page image link and any partial text already found on the page.</p>
+                    <p class="card-desc">
+                      Scope: <strong id="llm-payload-scope">All pages</strong> · includes the page image link and the text already extracted.
+                    </p>
                   </div>
-                  <button class="btn btn-sm btn-primary" id="copy-llm-payload-btn">Copy AI Request</button>
+                  <div class="inline-controls">
+                    <label class="checkbox-inline" title="Include every saved page image in one request">
+                      <input type="checkbox" id="llm-payload-all" checked>
+                      <span>All pages</span>
+                    </label>
+                    <button class="btn btn-sm btn-primary" id="copy-llm-payload-btn">Copy AI Request</button>
+                  </div>
                 </div>
                 <pre class="code-viewer" id="llm-payload-viewer">Click a saved page image on the left to prepare its AI request.</pre>
               </div>

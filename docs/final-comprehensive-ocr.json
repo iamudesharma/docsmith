@@ -1,9 +1,9 @@
 {
   "pdf": "final-comprehensive.pdf",
-  "status": "partial",
+  "status": "complete",
   "pages": 6,
   "expected_pages": 6,
-  "elapsed_ms": 43246,
+  "elapsed_ms": 41323,
   "units": [
     {
       "page": 1,
@@ -343,7 +343,7 @@
   "findings": [
     "Most characters were recovered but sequence CER is high: OCR reading order differs from the ground-truth order (diagrams/charts/table columns). Check the order-insensitive recall and per-page text."
   ],
-  "elapsed_wall_s": 44.71,
+  "elapsed_wall_s": 41.65,
   "options": {
     "ocr": true,
     "languages": "eng+hin",

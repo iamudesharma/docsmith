@@ -12,6 +12,16 @@ use std::{
 };
 
 pub const ENGINE_VERSION: &str = concat!("doc-extractor/", env!("CARGO_PKG_VERSION"), "-schema1");
+
+/// Warnings that record a deliberate provenance choice for scans, not an extraction problem.
+/// They stay in the result so consumers can see why a page is OCR-only or why table geometry is
+/// a proposal, but they should not downgrade a successful extraction to `partial`.
+pub(crate) fn informational_warning(message: &str) -> bool {
+    message.starts_with("Scanned page: embedded image extraction skipped")
+        || message.starts_with("Embedded images retained; OCR coordinates refer to each asset")
+        || message.starts_with("Poppler reading order and text geometry retained")
+}
+
 pub fn parser_fingerprint() -> String {
     hash(
         concat!(
@@ -375,7 +385,8 @@ impl ContextData {
         if self.document.units.len() >= self.limits.units {
             bail!("limit_exceeded: units");
         }
-        if !u.errors.is_empty() || !u.warnings.is_empty() {
+        let has_notes = u.warnings.iter().any(|w| !informational_warning(w));
+        if !u.errors.is_empty() || has_notes {
             u.status = "partial".into();
         }
         let path = self.dir.join("units").join(format!("{}.json", u.id));
@@ -760,11 +771,14 @@ pub fn extract(
     };
     let needs_ocr = c.document.units.iter().any(|u| u.status == "needs_ocr");
     let partial = !c.document.errors.is_empty()
-        || !c.document.warnings.is_empty()
+        || c.document
+            .warnings
+            .iter()
+            .any(|warning| !informational_warning(warning))
         || c.document
             .units
             .iter()
-            .any(|u| !u.warnings.is_empty() || !u.errors.is_empty());
+            .any(|u| !u.errors.is_empty() || u.warnings.iter().any(|w| !informational_warning(w)));
     c.document.status = if c.document.units.is_empty() && !c.document.errors.is_empty() {
         if c.document.errors.iter().any(|e| e.code == "unsupported") {
             "unsupported"
