@@ -824,6 +824,7 @@
 
     var firstUnit = (doc.units && doc.units[0] && doc.units[0].id) || "u1";
     selectUnit(firstUnit);
+    renderPageFilmstrip();
   }
 
   function loadSingleUnitFromServer(jobId, unitId) {
@@ -910,6 +911,56 @@
     };
   }
 
+  function renderPageFilmstrip() {
+    var strip = document.getElementById("page-filmstrip");
+    if (!strip || !state.currentDoc) return;
+    var units = state.currentDoc.units || [];
+    strip.innerHTML = "";
+    units.forEach(function (u, i) {
+      var raster = findUnitRasterAsset(u, state.currentDoc);
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "page-film-thumb" + (u.id === state.currentUnitId ? " is-active" : "");
+      btn.setAttribute("data-unit", u.id);
+      btn.title = u.name || "Page " + (i + 1);
+      var inner = "";
+      if (raster && state.currentJobId) {
+        inner =
+          "<img loading='lazy' src='/v1/extractions/" +
+          encodeURIComponent(state.currentJobId) +
+          "/assets/" +
+          encodeURIComponent(raster.asset_id) +
+          "' alt='Page " +
+          (i + 1) +
+          "'>";
+      } else {
+        inner = "<span class='page-film-placeholder'>" + (i + 1) + "</span>";
+      }
+      btn.innerHTML =
+        inner + "<span class='page-film-label'>Page " + (i + 1) + "</span>";
+      btn.addEventListener("click", function () {
+        selectUnit(u.id);
+      });
+      strip.appendChild(btn);
+    });
+    var caption = document.getElementById("page-filmstrip-caption");
+    if (caption) {
+      caption.textContent =
+        "All " + units.length + (units.length === 1 ? " page" : " pages");
+    }
+    updateFilmstripActive();
+  }
+
+  function updateFilmstripActive() {
+    document.querySelectorAll("#page-filmstrip .page-film-thumb").forEach(function (btn) {
+      btn.classList.toggle("is-active", btn.getAttribute("data-unit") === state.currentUnitId);
+    });
+    var active = document.querySelector("#page-filmstrip .page-film-thumb.is-active");
+    if (active && active.scrollIntoView) {
+      active.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
   function renderCurrentUnit() {
     var unit = state.currentUnit;
     if (!unit) return;
@@ -969,6 +1020,7 @@
 
     renderBlocksSubtab(unit);
     renderTablesSubtab(unit);
+    updateFilmstripActive();
   }
 
   function updateProvenanceCounts(stats) {
