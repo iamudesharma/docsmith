@@ -378,7 +378,8 @@ impl App {
             return Ok(0);
         }
         let bytes = std::fs::read(&path)?;
-        let document: Document = serde_json::from_slice(&bytes)?;
+        let mut document: Document = serde_json::from_slice(&bytes)?;
+        apply_review(&mut document, &read_review(&self.dir(id)));
         let mut rows: Vec<(String, String, usize, Option<String>, String, String)> = Vec::new();
         for unit in &document.units {
             let name = unit.name.trim();
@@ -1442,9 +1443,222 @@ async fn status(
     app.authorize(&id, &headers)?;
     Ok(Json(app.job(&id)?))
 }
+/// Persist reviewer edits and page verification in a sidecar. The canonical extraction is
+/// immutable; `review.json` is an overlay used by the reader and reviewed exports.
+async fn update_review(
+    State(app): State<App>,
+    ApiPath(id): ApiPath<String>,
+    headers: HeaderMap,
+    Json(update): Json<ReviewUpdate>,
+) -> ApiResult<Json<Value>> {
+    app.authorize(&id, &headers)?;
+    if app.job(&id)?.state != "completed" {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "not_ready",
+            "Review is available after extraction completes",
+        ));
+    }
+    if !valid_part(&update.unit_id, 'u') {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_review",
+            "Unknown unit",
+        ));
+    }
+    if let Some(block) = &update.block_id {
+        let prefix = format!("{}-b", update.unit_id);
+        if !block.starts_with(&prefix)
+            || block.len() > 96
+            || !block.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_review",
+                "Unknown block",
+            ));
+        }
+        if update.text.is_none() && !update.revert {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_review",
+                "Block updates need text or revert=true",
+            ));
+        }
+    } else if update.text.is_some() || update.revert {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_review",
+            "block_id is required for text corrections",
+        ));
+    }
+    if update.cell_row.is_some() != update.cell_column.is_some() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_review",
+            "cell_row and cell_column must be supplied together",
+        ));
+    }
+    if update.cell_row.is_some() && update.block_id.is_none() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_review",
+            "block_id is required for cell corrections",
+        ));
+    }
+    if update
+        .text
+        .as_ref()
+        .or(update.original.as_ref())
+        .is_some_and(|text| text.len() > 200_000)
+    {
+        return Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "limit_exceeded",
+            "Corrected text is too large",
+        ));
+    }
+    if update.note.as_ref().is_some_and(|note| note.len() > 4_000) {
+        return Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "limit_exceeded",
+            "Review note is too large",
+        ));
+    }
+    if let Some(status) = &update.status {
+        if !["reviewed", "needs_review", "clear"].contains(&status.as_str()) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_review",
+                "Expected status reviewed, needs_review or clear",
+            ));
+        }
+    }
+    if update.text.is_none() && !update.revert && update.status.is_none() && update.note.is_none() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_review",
+            "No review changes supplied",
+        ));
+    }
+    let dir = app.dir(&id);
+    let path = dir.join("review.json");
+    if tokio::fs::metadata(&path)
+        .await
+        .map(|meta| meta.len() > 4 * 1024 * 1024)
+        .unwrap_or(false)
+    {
+        return Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "limit_exceeded",
+            "Review sidecar is too large",
+        ));
+    }
+    let mut review = read_review(&dir);
+    if !review.get("units").is_some_and(Value::is_object) {
+        review["units"] = json!({});
+    }
+    let units = review["units"].as_object_mut().unwrap();
+    let unit = units
+        .entry(update.unit_id.clone())
+        .or_insert_with(|| json!({}));
+    if !unit.is_object() {
+        *unit = json!({});
+    }
+    if let Some(block_id) = &update.block_id {
+        if let (Some(row), Some(column)) = (update.cell_row, update.cell_column) {
+            if !unit.get("cells").is_some_and(Value::is_object) {
+                unit["cells"] = json!({});
+            }
+            if !unit["cells"].get(block_id).is_some_and(Value::is_object) {
+                unit["cells"][block_id.as_str()] = json!({});
+            }
+            let key = format!("{row},{column}");
+            if update.revert {
+                if let Some(cells) = unit["cells"]
+                    .get_mut(block_id)
+                    .and_then(Value::as_object_mut)
+                {
+                    cells.remove(&key);
+                }
+            } else if let Some(text) = &update.text {
+                let mut entry = json!({"text":text,"updated_at":epoch()});
+                if let Some(original) = &update.original {
+                    entry["original"] = json!(original);
+                }
+                unit["cells"][block_id.as_str()][key.as_str()] = entry;
+            }
+        } else if update.revert {
+            if let Some(blocks) = unit.get_mut("blocks").and_then(Value::as_object_mut) {
+                blocks.remove(block_id);
+            }
+        } else if let Some(text) = &update.text {
+            if !unit.get("blocks").is_some_and(Value::is_object) {
+                unit["blocks"] = json!({});
+            }
+            let mut entry = json!({"text":text,"updated_at":epoch()});
+            if let Some(original) = &update.original {
+                entry["original"] = json!(original);
+            }
+            unit["blocks"][block_id.as_str()] = entry;
+        }
+        // A correction invalidates an earlier verification unless the same request
+        // explicitly sets the status afterwards.
+        if unit.get("status").and_then(Value::as_str) == Some("reviewed") && update.status.is_none()
+        {
+            unit["status"] = json!("needs_review");
+        }
+    }
+    if let Some(status) = &update.status {
+        if status == "clear" {
+            if let Some(object) = unit.as_object_mut() {
+                object.remove("status");
+            }
+        } else {
+            unit["status"] = json!(status);
+        }
+    }
+    if let Some(note) = &update.note {
+        unit["note"] = json!(note);
+    }
+    unit["updated_at"] = json!(epoch());
+    review["updated_at"] = json!(epoch());
+    atomic_json(&path, &review)?;
+    let worker = app.clone();
+    let index_id = id.clone();
+    tokio::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || worker.index_job_for_search(&index_id)).await;
+    });
+    Ok(Json(review))
+}
 #[derive(Deserialize)]
 struct Export {
     format: Option<String>,
+    /// Apply the reviewed-text overlay when generating markdown/text/html.
+    review: Option<bool>,
+}
+#[derive(Deserialize)]
+struct ReviewUpdate {
+    unit_id: String,
+    #[serde(default)]
+    block_id: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    /// Raw text before the correction, kept so the UI can revert without re-reading the unit.
+    #[serde(default)]
+    original: Option<String>,
+    /// When present with `cell_row`, the correction targets one table cell instead of a
+    /// whole block.
+    #[serde(default)]
+    cell_row: Option<u32>,
+    #[serde(default)]
+    cell_column: Option<u32>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    revert: bool,
 }
 /// `result_format` recorded at upload time; used when the request has no `?format=`.
 async fn job_result_format(app: &App, id: &str) -> Option<String> {
@@ -1458,6 +1672,129 @@ async fn job_result_format(app: &App, id: &str) -> Option<String> {
         .as_str()
         .map(str::to_owned)
 }
+fn empty_review() -> Value {
+    json!({"schema_version":"review1","updated_at":0,"units":{}})
+}
+
+fn read_review(dir: &std::path::Path) -> Value {
+    std::fs::read(dir.join("review.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(empty_review)
+}
+
+fn review_has_corrections(review: &Value) -> bool {
+    review
+        .get("units")
+        .and_then(Value::as_object)
+        .is_some_and(|units| {
+            units.values().any(|unit| {
+                unit.get("blocks")
+                    .and_then(Value::as_object)
+                    .is_some_and(|blocks| !blocks.is_empty())
+                    || unit
+                        .get("cells")
+                        .and_then(Value::as_object)
+                        .is_some_and(|cells| !cells.is_empty())
+            })
+        })
+}
+
+/// Apply reviewer text corrections to a copy of the canonical document. The canonical
+/// `result.json` is never modified; this overlay is used only for human-facing exports.
+fn apply_review(document: &mut Document, review: &Value) {
+    let Some(units) = review.get("units").and_then(Value::as_object) else {
+        return;
+    };
+    for unit in &mut document.units {
+        let Some(reviewed) = units.get(&unit.id) else {
+            continue;
+        };
+        if let Some(blocks) = reviewed.get("blocks").and_then(Value::as_object) {
+            for block in &mut unit.blocks {
+                if let Some(text) = blocks
+                    .get(&block.id)
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(Value::as_str)
+                {
+                    block.text = text.to_owned();
+                }
+            }
+        }
+        let Some(cells) = reviewed.get("cells").and_then(Value::as_object) else {
+            continue;
+        };
+        for block in &mut unit.blocks {
+            let Some(table) = &mut block.table else {
+                continue;
+            };
+            let Some(overrides) = cells.get(&block.id).and_then(Value::as_object) else {
+                continue;
+            };
+            for cell in &mut table.cells {
+                let key = format!("{},{}", cell.row, cell.column);
+                if let Some(text) = overrides
+                    .get(&key)
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(Value::as_str)
+                {
+                    cell.raw = text.to_owned();
+                    cell.value = json!(text);
+                }
+            }
+        }
+    }
+}
+
+fn reviewed_html(document: &Document) -> String {
+    let mut out = String::new();
+    out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">");
+    out.push_str(&format!(
+        "<title>{}</title>\n<style>body{{font:14px/1.5 -apple-system,system-ui,sans-serif;margin:2rem auto;max-width:70rem;padding:0 1rem}}table{{border-collapse:collapse;margin:.6rem 0}}td,th{{border:1px solid #bbb;padding:.2rem .45rem;vertical-align:top;max-width:28rem;overflow-wrap:anywhere}}tbody tr:nth-child(even){{background:rgba(127,127,127,.09)}}pre,p{{overflow-wrap:anywhere}}</style>\n</head>\n<body>\n<h1>{}</h1>\n<p>Status: {} · reviewed text</p>\n",
+        crate::model::html_escape(&document.filename),
+        crate::model::html_escape(&document.filename),
+        crate::model::html_escape(&document.status)
+    ));
+    for unit in &document.units {
+        crate::model::unit_html(unit, &mut out);
+    }
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
+async fn review_export(dir: &std::path::Path, format: &str, review: &Value) -> ApiResult<Response> {
+    let bytes = tokio::fs::read(dir.join("result.json")).await?;
+    let mut document: Document = serde_json::from_slice(&bytes).map_err(anyhow::Error::from)?;
+    apply_review(&mut document, review);
+    let (body, mime) = match format {
+        "markdown" | "md" => (
+            crate::model::markdown(&document),
+            "text/markdown; charset=utf-8",
+        ),
+        "text" | "txt" => (
+            crate::model::plaintext(&document),
+            "text/plain; charset=utf-8",
+        ),
+        "html" => (reviewed_html(&document), "text/html; charset=utf-8"),
+        _ => {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_format",
+                "Reviewed export supports markdown, text or html",
+            ))
+        }
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, mime.to_owned()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
+        ],
+        body,
+    )
+        .into_response())
+}
+
 async fn result(
     State(app): State<App>,
     ApiPath(id): ApiPath<String>,
@@ -1473,6 +1810,13 @@ async fn result(
         .unwrap_or("json");
     // The staged upload is kept for retries and as the user's original copy. It is available
     // even while a job is queued or failed, which is exactly when "retry" needs it.
+    if format == "review" {
+        let path = app.dir(&id).join("review.json");
+        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return stream_file(path, "application/json").await;
+        }
+        return Ok(Json(empty_review()).into_response());
+    }
     if format == "original" {
         let job = app.job(&id)?;
         let path = app.dir(&id).join("input");
@@ -1510,6 +1854,13 @@ async fn result(
             "Result is not complete; use unit endpoint for checkpoints",
         ));
     }
+    if export.review.unwrap_or(false) && ["markdown", "md", "text", "txt", "html"].contains(&format)
+    {
+        let review = read_review(&app.dir(&id));
+        if review_has_corrections(&review) {
+            return review_export(&app.dir(&id), format, &review).await;
+        }
+    }
     let (file, mime) = match format {
         "json" => ("result.json", "application/json"),
         "markdown" | "md" => ("result.md", "text/markdown; charset=utf-8"),
@@ -1521,7 +1872,7 @@ async fn result(
             return Err(error(
                 StatusCode::BAD_REQUEST,
                 "invalid_format",
-                "Expected json, markdown, text, jsonl, html, chunks or original",
+                "Expected json, markdown, text, jsonl, html, chunks, review or original",
             ))
         }
     };
@@ -1794,10 +2145,118 @@ fn valid_part(part: &str, prefix: char) -> bool {
         && part.len() <= 64
         && part.chars().all(|c| c.is_ascii_alphanumeric())
 }
+/// Render a single PDF page on demand (and cache it) so digital documents can show the
+/// original page even when `page_images` was not requested for the whole job.
+async fn render_unit_page(app: &App, id: &str, unit: &str, dpi: u32) -> ApiResult<Response> {
+    let job = app.job(id)?;
+    if !job.filename.to_ascii_lowercase().ends_with(".pdf") {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "unsupported_preview",
+            "On-demand page previews are only available for PDF jobs",
+        ));
+    }
+    if !providers::available("pdftoppm") {
+        return Err(error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "preview_unavailable",
+            "pdftoppm is not installed",
+        ));
+    }
+    let dir = app.dir(id);
+    let unit_path = dir.join("units").join(format!("{unit}.json"));
+    let bytes = tokio::fs::read(&unit_path).await.map_err(|_| {
+        error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Unit checkpoint not found",
+        )
+    })?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(anyhow::Error::from)?;
+    let page = value
+        .get("index")
+        .and_then(Value::as_u64)
+        .map(|index| index + 1)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "not_found", "Unit has no page index"))?
+        as u32;
+    let preview_dir = dir.join("preview");
+    let final_path = preview_dir.join(format!("{unit}-{dpi}.png"));
+    if tokio::fs::try_exists(&final_path).await.unwrap_or(false) {
+        return stream_file(final_path, "image/png").await;
+    }
+    let input = dir.join("input");
+    if !tokio::fs::try_exists(&input).await.unwrap_or(false) {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Original PDF is no longer stored",
+        ));
+    }
+    let max_pixels = app.config.limits.page_pixels;
+    let temp_prefix = preview_dir.join(format!(".{unit}-{dpi}-{}", uuid::Uuid::new_v4()));
+    let render_prefix = temp_prefix.clone();
+    let target = final_path.clone();
+    let page_arg = page.to_string();
+    let dpi_arg = dpi.to_string();
+    let outcome = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+        std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
+        let output = std::process::Command::new("pdftoppm")
+            .args([
+                "-f",
+                &page_arg,
+                "-l",
+                &page_arg,
+                "-r",
+                &dpi_arg,
+                "-png",
+                "-singlefile",
+            ])
+            .arg(&input)
+            .arg(&render_prefix)
+            .output()
+            .map_err(|e| e.to_string())?;
+        let rendered = temp_prefix.with_extension("png");
+        if !output.status.success() {
+            let _ = std::fs::remove_file(&rendered);
+            return Err(String::from_utf8_lossy(&output.stderr)
+                .trim()
+                .chars()
+                .take(300)
+                .collect());
+        }
+        let (width, height) = image::image_dimensions(&rendered).map_err(|e| e.to_string())?;
+        if u64::from(width).saturating_mul(u64::from(height)) > max_pixels {
+            let _ = std::fs::remove_file(&rendered);
+            return Err(format!(
+                "limit_exceeded: rendered preview is {width}x{height} pixels"
+            ));
+        }
+        std::fs::rename(&rendered, &target).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(anyhow::Error::from)?;
+    match outcome {
+        Ok(()) => stream_file(final_path, "image/png").await,
+        Err(message) if message.starts_with("limit_exceeded") => Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "limit_exceeded",
+            &message,
+        )),
+        Err(message) => Err(error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "preview_failed",
+            &message,
+        )),
+    }
+}
+
 #[derive(Deserialize)]
 struct UnitQuery {
     from: Option<usize>,
     count: Option<usize>,
+    /// Render one PDF page on demand and cache it under `preview/`.
+    render: Option<bool>,
+    dpi: Option<u32>,
 }
 async fn unit(
     State(app): State<App>,
@@ -1808,6 +2267,10 @@ async fn unit(
     app.authorize(&id, &headers)?;
     if !valid_part(&unit, 'u') {
         return Err(error(StatusCode::NOT_FOUND, "not_found", "Unit not found"));
+    }
+    if query.render.unwrap_or(false) {
+        let dpi = query.dpi.unwrap_or(150).clamp(72, 300);
+        return render_unit_page(&app, &id, &unit, dpi).await;
     }
     let path = app.dir(&id).join("units").join(format!("{unit}.json"));
     if query.from.is_none() && query.count.is_none() {
@@ -2291,6 +2754,7 @@ fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> 
         "timings.json",
         "progress.json",
         "assets.json",
+        "review.json",
     ] {
         let source = dir.join(name);
         if source.is_file() {
@@ -2312,6 +2776,20 @@ fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> 
                     zip.start_file(format!("original/{safe}"), options)?;
                     std::io::copy(&mut std::fs::File::open(&input)?, &mut zip)?;
                 }
+            }
+        }
+    }
+    let review = read_review(dir);
+    if review_has_corrections(&review) {
+        if let Ok(bytes) = std::fs::read(dir.join("result.json")) {
+            if let Ok(mut document) = serde_json::from_slice::<Document>(&bytes) {
+                apply_review(&mut document, &review);
+                zip.start_file("reviewed/result.md", options)?;
+                zip.write_all(crate::model::markdown(&document).as_bytes())?;
+                zip.start_file("reviewed/result.txt", options)?;
+                zip.write_all(crate::model::plaintext(&document).as_bytes())?;
+                zip.start_file("reviewed/result.html", options)?;
+                zip.write_all(reviewed_html(&document).as_bytes())?;
             }
         }
     }
@@ -2486,6 +2964,13 @@ pub fn openapi() -> Value {
             json!({}),
         ),
         (
+            "/v1/extractions/{id}",
+            "patch",
+            "Save a reviewer correction or page verification",
+            "200",
+            json!({"type":"object","description":"The updated review sidecar"}),
+        ),
+        (
             "/v1/capabilities",
             "get",
             "Runtime configured capabilities",
@@ -2514,11 +2999,14 @@ pub fn openapi() -> Value {
             }
         }
         if path.ends_with("/result") {
-            params.push(json!({"name":"format","in":"query","description":"Export format; `original` returns the uploaded file, other values default to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl","html","chunks","original"]}}));
+            params.push(json!({"name":"format","in":"query","description":"Export format; `original` returns the uploaded file, `review` returns the correction sidecar, other values default to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl","html","chunks","review","original"]}}));
+            params.push(json!({"name":"review","in":"query","description":"Apply reviewer text corrections to markdown, text or HTML","schema":{"type":"boolean"}}));
         }
         if path.ends_with("/units/{unit_id}") {
             params.push(json!({"name":"from","in":"query","description":"First table row of the slice (used with count)","schema":{"type":"integer","minimum":0}}));
             params.push(json!({"name":"count","in":"query","description":"Maximum table rows in the slice (default 500, max 10000)","schema":{"type":"integer","minimum":1,"maximum":10000}}));
+            params.push(json!({"name":"render","in":"query","description":"Render this PDF page to a cached PNG preview","schema":{"type":"boolean"}}));
+            params.push(json!({"name":"dpi","in":"query","description":"Preview render resolution (default 150, 72..300)","schema":{"type":"integer","minimum":72,"maximum":300}}));
         }
         if path.ends_with("/archive") {
             params.push(json!({"name":"units","in":"query","description":"Include unit checkpoints in the archive","schema":{"type":"boolean"}}));
@@ -2576,6 +3064,9 @@ pub fn openapi() -> Value {
         if path == "/v1/extractions" && method == "post" {
             operation["requestBody"] = json!({"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary","description":"Repeat the field to submit up to 32 files in one request; each becomes a job and the response then contains a jobs array"},"options":{"type":"string","description":"JSON encoded Options (empty uses defaults)","example":"{\"ocr\":false,\"vision\":false}"},"callback_url":{"type":"string","description":"Optional http(s) URL notified when the job reaches a terminal state (signed when webhook_secret is set)","example":"https://example.com/hooks/docsmith"}}}}}});
         }
+        if path == "/v1/extractions/{id}" && method == "patch" {
+            operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"type":"object","required":["unit_id"],"properties":{"unit_id":{"type":"string","example":"u1"},"block_id":{"type":"string","example":"u1-b2"},"text":{"type":"string","description":"Corrected block or cell text"},"original":{"type":"string","description":"Raw text before the correction, used by the UI to revert"},"cell_row":{"type":"integer","description":"Zero-based table row when correcting one cell"},"cell_column":{"type":"integer","description":"Zero-based table column when correcting one cell"},"status":{"type":"string","enum":["reviewed","needs_review","clear"]},"note":{"type":"string"},"revert":{"type":"boolean","description":"Remove the block or cell correction"}}}}}});
+        }
         paths.entry(path).or_insert(json!({}))[method] = operation;
     }
     let mut spec = json!({"openapi":"3.1.0","info":{"title":"Document Extractor","version":env!("CARGO_PKG_VERSION")},"paths":paths,"components":{"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"}},"schemas":{"Options":options_schema,"Failure":serde_json::to_value(schemars::schema_for!(Failure)).unwrap()}}});
@@ -2613,7 +3104,10 @@ pub fn router(app: App) -> Router {
         .route("/v1/extractions", get(list).post(upload))
         .route("/v1/stats", get(stats))
         .route("/metrics", get(metrics))
-        .route("/v1/extractions/{id}", get(status).delete(delete))
+        .route(
+            "/v1/extractions/{id}",
+            get(status).delete(delete).patch(update_review),
+        )
         .route("/v1/extractions/{id}/result", get(result))
         .route("/v1/extractions/{id}/units/{unit_id}", get(unit))
         .route("/v1/extractions/{id}/assets/{asset_id}", get(asset))

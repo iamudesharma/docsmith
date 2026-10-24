@@ -37,6 +37,8 @@
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></symbol>
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.6 1.6"/><path d="M14 10.5a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.6-1.6"/></symbol>
     <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6.5 10a5.5 5.5 0 0 1 11 0c0 4 1.5 5.5 1.5 5.5H5s1.5-1.5 1.5-5.5Z"/><path d="M10 18.5a2 2 0 0 0 4 0"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="m4.5 19.5 4.2-1 9.6-9.6a2.1 2.1 0 0 0-3-3L5.7 15.5l-1.2 4Z"/><path d="m13.8 7.4 3 3"/></symbol>
+    <symbol id="i-badge-check" viewBox="0 0 24 24"><path d="M12 3.5 5 6v6c0 4.5 3 7.4 7 8.5 4-1.1 7-4 7-8.5V6l-7-2.5Z"/><path d="m9 12 2 2 4-4"/></symbol>
   </svg>
 
   <div class="ambient" aria-hidden="true">
@@ -400,6 +402,10 @@
                   <p class="card-desc" id="canvas-subtitle">Click a highlighted box to jump to that text.</p>
                 </div>
                 <div class="canvas-tools">
+                  <button class="btn btn-sm hidden" id="render-page-toolbar-btn" title="Render the original PDF page">
+                    <svg class="icon"><use href="#i-images"/></svg>
+                    Render page
+                  </button>
                   <button class="btn btn-sm" id="copy-page-text-btn" title="Copy this page as text">
                     <svg class="icon"><use href="#i-copy"/></svg>
                     Copy
@@ -408,6 +414,7 @@
                     <svg class="icon"><use href="#i-download"/></svg>
                     .txt
                   </button>
+                  <span class="badge hidden" id="canvas-quality"></span>
                   <span class="badge hidden" id="canvas-timing"></span>
                 </div>
               </div>
@@ -421,6 +428,10 @@
                       <span class="page-empty-icon"><svg class="icon"><use href="#i-book"/></svg></span>
                       <strong>No page picture for this format</strong>
                       <p>Read the extracted text on the right, or download the original file.</p>
+                      <button class="btn btn-sm btn-primary page-empty-render hidden" id="render-page-btn" type="button">
+                        <svg class="icon"><use href="#i-images"/></svg>
+                        Render this page
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -435,6 +446,7 @@
             <div class="card viewer-right">
               <div class="content-tabs" role="tablist">
                 <button class="subtab-btn is-active" data-subtab="blocks">Reading view</button>
+                <button class="subtab-btn" data-subtab="review">Review <span class="subtab-count hidden" id="review-count">0</span></button>
                 <button class="subtab-btn" data-subtab="tables">Tables</button>
                 <button class="subtab-btn" data-subtab="formats">Export</button>
                 <button class="subtab-btn" data-subtab="chunks">AI passages</button>
@@ -445,9 +457,25 @@
                 <div id="blocks-list" class="blocks-list"></div>
               </div>
 
+              <div class="subtab-panel" id="subpanel-review">
+                <div class="review-summary" id="review-summary"></div>
+                <div class="review-toolbar">
+                  <button class="btn btn-sm btn-primary" id="review-next-btn">
+                    Review next flagged page
+                  </button>
+                  <button class="btn btn-sm" id="mark-page-reviewed-btn">
+                    <svg class="icon"><use href="#i-check"/></svg>
+                    Mark this page verified
+                  </button>
+                  <span class="review-toolbar-note" id="review-page-state"></span>
+                </div>
+                <div class="review-pages" id="review-pages"></div>
+              </div>
+
               <div class="subtab-panel" id="subpanel-tables">
                 <div class="table-slicer-bar">
                   <span>Rows to display</span>
+                  <span class="muted">Double-click a cell to correct it</span>
                   <label>Start at row <input id="slice-from" type="number" value="0" min="0" step="100"></label>
                   <label>Row count <input id="slice-count" type="number" value="250" min="1" max="5000" step="50"></label>
                   <button class="btn btn-sm" id="slice-load-btn">Update</button>

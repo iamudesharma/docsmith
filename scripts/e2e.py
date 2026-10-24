@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Real HTTP/SQLite/isolated-worker acceptance checks, no production Python service."""
-import pathlib,tempfile,subprocess,json,time,urllib.request,urllib.error,os,signal,socket,sys,http.server,threading,hmac,hashlib
+import pathlib,tempfile,subprocess,json,time,urllib.request,urllib.error,os,signal,socket,sys,http.server,threading,hmac,hashlib,shutil
 ROOT=pathlib.Path(__file__).resolve().parents[1];BIN=ROOT/'target/debug/doc-extractor'
 results=[]
 with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
@@ -139,6 +139,35 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('search finds extracted table text',search['total']>=1 and any(m['job_id']==jsonljob and m['kind']=='table' and m['snippet'] for m in search['matches']))
   original=request(f'/v1/extractions/{jsonljob}/result?format=original')[1]
   check('original upload is downloadable',original==(ROOT/'fixtures'/'quoted.csv').read_bytes())
+  # Reviewer corrections are a sidecar overlay: canonical JSON stays raw, reviewed exports
+  # carry the edits, and a revert removes the overlay.
+  _,j=upload('document.md');reviewjob=j['id'];wait(reviewjob)
+  review_doc=json.loads(request(f'/v1/extractions/{reviewjob}/result')[1])
+  text_block=next(b for b in review_doc['units'][0]['blocks'] if b.get('text') and not b.get('table'))
+  review_path=tmp/'data/jobs'/reviewjob/'review.json'
+  patch=json.dumps({'unit_id':'u1','block_id':text_block['id'],'text':'REVIEW MARKER','original':text_block['text']}).encode()
+  code,_=request(f'/v1/extractions/{reviewjob}','PATCH',patch,headers={'Content-Type':'application/json'})
+  check('review patch saves a block correction',code==200 and json.loads(review_path.read_text())['units']['u1']['blocks'][text_block['id']]['text']=='REVIEW MARKER')
+  check('reviewed markdown export applies corrections',b'REVIEW MARKER' in request(f'/v1/extractions/{reviewjob}/result?format=markdown&review=true')[1])
+  reviewed_search=None
+  for _ in range(20):
+   reviewed_search=json.loads(request('/v1/extractions?q=REVIEW%20MARKER&limit=20')[1])
+   if any(m['job_id']==reviewjob for m in reviewed_search['matches']):break
+   time.sleep(.1)
+  check('search reindexes reviewed text',any(m['job_id']==reviewjob for m in reviewed_search['matches']))
+  check('canonical JSON keeps original text',b'REVIEW MARKER' not in request(f'/v1/extractions/{reviewjob}/result?format=json')[1])
+  check('review sidecar is fetchable',json.loads(request(f'/v1/extractions/{reviewjob}/result?format=review')[1])['units']['u1']['blocks'][text_block['id']]['text']=='REVIEW MARKER')
+  check('archive includes reviewed exports',b'reviewed/result.md' in request(f'/v1/extractions/{reviewjob}/archive')[1])
+  code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','status':'reviewed'}).encode(),headers={'Content-Type':'application/json'})
+  check('review page verification persists',code==200 and json.loads(review_path.read_text())['units']['u1']['status']=='reviewed')
+  code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','block_id':text_block['id'],'revert':True}).encode(),headers={'Content-Type':'application/json'})
+  check('review revert removes the correction',code==200 and b'REVIEW MARKER' not in request(f'/v1/extractions/{reviewjob}/result?format=markdown&review=true')[1])
+  jsonljob_doc=json.loads(request(f'/v1/extractions/{jsonljob}/result?format=json')[1])
+  table_block=next(b for b in jsonljob_doc['units'][0]['blocks'] if b.get('table'))
+  cell=table_block['table']['cells'][0]
+  code,_=request(f'/v1/extractions/{jsonljob}','PATCH',json.dumps({'unit_id':'u1','block_id':table_block['id'],'cell_row':cell['row'],'cell_column':cell['column'],'text':'CELLFIX','original':cell['raw']}).encode(),headers={'Content-Type':'application/json'})
+  check('review patch saves a table cell correction',code==200 and b'CELLFIX' in request(f'/v1/extractions/{jsonljob}/result?format=markdown&review=true')[1])
+  request(f'/v1/extractions/{jsonljob}','PATCH',json.dumps({'unit_id':'u1','block_id':table_block['id'],'cell_row':cell['row'],'cell_column':cell['column'],'revert':True}).encode(),headers={'Content-Type':'application/json'})
   st=json.loads(request('/v1/stats')[1])
   check('stats endpoint',st['jobs'].get('completed',0)>=1 and st['workers']['slots']==1 and st['disk_bytes']>0)
   sliced=json.loads(request(f'/v1/extractions/{jsonljob}/units/u1?from=1&count=1')[1])
@@ -166,6 +195,12 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   ranged_doc=json.loads(request(f'/v1/extractions/{ranged}/result')[1])
   check('page range selects requested pages',len(ranged_doc['units'])==1 and ranged_doc['units'][0]['name']=='Page 2' and ranged_doc['metadata']['pages_total']==2)
   check('invalid page range rejected',upload('digital.pdf',{'pages':'5-2'})[0]==400)
+  if shutil.which('pdftoppm'):
+   ranged_unit=ranged_doc['units'][0]['id']
+   code,preview=request(f'/v1/extractions/{ranged}/units/{ranged_unit}?render=true&dpi=120')
+   check('on-demand PDF page preview renders and caches',code==200 and preview[:8]==b'\x89PNG\r\n\x1a\n')
+  else:
+   results.append('on-demand PDF page preview skipped (pdftoppm absent)')
   _,j=upload('quoted.csv',{'chunk_chars':30});chunkjob=j['id'];wait(chunkjob)
   chunk_records=[json.loads(line) for line in request(f'/v1/extractions/{chunkjob}/result?format=chunks')[1].splitlines()]
   check('chunk export windows plain text',len(chunk_records)>=2 and all(r['chars']<=30 and r['text'] for r in chunk_records))

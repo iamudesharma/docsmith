@@ -23,7 +23,14 @@
     currentUnit: null,
     currentDerived: null,
     currentPageRasterAssetId: null,
+    currentPageRasterVisible: false,
     currentRasterDims: { width: null, height: null, dpi: 150 },
+    previewRasters: {},
+    renderingUnit: "",
+    review: { schema_version: "review1", units: {} },
+    reviewOriginals: {},
+    reviewOriginalCells: {},
+    reviewBusy: false,
     pgResult: null,
     pendingUnitId: "",
     pendingBlockId: "",
@@ -569,6 +576,493 @@
     return parts.join("\n\n").trim();
   }
 
+  function unitReview(unitId) {
+    return (state.review.units && state.review.units[unitId]) || {};
+  }
+
+  function reviewCorrectionCount() {
+    var count = 0;
+    var units = state.review.units || {};
+    Object.keys(units).forEach(function (unitId) {
+      var blocks = units[unitId].blocks || {};
+      count += Object.keys(blocks).length;
+      var cells = units[unitId].cells || {};
+      Object.keys(cells).forEach(function (blockId) {
+        count += Object.keys(cells[blockId] || {}).length;
+      });
+    });
+    return count;
+  }
+
+  function reviewHasCorrections() {
+    return reviewCorrectionCount() > 0;
+  }
+
+  function unitQuality(unit) {
+    var chars = 0;
+    var tables = 0;
+    var ocrWeighted = 0;
+    var ocrWords = 0;
+    var ocrBlocks = 0;
+    var lowBlocks = 0;
+    (unit.blocks || []).forEach(function (block) {
+      if (block.table) {
+        tables += 1;
+        (block.table.cells || []).forEach(function (cell) {
+          chars += (cell.raw || "").length;
+        });
+      } else if (block.text) {
+        chars += block.text.length;
+      }
+      var attributes = block.attributes || {};
+      if (typeof attributes.ocr_score_uncalibrated === "number") {
+        var words = Math.max(1, Number(attributes.words) || 1);
+        ocrWeighted += attributes.ocr_score_uncalibrated * words;
+        ocrWords += words;
+        ocrBlocks += 1;
+        if (attributes.ocr_score_uncalibrated < 70) lowBlocks += 1;
+      }
+    });
+    var notes = [
+      "Scanned page:",
+      "Embedded images retained;",
+      "Poppler reading order",
+    ];
+    var warnings = (unit.warnings || []).filter(function (warning) {
+      return !notes.some(function (prefix) {
+        return warning.indexOf(prefix) === 0;
+      });
+    }).length;
+    var errors = (unit.errors || []).length;
+    var method = (unit.timing && unit.timing.method) || (ocrBlocks ? "ocr" : "native");
+    var confidence = ocrWords ? Math.round(ocrWeighted / ocrWords) : null;
+    var level = "good";
+    var label = method === "native" ? "Native text" : "Text";
+    if (confidence !== null) {
+      label = "OCR ~" + confidence + "%";
+      if (confidence < 60) level = "poor";
+      else if (confidence < 78 || lowBlocks > 0) level = "check";
+    }
+    if (!chars && !tables) {
+      if (method === "ocr") {
+        level = "poor";
+        label = "No text found";
+      } else {
+        label = "Blank page";
+      }
+    } else if (chars > 0 && chars < 24 && level === "good") {
+      level = "check";
+    }
+    if (warnings && level === "good") level = "check";
+    if (errors) {
+      level = "poor";
+      label = "Read error";
+    }
+    var reviewed = unitReview(unit.id).status === "reviewed";
+    return {
+      level: level,
+      label: label,
+      confidence: confidence,
+      lowBlocks: lowBlocks,
+      ocrBlocks: ocrBlocks,
+      chars: chars,
+      tables: tables,
+      warnings: warnings,
+      errors: errors,
+      method: method,
+      reviewed: reviewed,
+    };
+  }
+
+  function qualityBadgeHtml(quality, includeVerified) {
+    var html =
+      "<span class='quality-badge quality-" +
+      quality.level +
+      "'>" +
+      escapeHtml(quality.label) +
+      "</span>";
+    if (includeVerified && quality.reviewed) {
+      html +=
+        "<span class='quality-badge quality-verified'>Verified</span>";
+    }
+    return html;
+  }
+
+  function applyReviewToDocument(doc, review) {
+    state.review =
+      review && review.units && typeof review.units === "object"
+        ? review
+        : { schema_version: "review1", units: {} };
+    state.reviewOriginals = {};
+    state.reviewOriginalCells = {};
+    (doc.units || []).forEach(function (unit) {
+      var reviewed = state.review.units[unit.id];
+      if (!reviewed) return;
+      (unit.blocks || []).forEach(function (block) {
+        var correction = reviewed.blocks && reviewed.blocks[block.id];
+        if (correction && typeof correction.text === "string") {
+          state.reviewOriginals[block.id] =
+            typeof correction.original === "string"
+              ? correction.original
+              : block.text;
+          block.text = correction.text;
+          block.attributes = Object.assign({}, block.attributes || {}, {
+            reviewed: true,
+          });
+        }
+        var cells = reviewed.cells && reviewed.cells[block.id];
+        if (!cells || !block.table) return;
+        (block.table.cells || []).forEach(function (cell) {
+          var entry = cells[cell.row + "," + cell.column];
+          if (!entry || typeof entry.text !== "string") return;
+          var key = block.id + ":" + cell.row + ":" + cell.column;
+          state.reviewOriginalCells[key] =
+            typeof entry.original === "string" ? entry.original : cell.raw;
+          cell.raw = entry.text;
+          cell.value = entry.text;
+        });
+      });
+    });
+  }
+
+  function patchReview(payload) {
+    if (!state.currentJobId) {
+      return Promise.reject(new Error("No document is open"));
+    }
+    return fetch("/v1/extractions/" + encodeURIComponent(state.currentJobId), {
+      method: "PATCH",
+      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      body: JSON.stringify(payload),
+    }).then(function (response) {
+      return response.json().then(function (body) {
+        if (!response.ok) {
+          throw new Error(
+            (body.error && body.error.message) || "Could not save the review"
+          );
+        }
+        return body;
+      });
+    });
+  }
+
+  function saveBlockCorrection(block, text) {
+    if (!state.currentUnit || state.reviewBusy) return;
+    var unitId = state.currentUnit.id;
+    state.reviewBusy = true;
+    var original = state.reviewOriginals[block.id];
+    if (original == null) original = block.text;
+    patchReview({
+      unit_id: unitId,
+      block_id: block.id,
+      text: text,
+      original: original,
+      status: "needs_review",
+    })
+      .then(function (review) {
+        state.review = review;
+        state.reviewOriginals[block.id] = original;
+        findBlock(unitId, block.id).text = text;
+        findBlock(unitId, block.id).attributes = Object.assign(
+          {},
+          findBlock(unitId, block.id).attributes || {},
+          { reviewed: true }
+        );
+        updateExportLinks(state.currentJobId);
+        renderCurrentUnit();
+        renderPageFilmstrip();
+        showToast("Correction saved");
+      })
+      .catch(function (error) {
+        showToast("Could not save the correction: " + String(error.message || error));
+      })
+      .finally(function () {
+        state.reviewBusy = false;
+      });
+  }
+
+  function revertBlockCorrection(block) {
+    if (!state.currentUnit || state.reviewBusy) return;
+    var unitId = state.currentUnit.id;
+    state.reviewBusy = true;
+    patchReview({
+      unit_id: unitId,
+      block_id: block.id,
+      revert: true,
+    })
+      .then(function (review) {
+        state.review = review;
+        var target = findBlock(unitId, block.id);
+        var original = state.reviewOriginals[block.id];
+        if (original != null) target.text = original;
+        if (target.attributes) delete target.attributes.reviewed;
+        delete state.reviewOriginals[block.id];
+        updateExportLinks(state.currentJobId);
+        renderCurrentUnit();
+        renderPageFilmstrip();
+        showToast("Original text restored");
+      })
+      .catch(function (error) {
+        showToast("Could not revert: " + String(error.message || error));
+      })
+      .finally(function () {
+        state.reviewBusy = false;
+      });
+  }
+
+  function saveCellCorrection(block, row, column, cell, text) {
+    if (!state.currentUnit || state.reviewBusy) return;
+    var unitId = state.currentUnit.id;
+    state.reviewBusy = true;
+    var key = block.id + ":" + row + ":" + column;
+    var original = state.reviewOriginalCells[key];
+    if (original == null) original = cell.raw;
+    patchReview({
+      unit_id: unitId,
+      block_id: block.id,
+      cell_row: row,
+      cell_column: column,
+      text: text,
+      original: original,
+      status: "needs_review",
+    })
+      .then(function (review) {
+        state.review = review;
+        state.reviewOriginalCells[key] = original;
+        var target = findCell(unitId, block.id, row, column);
+        target.raw = text;
+        target.value = text;
+        updateExportLinks(state.currentJobId);
+        renderCurrentUnit();
+        renderPageFilmstrip();
+        showToast("Cell corrected");
+      })
+      .catch(function (error) {
+        showToast("Could not save the cell: " + String(error.message || error));
+      })
+      .finally(function () {
+        state.reviewBusy = false;
+      });
+  }
+
+  function revertCellCorrection(block, row, column) {
+    if (!state.currentUnit || state.reviewBusy) return;
+    var unitId = state.currentUnit.id;
+    state.reviewBusy = true;
+    var key = block.id + ":" + row + ":" + column;
+    patchReview({
+      unit_id: unitId,
+      block_id: block.id,
+      cell_row: row,
+      cell_column: column,
+      revert: true,
+    })
+      .then(function (review) {
+        state.review = review;
+        var target = findCell(unitId, block.id, row, column);
+        var original = state.reviewOriginalCells[key];
+        if (original != null) {
+          target.raw = original;
+          target.value = original;
+        }
+        delete state.reviewOriginalCells[key];
+        updateExportLinks(state.currentJobId);
+        renderCurrentUnit();
+        renderPageFilmstrip();
+        showToast("Cell restored");
+      })
+      .catch(function (error) {
+        showToast("Could not revert the cell: " + String(error.message || error));
+      })
+      .finally(function () {
+        state.reviewBusy = false;
+      });
+  }
+
+  function findCell(unitId, blockId, row, column) {
+    var block = findBlock(unitId, blockId);
+    return (
+      (block.table &&
+        block.table.cells.find(function (cell) {
+          return cell.row === row && cell.column === column;
+        })) || { raw: "", value: "" }
+    );
+  }
+
+  function findBlock(unitId, blockId) {
+    var unit = (state.currentDoc.units || []).find(function (candidate) {
+      return candidate.id === unitId;
+    });
+    return (
+      (unit && unit.blocks.find(function (block) {
+        return block.id === blockId;
+      })) || { text: "", attributes: {} }
+    );
+  }
+
+  function saveReviewStatus(unitId, status) {
+    if (state.reviewBusy) return;
+    state.reviewBusy = true;
+    patchReview({ unit_id: unitId, status: status })
+      .then(function (review) {
+        state.review = review;
+        updateExportLinks(state.currentJobId);
+        renderCurrentUnit();
+        renderPageFilmstrip();
+        showToast(status === "reviewed" ? "Page marked verified" : "Page reopened for review");
+      })
+      .catch(function (error) {
+        showToast("Could not update the review: " + String(error.message || error));
+      })
+      .finally(function () {
+        state.reviewBusy = false;
+      });
+  }
+
+  function renderReviewPanel(unit) {
+    var summary = document.getElementById("review-summary");
+    var list = document.getElementById("review-pages");
+    var count = document.getElementById("review-count");
+    var pageState = document.getElementById("review-page-state");
+    var markBtn = document.getElementById("mark-page-reviewed-btn");
+    if (!summary || !list) return;
+    var units = (state.currentDoc && state.currentDoc.units) || [];
+    var flagged = 0;
+    var verified = 0;
+    var corrections = reviewCorrectionCount();
+    var rows = units.map(function (page) {
+      var quality = unitQuality(page);
+      if (quality.level !== "good" && !quality.reviewed) flagged += 1;
+      if (quality.reviewed) verified += 1;
+      return { unit: page, quality: quality };
+    });
+    rows.sort(function (a, b) {
+      var rank = { poor: 0, check: 1, good: 2 };
+      return rank[a.quality.level] - rank[b.quality.level] || a.unit.index - b.unit.index;
+    });
+    summary.innerHTML =
+      "<div class='review-stat'><strong>" +
+      units.length +
+      "</strong><span>Pages</span></div>" +
+      "<div class='review-stat'><strong>" +
+      flagged +
+      "</strong><span>Need attention</span></div>" +
+      "<div class='review-stat'><strong>" +
+      verified +
+      "</strong><span>Verified</span></div>" +
+      "<div class='review-stat'><strong>" +
+      corrections +
+      "</strong><span>Corrections</span></div>";
+    if (count) {
+      count.textContent = String(flagged);
+      count.classList.toggle("hidden", flagged === 0);
+    }
+    if (unit) {
+      var current = unitReview(unit.id);
+      if (pageState) {
+        pageState.textContent =
+          current.status === "reviewed"
+            ? "This page is verified."
+            : "Not verified yet.";
+      }
+      if (markBtn) {
+        markBtn.innerHTML =
+          current.status === "reviewed"
+            ? "<svg class='icon'><use href='#i-check'/></svg> Reopen page"
+            : "<svg class='icon'><use href='#i-check'/></svg> Mark this page verified";
+      }
+    }
+    if (state.activeSubtab !== "review") {
+      list.innerHTML = "";
+      return;
+    }
+    list.innerHTML = "";
+    rows.forEach(function (row) {
+      var page = row.unit;
+      var quality = row.quality;
+      var review = unitReview(page.id);
+      var edited = review.blocks ? Object.keys(review.blocks).length : 0;
+      Object.keys(review.cells || {}).forEach(function (blockId) {
+        edited += Object.keys(review.cells[blockId] || {}).length;
+      });
+      var item = document.createElement("div");
+      item.className =
+        "review-page-row" + (unit && page.id === unit.id ? " is-current" : "");
+      var main = document.createElement("div");
+      main.className = "review-page-main";
+      main.innerHTML =
+        "<strong>" +
+        escapeHtml(page.name) +
+        " " +
+        qualityBadgeHtml(quality, false) +
+        "</strong><small>" +
+        escapeHtml(
+          quality.label +
+            (quality.level !== "good" ? " · needs a look" : "") +
+            " · " +
+            (quality.chars ? quality.chars.toLocaleString() + " chars" : "no text") +
+            (quality.tables ? " · " + quality.tables + " table(s)" : "") +
+            (quality.lowBlocks ? " · " + quality.lowBlocks + " low-confidence block(s)" : "") +
+            (edited ? " · " + edited + " correction(s)" : "") +
+            (quality.warnings ? " · " + quality.warnings + " note(s)" : "")
+        ) +
+        "</small>";
+      main.addEventListener("click", function () {
+        selectUnit(page.id);
+      });
+      item.appendChild(main);
+      var actions = document.createElement("div");
+      actions.className = "review-page-actions";
+      if (quality.reviewed) {
+        var verifiedBadge = document.createElement("span");
+        verifiedBadge.className = "quality-badge quality-verified";
+        verifiedBadge.textContent = "Verified";
+        actions.appendChild(verifiedBadge);
+      } else {
+        var verify = document.createElement("button");
+        verify.className = "btn btn-sm";
+        verify.textContent = "Verify";
+        verify.title = "Mark this page as reviewed";
+        verify.addEventListener("click", function (event) {
+          event.stopPropagation();
+          saveReviewStatus(page.id, "reviewed");
+        });
+        actions.appendChild(verify);
+      }
+      var open = document.createElement("button");
+      open.className = "btn btn-sm";
+      open.textContent = "Open";
+      open.addEventListener("click", function (event) {
+        event.stopPropagation();
+        selectUnit(page.id);
+        switchSubtab("blocks");
+      });
+      actions.appendChild(open);
+      item.appendChild(actions);
+      list.appendChild(item);
+    });
+  }
+
+  function reviewNextFlagged() {
+    if (!state.currentDoc) return;
+    var next = (state.currentDoc.units || []).find(function (unit) {
+      var quality = unitQuality(unit);
+      return quality.level !== "good" && !quality.reviewed;
+    });
+    if (!next) {
+      var unverified = (state.currentDoc.units || []).find(function (unit) {
+        return unitReview(unit.id).status !== "reviewed";
+      });
+      next = unverified;
+    }
+    if (next) {
+      selectUnit(next.id);
+      switchSubtab("blocks");
+      showToast("Opened " + next.name + " for review");
+    } else {
+      showToast("Every page is verified");
+    }
+  }
+
   function fileNameForUnit(unit, extension) {
     var stem = (state.currentJobMeta && state.currentJobMeta.filename) || "document";
     stem = stem.replace(/\.[^.]+$/, "").replace(/[^\w.-]+/g, "-");
@@ -674,6 +1168,9 @@
     document.querySelectorAll(".subtab-panel").forEach(function (panel) {
       panel.classList.toggle("is-active", panel.id === "subpanel-" + subName);
     });
+    if (subName === "review" && state.currentUnit) {
+      renderReviewPanel(state.currentUnit);
+    }
   }
 
   // ==================== COMMAND PALETTE / SEARCH ====================
@@ -1690,6 +2187,12 @@
     }
     state.pendingUnitId = targetUnitId || "";
     state.pendingBlockId = targetBlockId || "";
+    if (switchingJob) {
+      state.review = { schema_version: "review1", units: {} };
+      state.reviewOriginals = {};
+      state.reviewOriginalCells = {};
+      state.previewRasters = {};
+    }
     var sel = document.getElementById("inspector-job-select");
     if (sel) sel.value = jobId;
     if (navigateToTab) {
@@ -1713,11 +2216,22 @@
           return apiGet("/v1/extractions/" + encodeURIComponent(jobId) + "/result?format=json").then(
             function (doc) {
               if (doc && typeof doc === "object" && Array.isArray(doc.units)) {
-                state.currentDoc = doc;
-                onDocumentLoaded(doc);
-              } else {
-                loadSingleUnitFromServer(jobId, "u1");
+                return apiGet(
+                  "/v1/extractions/" +
+                    encodeURIComponent(jobId) +
+                    "/result?format=review"
+                )
+                  .catch(function () {
+                    return { schema_version: "review1", units: {} };
+                  })
+                  .then(function (review) {
+                    applyReviewToDocument(doc, review);
+                    state.currentDoc = doc;
+                    updateExportLinks(jobId);
+                    onDocumentLoaded(doc);
+                  });
               }
+              loadSingleUnitFromServer(jobId, "u1");
             }
           );
         } else {
@@ -1729,11 +2243,13 @@
 
   function updateExportLinks(jobId) {
     var base = "/v1/extractions/" + encodeURIComponent(jobId);
+    var reviewed = reviewHasCorrections() ? "&review=true" : "";
     document.getElementById("dl-json").href = base + "/result?format=json";
-    document.getElementById("dl-md").href = base + "/result?format=markdown";
-    document.getElementById("dl-txt").href = base + "/result?format=text";
+    document.getElementById("dl-md").href =
+      base + "/result?format=markdown" + reviewed;
+    document.getElementById("dl-txt").href = base + "/result?format=text" + reviewed;
     document.getElementById("dl-jsonl").href = base + "/result?format=jsonl";
-    document.getElementById("dl-html").href = base + "/result?format=html";
+    document.getElementById("dl-html").href = base + "/result?format=html" + reviewed;
     document.getElementById("dl-zip").href = base + "/archive";
     var original = document.getElementById("dl-original");
     if (original) original.href = base + "/result?format=original";
@@ -1826,38 +2342,58 @@
     }
   }
 
+  function imageAssetMeta(doc, assetId) {
+    return (
+      (assetId &&
+        doc &&
+        Array.isArray(doc.assets) &&
+        doc.assets.find(function (asset) {
+          return (
+            asset.id === assetId &&
+            asset.mime &&
+            asset.mime.indexOf("image/") === 0
+          );
+        })) ||
+      null
+    );
+  }
+
   function findUnitRasterAsset(unit, doc) {
     if (!unit || !unit.blocks) return null;
     var assetId = null;
     var dpi = 150;
     for (var i = 0; i < unit.blocks.length; i++) {
       var b = unit.blocks[i];
-      if (b.attributes && b.attributes.page_image && b.attributes.page_image.asset_id) {
+      if (
+        b.attributes &&
+        b.attributes.page_image &&
+        b.attributes.page_image.asset_id &&
+        imageAssetMeta(doc, b.attributes.page_image.asset_id)
+      ) {
         assetId = b.attributes.page_image.asset_id;
         dpi = b.attributes.page_image.dpi || 150;
         break;
       }
     }
-    if (!assetId) {
+    var assetMeta = imageAssetMeta(doc, assetId);
+    if (!assetMeta) {
       for (var j = 0; j < unit.blocks.length; j++) {
         var blk = unit.blocks[j];
         if (blk.kind === "figure" && blk.asset_id) {
-          assetId = blk.asset_id;
-          break;
+          var candidate = imageAssetMeta(doc, blk.asset_id);
+          if (candidate) {
+            assetId = blk.asset_id;
+            assetMeta = candidate;
+            break;
+          }
         }
       }
     }
-    if (!assetId) return null;
-    var assetMeta =
-      doc &&
-      Array.isArray(doc.assets) &&
-      doc.assets.find(function (a) {
-        return a.id === assetId && a.mime && a.mime.indexOf("image/") === 0;
-      });
+    if (!assetId || !assetMeta) return null;
     return {
       asset_id: assetId,
-      width: assetMeta && assetMeta.width ? assetMeta.width : null,
-      height: assetMeta && assetMeta.height ? assetMeta.height : null,
+      width: assetMeta.width || null,
+      height: assetMeta.height || null,
       dpi: dpi,
     };
   }
@@ -1869,13 +2405,26 @@
     strip.innerHTML = "";
     units.forEach(function (u, i) {
       var raster = findUnitRasterAsset(u, state.currentDoc);
+      var preview = state.previewRasters[u.id];
+      var quality = unitQuality(u);
       var btn = document.createElement("button");
       btn.type = "button";
       btn.className = "page-film-thumb" + (u.id === state.currentUnitId ? " is-active" : "");
       btn.setAttribute("data-unit", u.id);
-      btn.title = u.name || "Page " + (i + 1);
+      btn.title =
+        (u.name || "Page " + (i + 1)) +
+        " · " +
+        quality.label +
+        (quality.reviewed ? " · verified" : "");
       var inner = "";
-      if (raster && state.currentJobId) {
+      if (preview) {
+        inner =
+          "<img loading='lazy' src='" +
+          escapeHtml(preview.url) +
+          "' alt='Page " +
+          (i + 1) +
+          "'>";
+      } else if (raster && state.currentJobId) {
         inner =
           "<img loading='lazy' src='/v1/extractions/" +
           encodeURIComponent(state.currentJobId) +
@@ -1888,7 +2437,12 @@
         inner = "<span class='page-film-placeholder'>" + (i + 1) + "</span>";
       }
       btn.innerHTML =
-        inner + "<span class='page-film-label'>Page " + (i + 1) + "</span>";
+        inner +
+        "<span class='page-film-label'><span class='quality-dot quality-" +
+        (quality.reviewed ? "verified" : quality.level) +
+        "'></span>Page " +
+        (i + 1) +
+        "</span>";
       btn.addEventListener("click", function () {
         selectUnit(u.id);
       });
@@ -1925,26 +2479,41 @@
     if (!unit) return;
 
     var raster = findUnitRasterAsset(unit, state.currentDoc);
-    var showRaster = document.getElementById("toggle-raster-bg").checked && Boolean(raster);
+    var preview = state.previewRasters[unit.id];
+    var showRaster =
+      document.getElementById("toggle-raster-bg").checked &&
+      Boolean(raster || preview);
     var imgEl = document.getElementById("page-raster-img");
     var stageEl = document.getElementById("page-stage");
 
-    if (showRaster && raster && state.currentJobId) {
-      state.currentPageRasterAssetId = raster.asset_id;
-      state.currentRasterDims = {
-        width: raster.width,
-        height: raster.height,
-        dpi: raster.dpi || 150,
-      };
-      imgEl.src =
-        "/v1/extractions/" +
-        encodeURIComponent(state.currentJobId) +
-        "/assets/" +
-        encodeURIComponent(raster.asset_id);
+    if (showRaster && state.currentJobId) {
+      if (preview) {
+        state.currentPageRasterAssetId = null;
+        state.currentRasterDims = {
+          width: preview.width,
+          height: preview.height,
+          dpi: preview.dpi || 150,
+        };
+        imgEl.src = preview.url;
+      } else {
+        state.currentPageRasterAssetId = raster.asset_id;
+        state.currentRasterDims = {
+          width: raster.width,
+          height: raster.height,
+          dpi: raster.dpi || 150,
+        };
+        imgEl.src =
+          "/v1/extractions/" +
+          encodeURIComponent(state.currentJobId) +
+          "/assets/" +
+          encodeURIComponent(raster.asset_id);
+      }
+      state.currentPageRasterVisible = true;
       imgEl.classList.remove("hidden");
       stageEl.classList.add("has-raster");
     } else {
       state.currentPageRasterAssetId = null;
+      state.currentPageRasterVisible = false;
       state.currentRasterDims = { width: null, height: null, dpi: 150 };
       imgEl.classList.add("hidden");
       stageEl.classList.remove("has-raster");
@@ -1982,6 +2551,25 @@
     renderTablesSubtab(unit);
     updateFilmstripActive();
     updateUnitTimingBadge(unit);
+    updateUnitQualityBadge(unit);
+    renderReviewPanel(unit);
+  }
+
+  function updateUnitQualityBadge(unit) {
+    var chip = document.getElementById("canvas-quality");
+    if (!chip) return;
+    var quality = unitQuality(unit);
+    chip.classList.remove("hidden");
+    chip.className =
+      "badge quality-badge quality-" +
+      (quality.reviewed ? "verified" : quality.level);
+    chip.textContent =
+      (quality.reviewed ? "Verified · " : "") + quality.label;
+    chip.title =
+      quality.label +
+      (quality.lowBlocks ? " · " + quality.lowBlocks + " low-confidence block(s)" : "") +
+      (quality.warnings ? " · " + quality.warnings + " note(s)" : "") +
+      (quality.errors ? " · " + quality.errors + " error(s)" : "");
   }
 
   function updateUnitTimingBadge(unit) {
@@ -2024,6 +2612,55 @@
     document.getElementById("cnt-prov-inferred").textContent = stats.inferred || 0;
   }
 
+  function renderCurrentPagePreview() {
+    if (!state.currentJobId || !state.currentUnit) return;
+    if (state.renderingUnit) return;
+    var unit = state.currentUnit;
+    if (!state.currentJobMeta || !/\.pdf$/i.test(state.currentJobMeta.filename || "")) {
+      showToast("Page previews are available for PDF jobs");
+      return;
+    }
+    state.renderingUnit = unit.id;
+    var buttons = [
+      document.getElementById("render-page-btn"),
+      document.getElementById("render-page-toolbar-btn"),
+    ];
+    buttons.forEach(function (button) {
+      if (button) button.disabled = true;
+    });
+    showToast("Rendering " + (unit.name || "page") + "…");
+    var url =
+      "/v1/extractions/" +
+      encodeURIComponent(state.currentJobId) +
+      "/units/" +
+      encodeURIComponent(unit.id) +
+      "?render=true&dpi=150";
+    var probe = new Image();
+    probe.onload = function () {
+      state.previewRasters[unit.id] = {
+        url: url,
+        width: probe.naturalWidth,
+        height: probe.naturalHeight,
+        dpi: 150,
+      };
+      state.renderingUnit = "";
+      buttons.forEach(function (button) {
+        if (button) button.disabled = false;
+      });
+      renderCurrentUnit();
+      renderPageFilmstrip();
+      showToast("Page preview rendered");
+    };
+    probe.onerror = function () {
+      state.renderingUnit = "";
+      buttons.forEach(function (button) {
+        if (button) button.disabled = false;
+      });
+      showToast("Could not render this page; check that Poppler is installed");
+    };
+    probe.src = url;
+  }
+
   function updatePageEmptyState() {
     var placeholder = document.getElementById("page-empty");
     var layer = document.getElementById("page-svg-layer");
@@ -2032,6 +2669,19 @@
     var hasRaster = !img.classList.contains("hidden");
     var hasBoxes = layer.querySelectorAll(".bbox-group").length > 0;
     placeholder.classList.toggle("hidden", hasRaster || hasBoxes);
+    var isPdf = Boolean(
+      state.currentJobMeta &&
+        /\.pdf$/i.test(state.currentJobMeta.filename || "")
+    );
+    var canRender = isPdf && !hasRaster;
+    var placeholderButton = document.getElementById("render-page-btn");
+    var toolbarButton = document.getElementById("render-page-toolbar-btn");
+    if (placeholderButton) {
+      placeholderButton.classList.toggle("hidden", !canRender || hasBoxes);
+    }
+    if (toolbarButton) {
+      toolbarButton.classList.toggle("hidden", !canRender);
+    }
   }
 
   function renderPageSvgLayer(svgHtml) {
@@ -2083,7 +2733,7 @@
     if (!state.wasmReady || !state.currentUnit) return;
     var showRaster =
       document.getElementById("toggle-raster-bg").checked &&
-      Boolean(state.currentPageRasterAssetId);
+      state.currentPageRasterVisible;
     try {
       var res = wasmCall("render_page_svg", {
         unit: state.currentUnit,
@@ -2181,8 +2831,15 @@
     blocks.forEach(function (b) {
       var method = (b.provenance && b.provenance.method) || "native";
       var friendlyMethod = FRIENDLY_METHOD[method] || method;
+      var unitReviewState = unitReview(unit.id);
+      var edited = Boolean(
+        unitReviewState.blocks && unitReviewState.blocks[b.id]
+      );
       var card = document.createElement("div");
-      card.className = "block-card" + (b.id === state.activeBlockId ? " is-active" : "");
+      card.className =
+        "block-card" +
+        (b.id === state.activeBlockId ? " is-active" : "") +
+        (edited ? " is-edited" : "");
       card.setAttribute("data-block-id", b.id);
       card.setAttribute("data-method", method);
 
@@ -2200,12 +2857,56 @@
         "</strong> · <span class='muted'>" +
         escapeHtml(b.id) +
         "</span></span>" +
-        "<span class='badge " +
-        badgeCls +
-        "'>" +
-        escapeHtml(friendlyMethod) +
-        "</span>" +
+        "<span class='block-actions'></span>" +
         "</div>";
+      var actions = card.querySelector(".block-actions");
+      if (edited) {
+        var editedBadge = document.createElement("span");
+        editedBadge.className = "badge block-edited-badge";
+        editedBadge.textContent = "Edited";
+        actions.appendChild(editedBadge);
+      }
+      var methodBadge = document.createElement("span");
+      methodBadge.className = "badge " + badgeCls;
+      methodBadge.textContent = friendlyMethod;
+      actions.appendChild(methodBadge);
+      var blockScore =
+        b.attributes && typeof b.attributes.ocr_score_uncalibrated === "number"
+          ? b.attributes.ocr_score_uncalibrated
+          : null;
+      if (blockScore !== null && blockScore < 70) {
+        var confidenceBadge = document.createElement("span");
+        confidenceBadge.className = "badge badge-warn";
+        confidenceBadge.textContent = "Low " + Math.round(blockScore) + "%";
+        confidenceBadge.title =
+          "Uncalibrated OCR score for this block; inspect it against the page";
+        actions.appendChild(confidenceBadge);
+      }
+      if (b.text && !b.table) {
+        var editBtn = document.createElement("button");
+        editBtn.className = "btn btn-sm btn-icon";
+        editBtn.type = "button";
+        editBtn.title = "Correct this text";
+        editBtn.setAttribute("aria-label", "Correct this text");
+        editBtn.innerHTML = "<svg class='icon'><use href='#i-pencil'/></svg>";
+        editBtn.addEventListener("click", function (event) {
+          event.stopPropagation();
+          startBlockEdit(card, b);
+        });
+        actions.appendChild(editBtn);
+        if (edited) {
+          var revertBtn = document.createElement("button");
+          revertBtn.className = "btn btn-sm";
+          revertBtn.type = "button";
+          revertBtn.textContent = "Revert";
+          revertBtn.title = "Restore the original extracted text";
+          revertBtn.addEventListener("click", function (event) {
+            event.stopPropagation();
+            revertBlockCorrection(b);
+          });
+          actions.appendChild(revertBtn);
+        }
+      }
 
       if (b.text) {
         var pre = document.createElement("p");
@@ -2255,6 +2956,50 @@
         }, 1800);
       }
     }
+  }
+
+  function startBlockEdit(card, block) {
+    if (!state.currentUnit || card.querySelector(".block-edit-area")) return;
+    var textEl = card.querySelector(".block-text");
+    if (!textEl) return;
+    var area = document.createElement("textarea");
+    area.className = "block-edit-area";
+    area.value = block.text;
+    area.setAttribute("aria-label", "Correct the extracted text");
+    textEl.replaceWith(area);
+    var actions = document.createElement("div");
+    actions.className = "block-edit-actions";
+    var cancel = document.createElement("button");
+    cancel.className = "btn btn-sm";
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", function (event) {
+      event.stopPropagation();
+      renderBlocksSubtab(state.currentUnit);
+    });
+    var save = document.createElement("button");
+    save.className = "btn btn-sm btn-primary";
+    save.type = "button";
+    save.textContent = "Save correction";
+    save.addEventListener("click", function (event) {
+      event.stopPropagation();
+      save.disabled = true;
+      saveBlockCorrection(block, area.value);
+    });
+    actions.appendChild(cancel);
+    actions.appendChild(save);
+    area.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        renderBlocksSubtab(state.currentUnit);
+      } else if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        save.click();
+      }
+    });
+    card.appendChild(actions);
+    area.focus();
+    area.setSelectionRange(area.value.length, area.value.length);
   }
 
   function scrollBlockIntoList(target) {
@@ -2370,17 +3115,27 @@
           rth.className = "muted";
           rth.textContent = String(rIdx + 1);
           tr.appendChild(rth);
-          for (var cIdx = 0; cIdx < table.columns; cIdx++) {
-            var cell = cellMap[rIdx][cIdx];
-            var td = document.createElement("td");
+          for (let cIdx = 0; cIdx < table.columns; cIdx++) {
+            let cell = cellMap[rIdx][cIdx];
+            let td = document.createElement("td");
             if (cell) {
+              var cellKey = b.id + ":" + rIdx + ":" + cIdx;
+              var cellEdited = state.reviewOriginalCells[cellKey] != null;
               td.textContent = cell.raw || "";
+              if (cellEdited) td.classList.add("cell-edited");
+              td.title = cellEdited
+                ? "Corrected cell · double-click to edit or restore"
+                : "Double-click to correct this cell";
               if (cell.formula) {
                 var fSpan = document.createElement("span");
                 fSpan.className = "cell-formula";
                 fSpan.textContent = "=" + cell.formula;
                 td.appendChild(fSpan);
               }
+              td.addEventListener("dblclick", function (event) {
+                event.stopPropagation();
+                startCellEdit(td, b, rIdx, cIdx, cell);
+              });
             }
             tr.appendChild(td);
           }
@@ -2437,6 +3192,76 @@
       }
       container.appendChild(wrap);
     });
+  }
+
+  function startCellEdit(td, block, row, column, cell) {
+    if (td.querySelector(".cell-edit-input")) return;
+    var originalHtml = td.innerHTML;
+    var key = block.id + ":" + row + ":" + column;
+    var input = document.createElement("input");
+    input.className = "cell-edit-input";
+    input.type = "text";
+    input.value = cell.raw || "";
+    input.setAttribute("aria-label", "Correct this table cell");
+    var actions = document.createElement("span");
+    actions.className = "cell-edit-actions";
+    var save = document.createElement("button");
+    save.className = "btn btn-sm btn-primary";
+    save.type = "button";
+    save.textContent = "Save";
+    var cancel = document.createElement("button");
+    cancel.className = "btn btn-sm";
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    var restore = null;
+    if (state.reviewOriginalCells[key] != null) {
+      restore = document.createElement("button");
+      restore.className = "btn btn-sm";
+      restore.type = "button";
+      restore.textContent = "Restore";
+      restore.title = "Restore the original cell value";
+    }
+    var done = false;
+    function cancelEdit() {
+      if (done) return;
+      done = true;
+      td.innerHTML = originalHtml;
+    }
+    save.addEventListener("click", function (event) {
+      event.stopPropagation();
+      if (done) return;
+      done = true;
+      saveCellCorrection(block, row, column, cell, input.value);
+    });
+    cancel.addEventListener("click", function (event) {
+      event.stopPropagation();
+      cancelEdit();
+    });
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        save.click();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        cancelEdit();
+      }
+    });
+    td.innerHTML = "";
+    td.appendChild(input);
+    actions.appendChild(save);
+    actions.appendChild(cancel);
+    if (restore) {
+      restore.addEventListener("click", function (event) {
+        event.stopPropagation();
+        if (done) return;
+        done = true;
+        revertCellCorrection(block, row, column);
+      });
+      actions.appendChild(restore);
+    }
+    td.appendChild(actions);
+    input.focus();
+    input.select();
   }
 
   function renderChunksSubtab(chunks) {
@@ -2532,6 +3357,10 @@
         ocrTimingMs += u.timing.ocr_ms || 0;
       }
     });
+    var flagged = units.filter(function (unit) {
+      var quality = unitQuality(unit);
+      return quality.level !== "good" && !quality.reviewed;
+    }).length;
     var summaryEl = document.getElementById("pages-text-summary");
     if (summaryEl) {
       summaryEl.textContent =
@@ -2542,6 +3371,7 @@
         (manifest.count || 0) +
         (manifest.count === 1 ? " page image saved" : " page images saved") +
         " for vision" +
+        (flagged ? " · " + flagged + " need review" : " · no flagged pages") +
         (totalTimingMs
           ? " · " +
             (totalTimingMs / 1000).toFixed(1) +
@@ -2575,6 +3405,8 @@
       var statusBadge = hasText
         ? "<span class='badge badge-success'>Text extracted</span>"
         : "<span class='badge badge-warn'>No text extracted</span>";
+      var quality = unit ? unitQuality(unit) : null;
+      var qualityHtml = quality ? qualityBadgeHtml(quality, true) : "";
       var timing = unit && unit.timing;
       var timingNote = timing
         ? " · " +
@@ -2604,11 +3436,14 @@
         p.page +
         "'>" +
         "<div class='page-card-body'>" +
-        "<div style='display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px'>" +
+        "<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:4px'>" +
         "<strong>" +
         escapeHtml(p.unit_name || "Page " + p.page) +
         "</strong>" +
+        "<span style='display:flex;gap:4px;align-items:center;flex-wrap:wrap'>" +
         statusBadge +
+        qualityHtml +
+        "</span>" +
         "</div>" +
         "<div class='muted' style='font-size:12px'>" +
         (p.width ? p.width + " × " + p.height + " px" : "") +
@@ -2894,6 +3729,19 @@
         "text/plain;charset=utf-8"
       );
     });
+    ["render-page-btn", "render-page-toolbar-btn"].forEach(function (id) {
+      var button = document.getElementById(id);
+      if (button) button.addEventListener("click", renderCurrentPagePreview);
+    });
+    document.getElementById("review-next-btn").addEventListener("click", reviewNextFlagged);
+    var markReviewed = document.getElementById("mark-page-reviewed-btn");
+    if (markReviewed) {
+      markReviewed.addEventListener("click", function () {
+        if (!state.currentUnit || state.reviewBusy) return;
+        var reviewed = unitReview(state.currentUnit.id).status === "reviewed";
+        saveReviewStatus(state.currentUnit.id, reviewed ? "clear" : "reviewed");
+      });
+    }
 
     [
       "opt-page-images",

@@ -24,7 +24,8 @@ DOC_XBERG=/path/to/xberg target/debug/doc-extractor extract fixtures/digital.pdf
 
 # HTTP service:
 target/debug/doc-extractor serve --bind 127.0.0.1:8787 --data-dir data/service
-# Workbench: ⌘K search, deep-linkable pages, live progress/cancel/retry, table CSV export.
+# Workbench: ⌘K search, deep-linkable pages, live progress/cancel/retry, table CSV export,
+# page quality/review, inline corrections and on-demand PDF page previews.
 open http://127.0.0.1:8787/
 # Interactive API console (Swagger UI; assets are compiled into the binary, no CDN):
 open http://127.0.0.1:8787/docs
@@ -43,6 +44,12 @@ python3 scripts/preview.py JOB_ID                 # also: --unit u1, --markdown,
 curl http://127.0.0.1:8787/v1/extractions?state=completed
 curl 'http://127.0.0.1:8787/v1/extractions?q=invoice%20total'   # block-level matches
 curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=original
+curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=review
+# Correct one block or table cell, then export with the review overlay:
+curl -X PATCH http://127.0.0.1:8787/v1/extractions/JOB_ID \
+  -H 'content-type: application/json' \
+  -d '{"unit_id":"u1","block_id":"u1-b2","text":"corrected text"}'
+curl 'http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=markdown&review=true'
 curl http://127.0.0.1:8787/v1/stats
 curl -N http://127.0.0.1:8787/v1/extractions/JOB_ID/events
 curl -O -J http://127.0.0.1:8787/v1/extractions/JOB_ID/archive
@@ -60,7 +67,7 @@ python3 scripts/install-ocr-languages.sh eng hin
 python3 scripts/ocr_accuracy.py
 ```
 
-The result directory contains `result.json`, `result.md`, `units/` and content-addressed `assets/`. With `page_images` enabled it also contains `pages/` (one raster per kept unit) and `pages/manifest.json`, so a later vision/LLM pass can consume the images without parsing the full result; `failed` keeps units whose text is empty, sparse or errored, while `all` keeps every PDF page. Keep JSON for provenance and fidelity; Markdown is a convenience export. Word uses logical sections; spreadsheets use sheets; presentations use source-ordered slides; PDF uses actual pages. PDFs are extracted in 100-page batches with per-page checkpoints (batches run in parallel by default; restart reuses completed pages); CSV/TSV inputs are split into bounded chunk units and support a compact cell form (`--compact-tables`). See [deployment](docs/DEPLOYMENT.md) for large-input sizing.
+The result directory contains `result.json`, `result.md`, `units/` and content-addressed `assets/`. With `page_images` enabled it also contains `pages/` (one raster per kept unit) and `pages/manifest.json`, so a later vision/LLM pass can consume the images without parsing the full result; `failed` keeps units whose text is empty, sparse or errored, while `all` keeps every PDF page. Reviewer edits and page verification are stored separately in `review.json`, so the canonical result remains unchanged. Keep JSON for provenance and fidelity; Markdown is a convenience export. Word uses logical sections; spreadsheets use sheets; presentations use source-ordered slides; PDF uses actual pages. PDFs are extracted in 100-page batches with per-page checkpoints (batches run in parallel by default; restart reuses completed pages); CSV/TSV inputs are split into bounded chunk units and support a compact cell form (`--compact-tables`). See [deployment](docs/DEPLOYMENT.md) for large-input sizing.
 
 See [validation evidence](docs/VALIDATION.md), [accuracy report](docs/ACCURACY.md), [concurrent 20-PDF performance report](docs/CONCURRENCY.md), [Hindi + English OCR stress report](docs/hindi-english-ocr.md), [final comprehensive OCR report](docs/final-comprehensive-ocr.md), [cookbook](docs/COOKBOOK.md), [Python client](clients/python/README.md), [capabilities](docs/CAPABILITIES.md), [architecture](docs/ARCHITECTURE.md), [pipeline and concurrency](docs/PIPELINE.md), [research and dependency decisions](docs/RESEARCH.md), [phase acceptance](docs/PHASES.md), and [deployment](docs/DEPLOYMENT.md). These separate implemented behavior from unrun real-world acceptance gates.
 
