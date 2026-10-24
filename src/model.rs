@@ -770,6 +770,10 @@ pub fn unit_chunks(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Progress {
     pub units: usize,
+    /// Total units expected for this job, when known (PDF page selection or section count).
+    /// Older progress files omit it; readers treat zero as unknown.
+    #[serde(default)]
+    pub total: usize,
     pub result_status: Option<String>,
     pub warnings: Vec<String>,
     pub errors: Vec<Failure>,

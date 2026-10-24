@@ -133,6 +133,12 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   listing=json.loads(request('/v1/extractions?limit=5')[1])
   check('job listing',listing['total']>=1 and any(x['id']==jsonljob for x in listing['jobs']))
   check('job listing state filter',all(x['state']=='completed' for x in json.loads(request('/v1/extractions?state=completed&limit=200')[1])['jobs']))
+  listed=next(x for x in listing['jobs'] if x['id']==jsonljob)
+  check('job exposes its options and total pages',listed['options']['result_format']=='jsonl' and listed['total']==listed['progress'] and listed['total']>0)
+  search=json.loads(request('/v1/extractions?q=0012&limit=20')[1])
+  check('search finds extracted table text',search['total']>=1 and any(m['job_id']==jsonljob and m['kind']=='table' and m['snippet'] for m in search['matches']))
+  original=request(f'/v1/extractions/{jsonljob}/result?format=original')[1]
+  check('original upload is downloadable',original==(ROOT/'fixtures'/'quoted.csv').read_bytes())
   st=json.loads(request('/v1/stats')[1])
   check('stats endpoint',st['jobs'].get('completed',0)>=1 and st['workers']['slots']==1 and st['disk_bytes']>0)
   sliced=json.loads(request(f'/v1/extractions/{jsonljob}/units/u1?from=1&count=1')[1])
@@ -140,9 +146,9 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   events=request(f'/v1/extractions/{jsonljob}/events')[1]
   check('sse job events',b'data:' in events and b'"completed"' in events)
   arch=request(f'/v1/extractions/{jsonljob}/archive')[1]
-  check('archive zip',arch[:2]==b'PK')
+  check('archive zip',arch[:2]==b'PK' and b'original/quoted.csv' in arch)
   view_code,view_page=request(f'/view/{jsonljob}')
-  check('viewer page',view_code==200 and b'Doc Extractor' in view_page)
+  check('viewer page',view_code==200 and b'Doc Extractor' in view_page and b'search-overlay' in view_page and b'selected-files' in view_page)
   wasm_code,wasm_bytes=request('/wasm/doc_extractor.wasm')
   js_code,js_bytes=request('/assets/web/app.js')
   css_code,css_bytes=request('/assets/web/app.css')

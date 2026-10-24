@@ -13,6 +13,7 @@
     provFilter: "all",
     activeBlockId: "",
     selectedFiles: [],
+    uploading: false,
     jobs: [],
     currentJobId: "",
     currentJobMeta: null,
@@ -24,7 +25,24 @@
     currentPageRasterAssetId: null,
     currentRasterDims: { width: null, height: null, dpi: 150 },
     pgResult: null,
+    pendingUnitId: "",
+    pendingBlockId: "",
+    scrollToBlockId: "",
+    applyingRoute: false,
+    searchTimer: null,
+    searchAbort: null,
+    searchResults: [],
+    searchSelection: 0,
+    jobStreams: {},
+    notified: {},
+    deleteTimers: {},
+    pendingDeletes: {},
+    lastJobStates: {},
+    jobsSignature: "",
+    notify: localStorage.getItem("docsmith-notify") === "1",
   };
+
+  var TERMINAL_STATES = { completed: true, failed: true, cancelled: true };
 
   var TAB_HEADERS = {
     studio: {
@@ -391,7 +409,208 @@
     return (bytes / (1024 * 1024)).toFixed(2) + " MB";
   }
 
-  function switchTab(tabName) {
+  function formatDuration(seconds) {
+    if (!isFinite(seconds) || seconds <= 0) return "";
+    if (seconds < 60) return Math.ceil(seconds) + "s";
+    var minutes = Math.floor(seconds / 60);
+    var rest = Math.round(seconds % 60);
+    return minutes + "m " + rest + "s";
+  }
+
+  function isTerminal(state) {
+    return Boolean(TERMINAL_STATES[state]);
+  }
+
+  function copyText(text, message) {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(
+        function () {
+          showToast(message || "Copied to clipboard");
+        },
+        function () {
+          fallbackCopy(text, message);
+        }
+      );
+    } else {
+      fallbackCopy(text, message);
+    }
+  }
+
+  function fallbackCopy(text, message) {
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    try {
+      document.execCommand("copy");
+      showToast(message || "Copied to clipboard");
+    } catch (_) {
+      showToast("Could not copy; select the text manually");
+    }
+    document.body.removeChild(area);
+  }
+
+  function downloadText(name, text, mime) {
+    var blob = new Blob([text], { type: mime || "text/plain;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1500);
+  }
+
+  function showToast(message, actionLabel, action) {
+    var region = document.getElementById("toast-region");
+    if (!region) return null;
+    var toast = document.createElement("div");
+    toast.className = "toast";
+    var text = document.createElement("span");
+    text.className = "toast-message";
+    text.textContent = message;
+    toast.appendChild(text);
+    if (actionLabel && action) {
+      var actionBtn = document.createElement("button");
+      actionBtn.className = "toast-action";
+      actionBtn.textContent = actionLabel;
+      actionBtn.addEventListener("click", function () {
+        action();
+        dismiss();
+      });
+      toast.appendChild(actionBtn);
+    }
+    var close = document.createElement("button");
+    close.className = "toast-close";
+    close.setAttribute("aria-label", "Dismiss notification");
+    close.innerHTML = "<svg class='icon'><use href='#i-x'/></svg>";
+    close.addEventListener("click", dismiss);
+    toast.appendChild(close);
+    region.appendChild(toast);
+    var timer = setTimeout(dismiss, actionLabel ? 7500 : 4200);
+    function dismiss() {
+      clearTimeout(timer);
+      if (toast.parentNode) toast.parentNode.removeChild(toast);
+    }
+    return toast;
+  }
+
+  function csvEscape(value) {
+    var text = String(value == null ? "" : value);
+    if (/[",\n\r]/.test(text)) {
+      return '"' + text.replace(/"/g, '""') + '"';
+    }
+    return text;
+  }
+
+  function tableGrid(block) {
+    var table = block.table;
+    if (!table) return [];
+    var byRow = {};
+    (table.cells || []).forEach(function (cell) {
+      if (!byRow[cell.row]) byRow[cell.row] = {};
+      byRow[cell.row][cell.column] = cell.raw || "";
+    });
+    var rows = Object.keys(byRow)
+      .map(Number)
+      .sort(function (a, b) {
+        return a - b;
+      });
+    var grid = [];
+    var previous = -1;
+    rows.forEach(function (row) {
+      // Preserve empty rows in the CSV instead of silently closing the gap.
+      for (var missing = previous + 1; missing < row; missing++) {
+        grid.push([]);
+      }
+      var line = [];
+      for (var col = 0; col < table.columns; col++) {
+        line.push(byRow[row][col] != null ? byRow[row][col] : "");
+      }
+      grid.push(line);
+      previous = row;
+    });
+    return grid;
+  }
+
+  function tableCsv(block) {
+    return tableGrid(block)
+      .map(function (row) {
+        return row.map(csvEscape).join(",");
+      })
+      .join("\r\n");
+  }
+
+  function unitPlainText(unit) {
+    if (!unit) return "";
+    var parts = [];
+    (unit.blocks || []).forEach(function (block) {
+      if (block.table) {
+        var grid = tableGrid(block);
+        if (grid.length) {
+          parts.push(
+            grid
+              .map(function (row) {
+                return row.join("\t");
+              })
+              .join("\n")
+          );
+        }
+      } else if (block.text) {
+        parts.push(block.text);
+      }
+    });
+    return parts.join("\n\n").trim();
+  }
+
+  function fileNameForUnit(unit, extension) {
+    var stem = (state.currentJobMeta && state.currentJobMeta.filename) || "document";
+    stem = stem.replace(/\.[^.]+$/, "").replace(/[^\w.-]+/g, "-");
+    var page = (unit && (unit.name || unit.id)) || "page";
+    page = page.toLowerCase().replace(/[^\w.-]+/g, "-");
+    return stem + "-" + page + "." + extension;
+  }
+
+  function tabPath(tabName) {
+    if (tabName === "inspector") {
+      return state.currentJobId
+        ? "/reader/" + encodeURIComponent(state.currentJobId) + "/" + encodeURIComponent(state.currentUnitId || "u1")
+        : "/reader";
+    }
+    if (tabName === "pages") {
+      return state.currentJobId
+        ? "/pages/" + encodeURIComponent(state.currentJobId)
+        : "/pages";
+    }
+    if (tabName === "playground") return "/try";
+    if (tabName === "system") return "/status";
+    return "/documents";
+  }
+
+  function setRoute(path, replace) {
+    if (state.applyingRoute) return;
+    var target = "#" + path;
+    if (location.hash === target) return;
+    try {
+      if (replace) {
+        history.replaceState(null, "", target);
+      } else {
+        history.pushState(null, "", target);
+      }
+    } catch (_) {
+      location.hash = target;
+    }
+  }
+
+  function switchTab(tabName, options) {
+    options = options || {};
+    var changed = state.activeTab !== tabName;
     state.activeTab = tabName;
     document.querySelectorAll(".nav-item").forEach(function (btn) {
       var active = btn.getAttribute("data-tab") === tabName;
@@ -409,6 +628,42 @@
     if (tabName === "playground" && !state.pgResult && state.wasmReady) {
       runPlayground();
     }
+    if (!options.skipRoute) {
+      setRoute(tabPath(tabName), options.replace === true);
+    }
+    if (changed && !options.keepScroll) {
+      window.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }
+
+  function applyRoute() {
+    var hash = location.hash || "";
+    if (!hash) return;
+    var parts = hash.replace(/^#\/?/, "").split("/");
+    var head = parts[0] || "documents";
+    state.applyingRoute = true;
+    try {
+      if (head === "reader") {
+        switchTab("inspector", { skipRoute: true });
+        if (parts[1]) {
+          state.pendingUnitId = parts[2] || "";
+          selectJobForInspection(decodeURIComponent(parts[1]), false, parts[2] || "");
+        }
+      } else if (head === "pages") {
+        switchTab("pages", { skipRoute: true });
+        if (parts[1]) {
+          selectJobForInspection(decodeURIComponent(parts[1]), false);
+        }
+      } else if (head === "try") {
+        switchTab("playground", { skipRoute: true });
+      } else if (head === "status") {
+        switchTab("system", { skipRoute: true });
+      } else {
+        switchTab("studio", { skipRoute: true });
+      }
+    } finally {
+      state.applyingRoute = false;
+    }
   }
 
   function switchSubtab(subName) {
@@ -419,6 +674,252 @@
     document.querySelectorAll(".subtab-panel").forEach(function (panel) {
       panel.classList.toggle("is-active", panel.id === "subpanel-" + subName);
     });
+  }
+
+  // ==================== COMMAND PALETTE / SEARCH ====================
+  var searchReturnFocus = null;
+
+  function openSearch() {
+    var overlay = document.getElementById("search-overlay");
+    if (!overlay) return;
+    searchReturnFocus = document.activeElement;
+    overlay.classList.remove("hidden");
+    var input = document.getElementById("search-input");
+    input.value = "";
+    state.searchResults = [];
+    state.searchSelection = 0;
+    runSearch("");
+    setTimeout(function () {
+      input.focus();
+    }, 20);
+  }
+
+  function closeSearch() {
+    var overlay = document.getElementById("search-overlay");
+    if (!overlay || overlay.classList.contains("hidden")) return;
+    overlay.classList.add("hidden");
+    if (state.searchAbort) {
+      state.searchAbort.abort();
+      state.searchAbort = null;
+    }
+    if (searchReturnFocus && searchReturnFocus.focus) {
+      try {
+        searchReturnFocus.focus();
+      } catch (_) {}
+    }
+  }
+
+  function scheduleSearch(query) {
+    clearTimeout(state.searchTimer);
+    state.searchTimer = setTimeout(function () {
+      runSearch(query);
+    }, 160);
+  }
+
+  function renderRecentSearchResults() {
+    state.searchResults = state.jobs.slice(0, 8).map(function (job) {
+      return {
+        type: "doc",
+        job_id: job.id,
+        filename: job.filename,
+        state: job.state,
+        snippet:
+          job.total > 0
+            ? job.progress + " of " + job.total + " pages or sections"
+            : job.state === "completed"
+            ? "No pages or sections extracted"
+            : job.state,
+      };
+    });
+    state.searchSelection = 0;
+    renderSearchResults(
+      "No documents yet. Add files in Documents, then search their extracted text here."
+    );
+  }
+
+  function runSearch(query) {
+    var trimmed = (query || "").trim();
+    if (state.searchAbort) state.searchAbort.abort();
+    if (!trimmed) {
+      if (state.jobs.length) {
+        renderRecentSearchResults();
+      } else {
+        apiGet("/v1/extractions?limit=8")
+          .then(function (data) {
+            if ((document.getElementById("search-input").value || "").trim()) return;
+            state.jobs = data.jobs || [];
+            renderRecentSearchResults();
+          })
+          .catch(function () {
+            if ((document.getElementById("search-input").value || "").trim()) return;
+            renderRecentSearchResults();
+          });
+      }
+      return;
+    }
+    if (trimmed.length < 2) {
+      state.searchResults = [];
+      state.searchSelection = 0;
+      renderSearchResults("Type at least two characters, or press Enter to open the first document.");
+      return;
+    }
+    var controller = new AbortController();
+    state.searchAbort = controller;
+    var results = document.getElementById("search-results");
+    if (results) {
+      results.innerHTML = "<div class='palette-empty'>Searching extracted text…</div>";
+    }
+    fetch(
+      "/v1/extractions?limit=30&q=" + encodeURIComponent(trimmed),
+      { headers: authHeaders(), signal: controller.signal }
+    )
+      .then(function (response) {
+        if (!response.ok) throw new Error("search failed");
+        return response.json();
+      })
+      .then(function (data) {
+        if (controller.signal.aborted) return;
+        var items = [];
+        var lowered = trimmed.toLowerCase();
+        (data.jobs || []).forEach(function (job) {
+          if ((job.filename || "").toLowerCase().indexOf(lowered) !== -1) {
+            items.push({
+              type: "doc",
+              job_id: job.id,
+              filename: job.filename,
+              state: job.state,
+              snippet:
+                job.total > 0
+                  ? job.progress + " of " + job.total + " pages or sections"
+                  : job.state === "completed"
+                  ? "No pages or sections extracted"
+                  : job.state,
+            });
+          }
+        });
+        (data.matches || []).forEach(function (match) {
+          items.push({
+            type: "match",
+            job_id: match.job_id,
+            filename: match.filename,
+            unit_id: match.unit_id,
+            unit_name: match.unit_name,
+            page: match.page,
+            block_id: match.block_id,
+            kind: match.kind,
+            snippet: match.snippet,
+          });
+        });
+        state.searchResults = items;
+        state.searchSelection = 0;
+        renderSearchResults();
+      })
+      .catch(function (error) {
+        if (error && error.name === "AbortError") return;
+        if (results) {
+          results.innerHTML =
+            "<div class='palette-empty'>Search is unavailable right now. Try again.</div>";
+        }
+      });
+  }
+
+  function renderSearchResults(emptyMessage) {
+    var box = document.getElementById("search-results");
+    if (!box) return;
+    box.innerHTML = "";
+    if (!state.searchResults.length) {
+      box.innerHTML =
+        "<div class='palette-empty'>" +
+        escapeHtml(emptyMessage || "No matches yet. Try a filename, a phrase or a table value.") +
+        "</div>";
+      return;
+    }
+    var currentGroup = "";
+    state.searchResults.forEach(function (item, index) {
+      var group = item.type === "match" ? "In extracted text" : "Documents";
+      if (group !== currentGroup) {
+        currentGroup = group;
+        var label = document.createElement("div");
+        label.className = "palette-group-label";
+        label.textContent = group;
+        box.appendChild(label);
+      }
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className =
+        "palette-result" + (index === state.searchSelection ? " is-selected" : "");
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", index === state.searchSelection ? "true" : "false");
+      button.setAttribute("data-index", String(index));
+      var icon = item.type === "match"
+        ? item.kind === "table"
+          ? "i-table"
+          : item.block_id
+          ? "i-book"
+          : "i-file"
+        : "i-file";
+      var title = item.type === "match"
+        ? escapeHtml(item.filename) +
+          " <span>" +
+          escapeHtml(item.unit_name || "Page " + item.page) +
+          "</span>"
+        : escapeHtml(item.filename) + " <span>" + escapeHtml(item.state || "") + "</span>";
+      var snippet = item.type === "match" && item.snippet ? item.snippet : item.snippet || "";
+      button.innerHTML =
+        "<span class='palette-result-icon'><svg class='icon'><use href='#" +
+        icon +
+        "'/></svg></span>" +
+        "<span class='palette-result-copy'><span class='palette-result-title'>" +
+        title +
+        "</span><span class='palette-result-snippet'>" +
+        escapeHtml(snippet) +
+        "</span></span>";
+      button.addEventListener("mouseenter", function () {
+        state.searchSelection = index;
+        highlightSearchSelection();
+      });
+      button.addEventListener("click", function () {
+        openSearchResult(item);
+      });
+      box.appendChild(button);
+    });
+    highlightSearchSelection();
+  }
+
+  function highlightSearchSelection() {
+    var items = document.querySelectorAll("#search-results .palette-result");
+    items.forEach(function (el, index) {
+      var selected = index === state.searchSelection;
+      el.classList.toggle("is-selected", selected);
+      el.setAttribute("aria-selected", selected ? "true" : "false");
+      if (selected) el.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  function moveSearchSelection(delta) {
+    if (!state.searchResults.length) return;
+    state.searchSelection = Math.max(
+      0,
+      Math.min(state.searchResults.length - 1, state.searchSelection + delta)
+    );
+    highlightSearchSelection();
+  }
+
+  function openSearchResult(item) {
+    closeSearch();
+    if (!item) return;
+    window.scrollTo({ top: 0, behavior: "auto" });
+    state.provFilter = "all";
+    document.querySelectorAll(".filter-chip").forEach(function (chip) {
+      chip.classList.toggle("is-active", chip.getAttribute("data-prov") === "all");
+    });
+    switchSubtab(item.type === "match" && item.kind === "table" ? "tables" : "blocks");
+    if (item.type === "match") {
+      state.pendingBlockId = item.block_id || "";
+      selectJobForInspection(item.job_id, true, item.unit_id, item.block_id || "");
+    } else {
+      selectJobForInspection(item.job_id, true, "", "");
+    }
   }
 
   // ==================== TELEMETRY & CAPABILITIES ====================
@@ -551,48 +1052,213 @@
     } catch (_) {}
   }
 
-  function uploadFiles(files) {
-    if (!files || !files.length) {
-      document.getElementById("upload-status").textContent = "Please choose at least one file first.";
+  function stageFiles(files) {
+    var incoming = Array.from(files || []);
+    if (!incoming.length) return;
+    var existing = {};
+    state.selectedFiles.forEach(function (file) {
+      existing[file.name + ":" + file.size + ":" + file.lastModified] = true;
+    });
+    var added = 0;
+    incoming.forEach(function (file) {
+      var key = file.name + ":" + file.size + ":" + file.lastModified;
+      if (existing[key]) return;
+      if (state.selectedFiles.length >= 32) return;
+      state.selectedFiles.push(file);
+      existing[key] = true;
+      added += 1;
+    });
+    if (!added && incoming.length) {
+      showToast("Those files are already selected");
+    } else if (state.selectedFiles.length >= 32 && incoming.length > added) {
+      showToast("The upload limit is 32 files per batch");
+    }
+    renderSelectedFiles();
+    validateStudioOptions();
+  }
+
+  function renderSelectedFiles() {
+    var box = document.getElementById("selected-files");
+    var title = document.getElementById("dropzone-title");
+    var sub = document.getElementById("dropzone-sub");
+    if (!box || !title || !sub) return;
+    box.innerHTML = "";
+    if (!state.selectedFiles.length) {
+      title.textContent = "Drop files here, or choose from your computer";
+      sub.textContent = "PDF · Word · Excel · PowerPoint · CSV · Images · HTML · Markdown · Diagrams";
       return;
     }
-    var statusEl = document.getElementById("upload-status");
-    statusEl.textContent = "Uploading " + files.length + " file(s)…";
+    var total = 0;
+    state.selectedFiles.forEach(function (file, index) {
+      total += file.size || 0;
+      var chip = document.createElement("span");
+      chip.className = "file-chip";
+      var name = document.createElement("span");
+      name.className = "file-name";
+      name.textContent = file.name;
+      name.title = file.name;
+      var size = document.createElement("span");
+      size.className = "file-size";
+      size.textContent = formatBytes(file.size || 0);
+      var remove = document.createElement("button");
+      remove.className = "file-remove";
+      remove.type = "button";
+      remove.setAttribute("aria-label", "Remove " + file.name);
+      remove.innerHTML = "<svg class='icon'><use href='#i-x'/></svg>";
+      remove.addEventListener("click", function () {
+        state.selectedFiles.splice(index, 1);
+        renderSelectedFiles();
+      });
+      chip.appendChild(name);
+      chip.appendChild(size);
+      chip.appendChild(remove);
+      box.appendChild(chip);
+    });
+    title.textContent =
+      state.selectedFiles.length +
+      (state.selectedFiles.length === 1 ? " file ready" : " files ready");
+    sub.textContent =
+      formatBytes(total) +
+      " total · review the list below, then choose Extract selected files. Add more files at any time.";
+  }
+
+  function sendExtraction(form, label) {
+    return new Promise(function (resolve, reject) {
+      if (state.uploading) {
+        reject(new Error("An upload is already in progress"));
+        return;
+      }
+      state.uploading = true;
+      var statusEl = document.getElementById("upload-status");
+      var submit = document.getElementById("submit-upload-btn");
+      var progress = document.getElementById("upload-progress");
+      var bar = document.getElementById("upload-progress-bar");
+      if (submit) submit.disabled = true;
+      if (progress) {
+        progress.classList.remove("hidden");
+        progress.setAttribute("aria-valuenow", "0");
+      }
+      if (bar) bar.style.width = "0%";
+      statusEl.textContent = label + "…";
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", "/v1/extractions");
+      var headers = authHeaders();
+      Object.keys(headers).forEach(function (key) {
+        xhr.setRequestHeader(key, headers[key]);
+      });
+      xhr.upload.onprogress = function (event) {
+        if (!event.lengthComputable) return;
+        var pct = Math.round((event.loaded / event.total) * 100);
+        if (bar) bar.style.width = pct + "%";
+        if (progress) progress.setAttribute("aria-valuenow", String(pct));
+        statusEl.textContent = "Uploading… " + pct + "%";
+      };
+      xhr.onload = function () {
+        var body = null;
+        try {
+          body = JSON.parse(xhr.responseText || "{}");
+        } catch (_) {
+          body = {};
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          if (bar) bar.style.width = "100%";
+          resolve(body);
+        } else {
+          reject(
+            new Error(
+              (body.error && body.error.message) ||
+                (body.error && body.error.code) ||
+                "Upload failed (" + xhr.status + ")"
+            )
+          );
+        }
+      };
+      xhr.onerror = function () {
+        reject(new Error("The service could not be reached"));
+      };
+      xhr.onloadend = function () {
+        state.uploading = false;
+        if (submit) submit.disabled = false;
+        setTimeout(function () {
+          if (progress) progress.classList.add("hidden");
+          if (bar) bar.style.width = "0%";
+        }, 700);
+      };
+      xhr.send(form);
+    });
+  }
+
+  function uploadFiles(files, clearSelection) {
+    var chosen = Array.from(files || state.selectedFiles || []);
+    if (!chosen.length) {
+      document.getElementById("upload-status").textContent =
+        "Choose at least one file, or drop them above.";
+      showToast("Choose at least one file first");
+      return;
+    }
+    if (chosen.length > 32) {
+      chosen = chosen.slice(0, 32);
+      showToast("Uploading the first 32 files");
+    }
     var fd = new FormData();
     var opts = collectStudioOptions();
     fd.append("options", JSON.stringify(opts));
-    for (var i = 0; i < files.length; i++) {
-      fd.append("file", files[i], files[i].name);
-    }
-    fetch("/v1/extractions", {
-      method: "POST",
-      headers: authHeaders(),
-      body: fd,
-    })
-      .then(function (r) {
-        return r.json().then(function (body) {
-          if (!r.ok) {
-            throw new Error((body.error && body.error.message) || JSON.stringify(body));
-          }
-          return body;
-        });
-      })
+    chosen.forEach(function (file) {
+      fd.append("file", file, file.name);
+    });
+    var label =
+      chosen.length === 1
+        ? "Reading " + chosen[0].name
+        : "Reading " + chosen.length + " documents";
+    sendExtraction(fd, label)
       .then(function (resp) {
-        var ids = resp.jobs
-          ? resp.jobs.map(function (j) { return j.id; })
-          : resp.id
-          ? [resp.id]
-          : [];
-        statusEl.textContent = "Started " + ids.length + " file(s).";
+        var count = resp.jobs ? resp.jobs.length : resp.id ? 1 : 0;
+        var cached = Boolean(
+          resp.cached ||
+            (resp.jobs &&
+              resp.jobs.some(function (job) {
+                return job.cached;
+              }))
+        );
+        var message =
+          count +
+          (count === 1 ? " document " : " documents ") +
+          (cached ? "reused from a previous identical extraction" : "queued");
+        document.getElementById("upload-status").textContent = message;
+        showToast(message);
+        if (clearSelection !== false) {
+          state.selectedFiles = [];
+          renderSelectedFiles();
+          var input = document.getElementById("file-input");
+          if (input) input.value = "";
+        }
         refreshQueue();
         refreshTelemetry();
-        if (ids.length > 0) {
-          selectJobForInspection(ids[0], false);
-        }
+        var firstId = resp.jobs && resp.jobs[0] ? resp.jobs[0].id : resp.id;
+        if (firstId) selectJobForInspection(firstId, false);
       })
       .catch(function (err) {
-        statusEl.textContent = "Could not upload: " + String(err.message || err);
+        document.getElementById("upload-status").textContent =
+          "Could not upload: " + String(err.message || err);
+        showToast("Upload failed: " + String(err.message || err));
       });
+  }
+
+  function requestNotifyPermission() {
+    var box = document.getElementById("opt-notify");
+    if (!box) return;
+    localStorage.setItem("docsmith-notify", box.checked ? "1" : "0");
+    state.notify = box.checked;
+    if (box.checked && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().then(function (permission) {
+        if (permission !== "granted") {
+          box.checked = false;
+          state.notify = false;
+          localStorage.setItem("docsmith-notify", "0");
+          showToast("Desktop notifications were not enabled");
+        }
+      });
+    }
   }
 
   function runInstantDemoBatch() {
@@ -610,7 +1276,7 @@
       new File([dbmlBlob], "sample-database.dbml", { type: "text/plain" }),
       new File([mdBlob], "sample-summary.md", { type: "text/markdown" })
     ];
-    uploadFiles(files);
+    uploadFiles(files, false);
   }
 
   // ==================== QUEUE LISTING ====================
@@ -619,11 +1285,132 @@
     var url = "/v1/extractions?limit=50" + (filter ? "&state=" + encodeURIComponent(filter) : "");
     apiGet(url)
       .then(function (data) {
-        state.jobs = data.jobs || [];
-        renderJobsTable();
-        populateJobSelector();
+        var previous = state.lastJobStates;
+        state.jobs = (data.jobs || []).filter(function (job) {
+          return !state.pendingDeletes[job.id];
+        });
+        state.jobs.forEach(function (job) {
+          var before = previous[job.id];
+          if (before && !isTerminal(before) && isTerminal(job.state)) {
+            maybeNotify(job);
+          }
+          previous[job.id] = job.state;
+        });
+        var signature = JSON.stringify(
+          state.jobs.map(function (job) {
+            return [
+              job.id,
+              job.state,
+              job.progress,
+              job.total,
+              job.updated_at,
+              job.filename,
+              job.unit_failures ? job.unit_failures.length : 0,
+              job.options,
+            ];
+          })
+        );
+        if (signature !== state.jobsSignature) {
+          state.jobsSignature = signature;
+          renderJobsTable();
+          populateJobSelector();
+        }
+        syncJobStreams();
       })
       .catch(function () {});
+  }
+
+  function syncJobStreams() {
+    if (state.token || typeof EventSource === "undefined") return;
+    var active = state.jobs
+      .filter(function (job) {
+        return job.state === "queued" || job.state === "running";
+      })
+      .slice(0, 6);
+    var activeIds = {};
+    active.forEach(function (job) {
+      activeIds[job.id] = true;
+      if (state.jobStreams[job.id]) return;
+      var stream = new EventSource(
+        "/v1/extractions/" + encodeURIComponent(job.id) + "/events"
+      );
+      state.jobStreams[job.id] = stream;
+      stream.addEventListener("job", function (event) {
+        var updated;
+        try {
+          updated = JSON.parse(event.data);
+        } catch (_) {
+          return;
+        }
+        var index = state.jobs.findIndex(function (candidate) {
+          return candidate.id === updated.id;
+        });
+        if (index >= 0) {
+          var before = state.jobs[index].state;
+          state.jobs[index] = updated;
+          if (before !== updated.state && isTerminal(updated.state)) {
+            maybeNotify(updated);
+          }
+          state.lastJobStates[updated.id] = updated.state;
+        }
+        renderJobsTable();
+        if (isTerminal(updated.state)) {
+          stream.close();
+          delete state.jobStreams[updated.id];
+          setTimeout(refreshQueue, 250);
+        }
+      });
+      stream.onerror = function () {
+        stream.close();
+        delete state.jobStreams[job.id];
+      };
+    });
+    Object.keys(state.jobStreams).forEach(function (id) {
+      if (!activeIds[id]) {
+        state.jobStreams[id].close();
+        delete state.jobStreams[id];
+      }
+    });
+  }
+
+  function maybeNotify(job) {
+    if (!state.notify || state.notified[job.id] || !document.hidden) return;
+    state.notified[job.id] = true;
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    var title = job.state === "completed" ? "Extraction finished" : "Extraction stopped";
+    var body = job.filename || "Document";
+    try {
+      new Notification(title, { body: body, tag: "doc-extractor-" + job.id });
+    } catch (_) {}
+  }
+
+  function jobProgress(job) {
+    var total = job.total || 0;
+    var done = job.progress || 0;
+    var pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    return { done: done, total: total, pct: pct };
+  }
+
+  function jobProgressNote(job) {
+    var progress = jobProgress(job);
+    if (job.state === "queued") return "Waiting for a free worker";
+    if (job.state === "running") {
+      if (!progress.total) {
+        return progress.done ? progress.done + " pages done" : "Starting…";
+      }
+      var note = progress.done + " of " + progress.total + " pages";
+      if (progress.done > 0 && progress.total > progress.done) {
+        var elapsed = Math.max(0, Date.now() / 1000 - (job.created_at || Date.now() / 1000));
+        var eta = (elapsed * (progress.total - progress.done)) / progress.done;
+        if (eta > 0 && eta < 86400) note += " · ~" + formatDuration(eta) + " left";
+      }
+      return note;
+    }
+    if (job.state === "completed") {
+      if (!progress.done) return "No pages or sections extracted";
+      return progress.done + (progress.done === 1 ? " page" : " pages");
+    }
+    return progress.done + " pages processed";
   }
 
   function renderJobsTable() {
@@ -632,12 +1419,12 @@
     if (!state.jobs.length) {
       var tr = document.createElement("tr");
       tr.innerHTML =
-        "<td colspan='5' class='muted'>No documents yet. Choose a file on the left or click 'Try With Sample Files' at the top right.</td>";
+        "<td colspan='4' class='muted'>No documents here yet. Add files on the left, or search your archive from the header.</td>";
       tbody.appendChild(tr);
       return;
     }
 
-    state.jobs.forEach(function (job) {
+    state.jobs.forEach(function (job, index) {
       var tr = document.createElement("tr");
       var failures = job.unit_failures || [];
       var hasFailures = failures.length > 0;
@@ -647,6 +1434,8 @@
         ? "badge-success"
         : job.state === "running" || job.state === "queued"
         ? "badge-primary"
+        : job.state === "cancelled"
+        ? "badge"
         : "badge-danger";
       var friendlyState = hasFailures
         ? "Needs Attention"
@@ -656,15 +1445,25 @@
         ? "Extracting…"
         : job.state === "queued"
         ? "Waiting"
+        : job.state === "cancelled"
+        ? "Cancelled"
         : job.state;
 
       var opts = job.options || {};
       var optSummary = [];
+      if (opts.parser === "xberg") optSummary.push("Xberg");
       if (opts.ocr) {
-        optSummary.push(opts.ocr_provider === "smoldocling" ? "SmolDocling OCR" : "OCR On");
+        optSummary.push(
+          opts.ocr_provider === "smoldocling"
+            ? "SmolDocling OCR"
+            : opts.ocr_provider === "apple_vision"
+            ? "Apple Vision OCR"
+            : "OCR " + (opts.languages || "eng")
+        );
       }
-      if (opts.page_images === "failed") optSummary.push("Save unreadable pages");
-      else if (opts.page_images === "all") optSummary.push("Save all page images");
+      if (opts.page_images === "failed") optSummary.push("Unreadable page images");
+      else if (opts.page_images === "all") optSummary.push("All page images");
+      if (opts.vision) optSummary.push("Vision");
       if (opts.pages) optSummary.push("Pages " + opts.pages);
 
       var tdDoc = document.createElement("td");
@@ -673,7 +1472,9 @@
         escapeHtml(job.filename || "Document") +
         "</div><div class='row-sub'>" +
         escapeHtml(job.id.slice(0, 8)) +
-        "</div><div class='row-options'>" +
+        "</div><div class='row-options' title='" +
+        escapeHtml(optSummary.join(" · ") || "Standard options") +
+        "'>" +
         escapeHtml(optSummary.join(" · ") || "Standard") +
         "</div>";
 
@@ -682,26 +1483,64 @@
         "<span class='badge " + stateBadgeClass + "'>" + escapeHtml(friendlyState) + "</span>";
       if (hasFailures) {
         var errLine = document.createElement("div");
-        errLine.style.fontSize = "11.5px";
+        errLine.style.fontSize = "11px";
         errLine.style.color = "var(--danger)";
         errLine.style.marginTop = "3px";
         errLine.textContent = failures[0].message || failures[0].code || "Extraction warning";
-        errLine.title = failures.map(function (f) { return (f.code || "") + ": " + (f.message || ""); }).join("\n");
+        errLine.title = failures
+          .map(function (f) {
+            return (f.code || "") + ": " + (f.message || "");
+          })
+          .join("\n");
         tdState.appendChild(errLine);
       }
-
+      var progress = jobProgress(job);
       var tdProg = document.createElement("td");
-      tdProg.textContent = (job.progress || 0) + (job.progress === 1 ? " page / section" : " pages / sections");
+      if (job.state === "running" && progress.total > 0) {
+        var bar = document.createElement("div");
+        bar.className = "job-progress";
+        bar.innerHTML = "<span style='width:" + progress.pct + "%'></span>";
+        tdProg.appendChild(bar);
+      }
+      var progNote = document.createElement("div");
+      progNote.className = "job-progress-note";
+      progNote.textContent = jobProgressNote(job);
+      tdProg.appendChild(progNote);
 
       var tdAct = document.createElement("td");
       tdAct.className = "row-actions";
       var openBtn = document.createElement("button");
       openBtn.className = "btn btn-sm btn-primary";
       openBtn.textContent = "Open";
+      openBtn.disabled = job.state === "queued" || job.state === "cancelled";
       openBtn.addEventListener("click", function () {
         selectJobForInspection(job.id, true);
       });
       tdAct.appendChild(openBtn);
+
+      if (job.state === "queued" || job.state === "running") {
+        var cancelBtn = document.createElement("button");
+        cancelBtn.className = "btn btn-sm btn-icon";
+        cancelBtn.title = "Cancel this extraction";
+        cancelBtn.setAttribute("aria-label", "Cancel this extraction");
+        cancelBtn.innerHTML = "<svg class='icon'><use href='#i-stop'/></svg>";
+        cancelBtn.addEventListener("click", function () {
+          cancelExtraction(job);
+        });
+        tdAct.appendChild(cancelBtn);
+      }
+
+      if (job.state === "failed" || job.state === "cancelled") {
+        var retryBtn = document.createElement("button");
+        retryBtn.className = "btn btn-sm btn-icon";
+        retryBtn.title = "Retry with the same options";
+        retryBtn.setAttribute("aria-label", "Retry with the same options");
+        retryBtn.innerHTML = "<svg class='icon'><use href='#i-refresh'/></svg>";
+        retryBtn.addEventListener("click", function () {
+          retryJob(job);
+        });
+        tdAct.appendChild(retryBtn);
+      }
 
       if (job.state === "completed") {
         var zipLink = document.createElement("a");
@@ -719,13 +1558,7 @@
       delBtn.setAttribute("aria-label", "Remove this document");
       delBtn.innerHTML = "<svg class='icon'><use href='#i-x'/></svg>";
       delBtn.addEventListener("click", function () {
-        fetch("/v1/extractions/" + encodeURIComponent(job.id), {
-          method: "DELETE",
-          headers: authHeaders(),
-        }).then(function () {
-          refreshQueue();
-          refreshTelemetry();
-        });
+        scheduleDelete(job.id, index);
       });
       tdAct.appendChild(delBtn);
 
@@ -735,6 +1568,99 @@
       tr.appendChild(tdAct);
       tbody.appendChild(tr);
     });
+  }
+
+  function cancelExtraction(job) {
+    fetch("/v1/extractions/" + encodeURIComponent(job.id) + "/cancel", {
+      method: "POST",
+      headers: authHeaders(),
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("cancel failed");
+        showToast("Cancelling " + (job.filename || "extraction"));
+        refreshQueue();
+      })
+      .catch(function () {
+        showToast("Could not cancel this extraction");
+      });
+  }
+
+  function retryJob(job) {
+    if (state.uploading) {
+      showToast("Wait for the current upload to finish");
+      return;
+    }
+    showToast("Loading the original file…");
+    fetch("/v1/extractions/" + encodeURIComponent(job.id) + "/result?format=original", {
+      headers: authHeaders(),
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("original unavailable");
+        return response.blob();
+      })
+      .then(function (blob) {
+        var form = new FormData();
+        form.append("options", JSON.stringify(job.options || {}));
+        form.append("file", blob, job.filename || "document");
+        return sendExtraction(form, "Retrying " + (job.filename || "document"));
+      })
+      .then(function () {
+        document.getElementById("upload-status").textContent =
+          "Retry queued for " + (job.filename || "document");
+        showToast("Retry queued");
+        refreshQueue();
+        refreshTelemetry();
+      })
+      .catch(function () {
+        showToast("Could not retry; the original file is no longer available");
+      });
+  }
+
+  function scheduleDelete(jobId, index) {
+    var job = state.jobs[index];
+    if (!job) return;
+    state.pendingDeletes[jobId] = true;
+    state.jobs.splice(index, 1);
+    renderJobsTable();
+    populateJobSelector();
+    var timer = setTimeout(function () {
+      delete state.deleteTimers[jobId];
+      fetch("/v1/extractions/" + encodeURIComponent(jobId), {
+        method: "DELETE",
+        headers: authHeaders(),
+      })
+        .then(function (response) {
+          if (!response.ok) throw new Error("delete failed");
+          delete state.pendingDeletes[jobId];
+          if (state.currentJobId === jobId) {
+            state.currentJobId = "";
+            state.currentDoc = null;
+            state.currentUnit = null;
+          }
+          refreshQueue();
+          refreshTelemetry();
+        })
+        .catch(function () {
+          delete state.pendingDeletes[jobId];
+          state.jobs.splice(Math.min(index, state.jobs.length), 0, job);
+          renderJobsTable();
+          populateJobSelector();
+          showToast("Could not remove this document");
+        });
+    }, 6500);
+    state.deleteTimers[jobId] = timer;
+    showToast(
+      "Removed " + (job.filename || "document"),
+      "Undo",
+      function () {
+        clearTimeout(timer);
+        delete state.deleteTimers[jobId];
+        delete state.pendingDeletes[jobId];
+        state.jobs.splice(Math.min(index, state.jobs.length), 0, job);
+        renderJobsTable();
+        populateJobSelector();
+      }
+    );
   }
 
   function populateJobSelector() {
@@ -756,8 +1682,14 @@
   }
 
   // ==================== DOCUMENT VIEWER ====================
-  function selectJobForInspection(jobId, navigateToTab) {
+  function selectJobForInspection(jobId, navigateToTab, targetUnitId, targetBlockId) {
+    var switchingJob = state.currentJobId !== jobId;
     state.currentJobId = jobId;
+    if (switchingJob) {
+      state.currentUnitId = targetUnitId || "u1";
+    }
+    state.pendingUnitId = targetUnitId || "";
+    state.pendingBlockId = targetBlockId || "";
     var sel = document.getElementById("inspector-job-select");
     if (sel) sel.value = jobId;
     if (navigateToTab) {
@@ -774,6 +1706,8 @@
         }
         document.getElementById("inspector-doc-status").textContent =
           jobMeta.state === "completed" ? "Completed" : jobMeta.state;
+        var original = document.getElementById("dl-original");
+        if (original) original.download = jobMeta.filename || "original";
 
         if (jobMeta.state === "completed") {
           return apiGet("/v1/extractions/" + encodeURIComponent(jobId) + "/result?format=json").then(
@@ -801,6 +1735,8 @@
     document.getElementById("dl-jsonl").href = base + "/result?format=jsonl";
     document.getElementById("dl-html").href = base + "/result?format=html";
     document.getElementById("dl-zip").href = base + "/archive";
+    var original = document.getElementById("dl-original");
+    if (original) original.href = base + "/result?format=original";
   }
 
   function onDocumentLoaded(doc) {
@@ -821,7 +1757,12 @@
     }
 
     var firstUnit = (doc.units && doc.units[0] && doc.units[0].id) || "u1";
-    selectUnit(firstUnit);
+    var target = state.pendingUnitId || firstUnit;
+    var exists = (doc.units || []).some(function (u) {
+      return u.id === target;
+    });
+    state.pendingUnitId = "";
+    selectUnit(exists ? target : firstUnit);
     renderPageFilmstrip();
   }
 
@@ -853,10 +1794,22 @@
 
   function selectUnit(unitId) {
     state.currentUnitId = unitId;
-    state.activeBlockId = "";
+    var pendingBlock = state.pendingBlockId;
+    state.activeBlockId = pendingBlock || "";
+    state.scrollToBlockId = pendingBlock || "";
+    state.pendingBlockId = "";
     var unitSelect = document.getElementById("inspector-unit-select");
     if (unitSelect && unitSelect.value !== unitId) {
       unitSelect.value = unitId;
+    }
+    if (state.currentJobId && state.activeTab === "inspector") {
+      setRoute(
+        "/reader/" +
+          encodeURIComponent(state.currentJobId) +
+          "/" +
+          encodeURIComponent(unitId),
+        true
+      );
     }
     if (state.currentDoc && Array.isArray(state.currentDoc.units)) {
       var found = state.currentDoc.units.find(function (u) {
@@ -951,11 +1904,19 @@
 
   function updateFilmstripActive() {
     document.querySelectorAll("#page-filmstrip .page-film-thumb").forEach(function (btn) {
-      btn.classList.toggle("is-active", btn.getAttribute("data-unit") === state.currentUnitId);
+      var active = btn.getAttribute("data-unit") === state.currentUnitId;
+      btn.classList.toggle("is-active", active);
+      if (active) btn.setAttribute("aria-current", "page");
+      else btn.removeAttribute("aria-current");
     });
     var active = document.querySelector("#page-filmstrip .page-film-thumb.is-active");
-    if (active && active.scrollIntoView) {
-      active.scrollIntoView({ block: "nearest", inline: "nearest" });
+    var strip = document.getElementById("page-filmstrip");
+    if (active && strip) {
+      var stripRect = strip.getBoundingClientRect();
+      var activeRect = active.getBoundingClientRect();
+      var delta =
+        activeRect.left - stripRect.left - (strip.clientWidth - activeRect.width) / 2;
+      strip.scrollLeft += delta;
     }
   }
 
@@ -1016,6 +1977,7 @@
       } catch (_) {}
     }
 
+    updatePageEmptyState();
     renderBlocksSubtab(unit);
     renderTablesSubtab(unit);
     updateFilmstripActive();
@@ -1060,6 +2022,16 @@
     document.getElementById("cnt-prov-native").textContent = stats.native || 0;
     document.getElementById("cnt-prov-ocr").textContent = stats.ocr || 0;
     document.getElementById("cnt-prov-inferred").textContent = stats.inferred || 0;
+  }
+
+  function updatePageEmptyState() {
+    var placeholder = document.getElementById("page-empty");
+    var layer = document.getElementById("page-svg-layer");
+    var img = document.getElementById("page-raster-img");
+    if (!placeholder || !layer || !img) return;
+    var hasRaster = !img.classList.contains("hidden");
+    var hasBoxes = layer.querySelectorAll(".bbox-group").length > 0;
+    placeholder.classList.toggle("hidden", hasRaster || hasBoxes);
   }
 
   function renderPageSvgLayer(svgHtml) {
@@ -1269,6 +2241,29 @@
       });
       list.appendChild(card);
     });
+
+    if (state.scrollToBlockId) {
+      var target = list.querySelector(
+        "[data-block-id='" + String(state.scrollToBlockId).replace(/'/g, "\\'") + "']"
+      );
+      state.scrollToBlockId = "";
+      if (target) {
+        target.classList.add("is-hit");
+        scrollBlockIntoList(target);
+        setTimeout(function () {
+          target.classList.remove("is-hit");
+        }, 1800);
+      }
+    }
+  }
+
+  function scrollBlockIntoList(target) {
+    var list = document.getElementById("blocks-list");
+    if (!list || !target) return;
+    var listRect = list.getBoundingClientRect();
+    var targetRect = target.getBoundingClientRect();
+    var offset = targetRect.top - listRect.top - Math.max(12, list.clientHeight / 2 - targetRect.height / 2);
+    list.scrollTo({ top: list.scrollTop + offset, behavior: "smooth" });
   }
 
   function highlightBlockCard(blockId, scrollIntoView) {
@@ -1276,7 +2271,7 @@
       var match = card.getAttribute("data-block-id") === blockId;
       card.classList.toggle("is-active", match);
       if (match && scrollIntoView) {
-        card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        scrollBlockIntoList(card);
       }
     });
   }
@@ -1292,14 +2287,15 @@
       return;
     }
 
-    tableBlocks.forEach(function (b) {
+    tableBlocks.forEach(function (b, tableIndex) {
       var table = b.table;
       var wrap = document.createElement("div");
       wrap.style.marginBottom = "1.2rem";
       var method = (b.provenance && b.provenance.method) || "native";
       var hdr = document.createElement("div");
-      hdr.style.marginBottom = "0.5rem";
-      hdr.innerHTML =
+      hdr.className = "table-card-head";
+      var title = document.createElement("div");
+      title.innerHTML =
         "<strong>Table (" +
         table.rows +
         " rows × " +
@@ -1307,6 +2303,32 @@
         " columns)</strong> · <span class='badge'>" +
         escapeHtml(FRIENDLY_METHOD[method] || method) +
         "</span>";
+      hdr.appendChild(title);
+
+      var actions = document.createElement("div");
+      actions.className = "table-card-actions";
+      var copyBtn = document.createElement("button");
+      copyBtn.className = "btn btn-sm";
+      copyBtn.innerHTML = "<svg class='icon'><use href='#i-copy'/></svg> Copy CSV";
+      copyBtn.title = "Copy this table as CSV";
+      copyBtn.addEventListener("click", function () {
+        copyText(tableCsv(b), "Table copied as CSV");
+      });
+      var csvBtn = document.createElement("button");
+      csvBtn.className = "btn btn-sm";
+      csvBtn.innerHTML = "<svg class='icon'><use href='#i-download'/></svg> CSV";
+      csvBtn.title = "Download this table as a CSV file";
+      csvBtn.addEventListener("click", function () {
+        var base = fileNameForUnit(unit, "csv").replace(/\.csv$/, "");
+        downloadText(
+          base + "-table-" + (tableIndex + 1) + ".csv",
+          tableCsv(b),
+          "text/csv;charset=utf-8"
+        );
+      });
+      actions.appendChild(copyBtn);
+      actions.appendChild(csvBtn);
+      hdr.appendChild(actions);
       wrap.appendChild(hdr);
 
       var cellMap = {};
@@ -1316,7 +2338,9 @@
       });
       var rowIndices = Object.keys(cellMap)
         .map(Number)
-        .sort(function (x, y) { return x - y; });
+        .sort(function (x, y) {
+          return x - y;
+        });
 
       var tbl = document.createElement("table");
       tbl.className = "grid-table";
@@ -1332,30 +2356,85 @@
       tbl.appendChild(thead);
 
       var tbody = document.createElement("tbody");
-      rowIndices.slice(0, 300).forEach(function (rIdx) {
-        var tr = document.createElement("tr");
-        var rth = document.createElement("td");
-        rth.className = "muted";
-        rth.textContent = String(rIdx + 1);
-        tr.appendChild(rth);
-        for (var cIdx = 0; cIdx < table.columns; cIdx++) {
-          var cell = cellMap[rIdx][cIdx];
-          var td = document.createElement("td");
-          if (cell) {
-            td.textContent = cell.raw || "";
-            if (cell.formula) {
-              var fSpan = document.createElement("span");
-              fSpan.className = "cell-formula";
-              fSpan.textContent = "=" + cell.formula;
-              td.appendChild(fSpan);
-            }
-          }
-          tr.appendChild(td);
-        }
-        tbody.appendChild(tr);
-      });
       tbl.appendChild(tbody);
+      var shown = 0;
+      var pageSize = 300;
+      var more = null;
+      var moreText = null;
+
+      function appendRows(limit) {
+        var end = Math.min(rowIndices.length, limit);
+        rowIndices.slice(shown, end).forEach(function (rIdx) {
+          var tr = document.createElement("tr");
+          var rth = document.createElement("td");
+          rth.className = "muted";
+          rth.textContent = String(rIdx + 1);
+          tr.appendChild(rth);
+          for (var cIdx = 0; cIdx < table.columns; cIdx++) {
+            var cell = cellMap[rIdx][cIdx];
+            var td = document.createElement("td");
+            if (cell) {
+              td.textContent = cell.raw || "";
+              if (cell.formula) {
+                var fSpan = document.createElement("span");
+                fSpan.className = "cell-formula";
+                fSpan.textContent = "=" + cell.formula;
+                td.appendChild(fSpan);
+              }
+            }
+            tr.appendChild(td);
+          }
+          tbody.appendChild(tr);
+        });
+        shown = end;
+        if (moreText) {
+          moreText.textContent =
+            "Showing " +
+            shown.toLocaleString() +
+            " of " +
+            rowIndices.length.toLocaleString() +
+            " rows";
+        }
+      }
+
+      if (rowIndices.length > pageSize) {
+        more = document.createElement("div");
+        more.className = "table-more-note";
+        moreText = document.createElement("span");
+        more.appendChild(moreText);
+      }
+      appendRows(pageSize);
       wrap.appendChild(tbl);
+
+      if (more) {
+        var moreBtn = document.createElement("button");
+        moreBtn.className = "btn btn-sm";
+        moreBtn.textContent = "Show " + pageSize + " more";
+        moreBtn.addEventListener("click", function () {
+          appendRows(shown + pageSize);
+          if (shown >= rowIndices.length && moreBtn.parentNode) {
+            moreBtn.parentNode.removeChild(moreBtn);
+          }
+        });
+        more.appendChild(moreBtn);
+        wrap.appendChild(more);
+      }
+      wrap.setAttribute("data-table-block-id", b.id);
+      if (b.id === state.activeBlockId) {
+        wrap.classList.add("is-active");
+        setTimeout(function () {
+          var wrapRect = wrap.getBoundingClientRect();
+          var containerRect = container.getBoundingClientRect();
+          container.scrollTo({
+            top:
+              container.scrollTop +
+              wrapRect.top -
+              containerRect.top -
+              10,
+            behavior: "smooth",
+          });
+        }, 0);
+      }
       container.appendChild(wrap);
     });
   }
@@ -1717,13 +2796,8 @@
     var dropzone = document.getElementById("dropzone");
     var fileInput = document.getElementById("file-input");
     fileInput.addEventListener("change", function () {
-      state.selectedFiles = Array.from(fileInput.files || []);
-      if (state.selectedFiles.length) {
-        document.getElementById("dropzone-title").textContent =
-          state.selectedFiles.length +
-          " file(s) selected: " +
-          state.selectedFiles.map(function (f) { return f.name; }).join(", ");
-      }
+      stageFiles(fileInput.files);
+      fileInput.value = "";
     });
     dropzone.addEventListener("dragover", function (ev) {
       ev.preventDefault();
@@ -1736,12 +2810,7 @@
       ev.preventDefault();
       dropzone.classList.remove("is-dragover");
       if (ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files.length) {
-        state.selectedFiles = Array.from(ev.dataTransfer.files);
-        document.getElementById("dropzone-title").textContent =
-          state.selectedFiles.length +
-          " file(s) selected: " +
-          state.selectedFiles.map(function (f) { return f.name; }).join(", ");
-        uploadFiles(state.selectedFiles);
+        stageFiles(ev.dataTransfer.files);
       }
     });
 
@@ -1749,6 +2818,82 @@
       uploadFiles(state.selectedFiles);
     });
     document.getElementById("sample-synth-btn").addEventListener("click", runInstantDemoBatch);
+    var notifyBox = document.getElementById("opt-notify");
+    if (notifyBox) {
+      notifyBox.checked = state.notify;
+      if (!("Notification" in window)) {
+        notifyBox.disabled = true;
+        notifyBox.parentNode.style.opacity = "0.55";
+      }
+      notifyBox.addEventListener("change", requestNotifyPermission);
+    }
+
+    document.getElementById("open-search-btn").addEventListener("click", openSearch);
+    var searchOverlay = document.getElementById("search-overlay");
+    searchOverlay.addEventListener("click", function (ev) {
+      if (ev.target === searchOverlay) closeSearch();
+    });
+    document.getElementById("search-input").addEventListener("input", function (ev) {
+      scheduleSearch(ev.target.value);
+    });
+    document.getElementById("search-input").addEventListener("keydown", function (ev) {
+      if (ev.key === "ArrowDown") {
+        ev.preventDefault();
+        moveSearchSelection(1);
+      } else if (ev.key === "ArrowUp") {
+        ev.preventDefault();
+        moveSearchSelection(-1);
+      } else if (ev.key === "Enter") {
+        ev.preventDefault();
+        openSearchResult(state.searchResults[state.searchSelection]);
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        closeSearch();
+      }
+    });
+    document.addEventListener("keydown", function (ev) {
+      var key = ev.key.toLowerCase();
+      if ((ev.metaKey || ev.ctrlKey) && key === "k") {
+        ev.preventDefault();
+        if (document.getElementById("search-overlay").classList.contains("hidden")) {
+          openSearch();
+        } else {
+          closeSearch();
+        }
+      } else if (key === "escape") {
+        closeSearch();
+      } else if (
+        state.activeTab === "inspector" &&
+        !ev.metaKey &&
+        !ev.ctrlKey &&
+        !ev.altKey &&
+        (key === "j" || key === "k")
+      ) {
+        var tag = (ev.target && ev.target.tagName) || "";
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") {
+          ev.preventDefault();
+          stepUnit(key === "j" ? 1 : -1);
+        }
+      }
+    });
+
+    document.getElementById("copy-link-btn").addEventListener("click", function () {
+      if (!state.currentJobId) return;
+      setRoute(tabPath("inspector"), true);
+      copyText(location.href, "Page link copied");
+    });
+    document.getElementById("copy-page-text-btn").addEventListener("click", function () {
+      if (!state.currentUnit) return;
+      copyText(unitPlainText(state.currentUnit), "Page text copied");
+    });
+    document.getElementById("download-page-text-btn").addEventListener("click", function () {
+      if (!state.currentUnit) return;
+      downloadText(
+        fileNameForUnit(state.currentUnit, "txt"),
+        unitPlainText(state.currentUnit),
+        "text/plain;charset=utf-8"
+      );
+    });
 
     [
       "opt-page-images",
@@ -1771,7 +2916,6 @@
       }
     });
 
-    document.getElementById("queue-state-filter").addEventListener("change", refreshQueue);
     document.getElementById("refresh-queue-btn").addEventListener("click", refreshQueue);
 
     document.getElementById("inspector-job-select").addEventListener("change", function (ev) {
@@ -1882,28 +3026,46 @@
     bindEvents();
     document.getElementById("pg-source-input").value = PRESETS.doctags.source;
 
+    var searchKbd = document.getElementById("search-kbd");
+    if (searchKbd) {
+      searchKbd.textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";
+    }
+    var savedFilter = localStorage.getItem("docsmith-filter");
+    var filterEl = document.getElementById("queue-state-filter");
+    if (savedFilter && filterEl) {
+      filterEl.value = savedFilter;
+    }
+    filterEl.addEventListener("change", function () {
+      localStorage.setItem("docsmith-filter", filterEl.value);
+      refreshQueue();
+    });
+
     if (location.pathname.indexOf("/view/") === 0) {
       var viewId = decodeURIComponent(location.pathname.slice("/view/".length));
       if (viewId) {
-        state.currentJobId = viewId;
-        switchTab("inspector");
+        history.replaceState(
+          null,
+          "",
+          "#/reader/" + encodeURIComponent(viewId)
+        );
       }
     }
 
-    initWasm().then(function () {
-      refreshTelemetry();
-      refreshCapabilities();
-      refreshQueue();
-      if (state.currentJobId) {
-        selectJobForInspection(state.currentJobId, true);
-      }
-    });
+    initWasm()
+      .then(function () {
+        refreshTelemetry();
+        refreshCapabilities();
+        refreshQueue();
+        applyRoute();
+      })
+      .catch(function () {
+        applyRoute();
+      });
 
+    window.addEventListener("hashchange", applyRoute);
     setInterval(function () {
       refreshTelemetry();
-      if (state.activeTab === "studio") {
-        refreshQueue();
-      }
-    }, 2500);
+      refreshQueue();
+    }, 5000);
   });
 })();

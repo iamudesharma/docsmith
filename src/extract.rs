@@ -279,6 +279,9 @@ impl ProgressBoard {
             .filter_map(|u| u.clone())
             .collect()
     }
+    fn total(&self) -> usize {
+        self.units.lock().unwrap().len()
+    }
 }
 /// Write a complete, ordered checkpoint/progress snapshot from the progress board. Safe to call
 /// concurrently with extraction: unit files and asset sidecars are append-only during a run.
@@ -314,6 +317,7 @@ fn write_progress_snapshot(
         &dir.join("progress.json"),
         &Progress {
             units: doc.units.len(),
+            total: board.total(),
             result_status: None,
             warnings,
             errors,
@@ -587,6 +591,13 @@ impl ContextData {
             &self.dir.join("progress.json"),
             &Progress {
                 units: self.document.units.len(),
+                // Non-PDF unit counts are only final once the document is assembled; until
+                // then a zero total tells the viewer to show completed work, not a percentage.
+                total: if final_result {
+                    self.document.units.len()
+                } else {
+                    0
+                },
                 result_status: if final_result {
                     Some(self.document.status.clone())
                 } else {

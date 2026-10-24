@@ -19,7 +19,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -98,7 +98,14 @@ pub struct Job {
     pub filename: String,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Units completed so far.
     pub progress: usize,
+    /// Units expected in total when known; zero for older jobs or open-ended work.
+    #[serde(default)]
+    pub total: usize,
+    /// The options this job was queued with, so the UI can show and reuse them.
+    #[serde(default)]
+    pub options: Options,
     pub result_status: Option<String>,
     pub error: Option<Failure>,
     pub warnings: Vec<String>,
@@ -143,6 +150,67 @@ fn epoch() -> i64 {
         .unwrap_or_default()
         .as_secs() as i64
 }
+/// Plain searchable text for a block. Tables are flattened row by row so a query can match
+/// any cell while still pointing the result at the owning block. The cap keeps a pathological
+/// table from turning the index into a second copy of the whole result.
+fn block_search_text(block: &Block) -> String {
+    let mut text = if let Some(table) = &block.table {
+        let mut rows: BTreeMap<usize, BTreeMap<usize, String>> = BTreeMap::new();
+        for cell in &table.cells {
+            if cell.raw.is_empty() {
+                continue;
+            }
+            rows.entry(cell.row as usize)
+                .or_default()
+                .insert(cell.column as usize, cell.raw.clone());
+        }
+        if rows.is_empty() {
+            block.text.clone()
+        } else {
+            rows.values()
+                .map(|row| {
+                    row.values()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join("\t")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    } else {
+        block.text.clone()
+    };
+    text = text.trim().to_string();
+    if text.is_empty() {
+        return text;
+    }
+    if text.chars().count() > 50_000 {
+        text = text.chars().take(50_000).collect();
+    }
+    text
+}
+
+/// Window around the SQL `instr` result (1-based character offset). Whitespace is collapsed so
+/// a match in a table row or a multi-line block reads as one line in the palette.
+fn search_snippet(text: &str, position: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+    let at = position.saturating_sub(1).min(chars.len() - 1);
+    let start = at.saturating_sub(55);
+    let end = (start + 180).min(chars.len());
+    let mut out: String = chars[start..end].iter().collect();
+    out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if start > 0 {
+        out = format!("…{out}");
+    }
+    if end < chars.len() {
+        out.push('…');
+    }
+    out
+}
+
 impl App {
     pub fn open(mut config: Config) -> Result<Self> {
         if config.limits.workers == 0 || config.limits.workers > 32 {
@@ -158,6 +226,10 @@ impl App {
         let _ = db.execute("ALTER TABLE jobs ADD COLUMN callback_url TEXT", []);
         db.execute_batch("CREATE TABLE IF NOT EXISTS webhook_deliveries(id TEXT PRIMARY KEY, job_id TEXT NOT NULL, url TEXT NOT NULL, event TEXT NOT NULL, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, delivered_at INTEGER, last_error TEXT); CREATE INDEX IF NOT EXISTS webhook_pending ON webhook_deliveries(delivered_at,next_at); CREATE INDEX IF NOT EXISTS webhook_job ON webhook_deliveries(job_id);")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS sink_runs(job_id TEXT PRIMARY KEY, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, completed_at INTEGER, last_error TEXT); CREATE INDEX IF NOT EXISTS sink_pending ON sink_runs(completed_at,next_at);")?;
+        // Full-text-ish search over completed results. One row per block (plus one per unit
+        // name) keeps matches addressable in the reader. `search_state` records jobs that have
+        // been indexed so a query only backfills new or pre-existing jobs once.
+        db.execute_batch("CREATE TABLE IF NOT EXISTS search_units(job_id TEXT NOT NULL, unit_id TEXT NOT NULL, unit_name TEXT NOT NULL, unit_index INTEGER NOT NULL, block_id TEXT, kind TEXT NOT NULL, text TEXT NOT NULL); CREATE INDEX IF NOT EXISTS search_job ON search_units(job_id); CREATE TABLE IF NOT EXISTS search_state(job_id TEXT PRIMARY KEY, indexed_at INTEGER NOT NULL, blocks INTEGER NOT NULL);")?;
         // Reap orphan process groups before redispatching their durable input.
         let mut statement =
             db.prepare("SELECT id FROM jobs WHERE state IN ('running','deleting')")?;
@@ -189,6 +261,8 @@ impl App {
                 if dir.exists() {
                     std::fs::remove_dir_all(&dir)?;
                 }
+                db.execute("DELETE FROM search_units WHERE job_id=?1", [&id])?;
+                db.execute("DELETE FROM search_state WHERE job_id=?1", [&id])?;
                 db.execute("DELETE FROM jobs WHERE id=?1", [&id])?;
             }
         }
@@ -246,10 +320,11 @@ impl App {
     pub fn job(&self, id: &str) -> Result<Job> {
         let db = self.db.lock().unwrap();
         let mut job = db.query_row(
-            "SELECT id,state,filename,created_at,updated_at,error FROM jobs WHERE id=?1",
+            "SELECT id,state,filename,created_at,updated_at,error,options FROM jobs WHERE id=?1",
             [id],
             |r| {
                 let e: Option<String> = r.get(5)?;
+                let options: String = r.get(6)?;
                 Ok(Job {
                     id: r.get(0)?,
                     state: r.get(1)?,
@@ -257,6 +332,8 @@ impl App {
                     created_at: r.get(3)?,
                     updated_at: r.get(4)?,
                     progress: 0,
+                    total: 0,
+                    options: serde_json::from_str(&options).unwrap_or_default(),
                     result_status: None,
                     error: e.and_then(|s| serde_json::from_str(&s).ok()),
                     warnings: vec![],
@@ -268,6 +345,15 @@ impl App {
         if let Ok(bytes) = std::fs::read(self.dir(id).join("progress.json")) {
             if let Ok(progress) = serde_json::from_slice::<Progress>(&bytes) {
                 job.progress = progress.units;
+                job.total = if progress.total > 0 {
+                    progress.total
+                } else if progress.result_status.is_some() {
+                    // Completed progress files written before `total` existed: the unit count
+                    // is the final count.
+                    progress.units
+                } else {
+                    0
+                };
                 job.result_status = progress.result_status;
                 job.warnings = progress.warnings;
                 job.unit_failures = progress.errors;
@@ -275,6 +361,113 @@ impl App {
         }
         Ok(job)
     }
+    /// Build the block-level search rows for one completed job. The canonical result stays
+    /// untouched; this is only an index used by the viewer's command palette.
+    fn index_job_for_search(&self, id: &str) -> Result<usize> {
+        let path = self.dir(id).join("result.json");
+        // A multi-hundred-megabyte spreadsheet result must not be parsed a second time in
+        // memory just to answer search. Filename search still works for those jobs.
+        const SEARCH_INDEX_MAX_BYTES: u64 = 64 * 1024 * 1024;
+        if std::fs::metadata(&path)?.len() > SEARCH_INDEX_MAX_BYTES {
+            tracing::info!("search: skipping oversized result for {id}");
+            let db = self.db.lock().unwrap();
+            db.execute(
+                "INSERT OR REPLACE INTO search_state(job_id,indexed_at,blocks) VALUES(?1,?2,0)",
+                params![id, epoch()],
+            )?;
+            return Ok(0);
+        }
+        let bytes = std::fs::read(&path)?;
+        let document: Document = serde_json::from_slice(&bytes)?;
+        let mut rows: Vec<(String, String, usize, Option<String>, String, String)> = Vec::new();
+        for unit in &document.units {
+            let name = unit.name.trim();
+            if !name.is_empty() {
+                rows.push((
+                    unit.id.clone(),
+                    unit.name.clone(),
+                    unit.index,
+                    None,
+                    "unit".into(),
+                    name.to_string(),
+                ));
+            }
+            for block in &unit.blocks {
+                let text = block_search_text(block);
+                if text.is_empty() {
+                    continue;
+                }
+                rows.push((
+                    unit.id.clone(),
+                    unit.name.clone(),
+                    unit.index,
+                    Some(block.id.clone()),
+                    block.kind.clone(),
+                    text,
+                ));
+            }
+        }
+        let db = self.db.lock().unwrap();
+        let tx = db.unchecked_transaction()?;
+        tx.execute("DELETE FROM search_units WHERE job_id=?1", [id])?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO search_units(job_id,unit_id,unit_name,unit_index,block_id,kind,text) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            )?;
+            for (unit_id, unit_name, unit_index, block_id, kind, text) in &rows {
+                insert.execute(params![
+                    id,
+                    unit_id,
+                    unit_name,
+                    *unit_index as i64,
+                    block_id,
+                    kind,
+                    text
+                ])?;
+            }
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO search_state(job_id,indexed_at,blocks) VALUES(?1,?2,?3)",
+            params![id, epoch(), rows.len() as i64],
+        )?;
+        tx.commit()?;
+        Ok(rows.len())
+    }
+
+    /// Backfill indexes for completed jobs created before search existed, or jobs whose
+    /// completion index failed. Bounded so one search cannot scan an unbounded archive.
+    fn index_pending_for_search(&self, tenant: &str, limit: usize) -> usize {
+        let ids: Vec<String> = {
+            let db = self.db.lock().unwrap();
+            let Ok(mut statement) = db.prepare(
+                "SELECT id FROM jobs WHERE tenant=?1 AND state='completed' AND id NOT IN (SELECT job_id FROM search_state) ORDER BY updated_at DESC LIMIT ?2",
+            ) else {
+                return 0;
+            };
+            statement
+                .query_map(params![tenant, limit as i64], |r| r.get::<_, String>(0))
+                .and_then(|rows| rows.collect::<std::result::Result<Vec<_>, _>>())
+                .unwrap_or_default()
+        };
+        let mut indexed = 0;
+        for id in ids {
+            match self.index_job_for_search(&id) {
+                Ok(_) => indexed += 1,
+                Err(e) => {
+                    tracing::warn!("search index failed for {id}: {e:#}");
+                    // Record the attempt even on failure. A malformed/old result should not
+                    // make every later query retry the same expensive parse.
+                    let db = self.db.lock().unwrap();
+                    let _ = db.execute(
+                        "INSERT OR REPLACE INTO search_state(job_id,indexed_at,blocks) VALUES(?1,?2,0)",
+                        params![id, epoch()],
+                    );
+                }
+            }
+        }
+        indexed
+    }
+
     /// Remove terminal jobs past the configured retention window. Active workers are never
     /// touched; cancel/delete still own their own lifetime handling.
     fn sweep_retention(&self) -> Result<usize> {
@@ -301,6 +494,8 @@ impl App {
             if dir.exists() {
                 std::fs::remove_dir_all(&dir)?;
             }
+            db.execute("DELETE FROM search_units WHERE job_id=?1", [&id])?;
+            db.execute("DELETE FROM search_state WHERE job_id=?1", [&id])?;
             db.execute("DELETE FROM jobs WHERE id=?1", [&id])?;
             removed += 1;
         }
@@ -699,6 +894,13 @@ impl App {
                     tracing::error!("{e}");
                 }
                 log_job_timings(&self.dir(&id));
+                let app = self.clone();
+                let index_id = id.clone();
+                if let Ok(Err(e)) =
+                    tokio::task::spawn_blocking(move || app.index_job_for_search(&index_id)).await
+                {
+                    tracing::warn!("search index failed for {id}: {e:#}");
+                }
             }
             Err(e) => {
                 let _ = self.set_state(&id, "failed", Some(extract::failure(&e, None)));
@@ -1263,6 +1465,44 @@ async fn result(
     Query(export): Query<Export>,
 ) -> ApiResult<Response> {
     app.authorize(&id, &headers)?;
+    let default_format = job_result_format(&app, &id).await;
+    let format = export
+        .format
+        .as_deref()
+        .or(default_format.as_deref())
+        .unwrap_or("json");
+    // The staged upload is kept for retries and as the user's original copy. It is available
+    // even while a job is queued or failed, which is exactly when "retry" needs it.
+    if format == "original" {
+        let job = app.job(&id)?;
+        let path = app.dir(&id).join("input");
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Err(error(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "Original upload is no longer stored for this job",
+            ));
+        }
+        let mut response = stream_file(path, mime_for_filename(&job.filename)).await?;
+        let ascii_name: String = job
+            .filename
+            .chars()
+            .map(|c| {
+                if c.is_ascii() && c != '"' && c != '\\' && c != '\r' && c != '\n' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let disposition = format!("attachment; filename=\"{ascii_name}\"");
+        response.headers_mut().insert(
+            header::CONTENT_DISPOSITION,
+            axum::http::HeaderValue::from_str(&disposition)
+                .unwrap_or_else(|_| axum::http::HeaderValue::from_static("attachment")),
+        );
+        return Ok(response);
+    }
     if app.job(&id)?.state != "completed" {
         return Err(error(
             StatusCode::CONFLICT,
@@ -1270,12 +1510,6 @@ async fn result(
             "Result is not complete; use unit endpoint for checkpoints",
         ));
     }
-    let default_format = job_result_format(&app, &id).await;
-    let format = export
-        .format
-        .as_deref()
-        .or(default_format.as_deref())
-        .unwrap_or("json");
     let (file, mime) = match format {
         "json" => ("result.json", "application/json"),
         "markdown" | "md" => ("result.md", "text/markdown; charset=utf-8"),
@@ -1287,7 +1521,7 @@ async fn result(
             return Err(error(
                 StatusCode::BAD_REQUEST,
                 "invalid_format",
-                "Expected json, markdown, text or jsonl",
+                "Expected json, markdown, text, jsonl, html, chunks or original",
             ))
         }
     };
@@ -1718,6 +1952,8 @@ struct ListQuery {
     state: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+    /// Optional search query over filenames, unit names and block text of completed jobs.
+    q: Option<String>,
 }
 async fn list(
     State(app): State<App>,
@@ -1727,30 +1963,104 @@ async fn list(
     let tenant = app.tenant(&headers)?;
     let limit = query.limit.unwrap_or(50).min(200) as i64;
     let offset = query.offset.unwrap_or(0) as i64;
-    let (ids, total) = {
-        let db = app.db.lock().unwrap();
-        let total: i64 = db.query_row(
-            "SELECT count(*) FROM jobs WHERE tenant=?1 AND (?2 IS NULL OR state=?2)",
-            params![tenant, query.state],
-            |r| r.get(0),
-        )?;
-        let mut statement = db.prepare(
-            "SELECT id FROM jobs WHERE tenant=?1 AND (?2 IS NULL OR state=?2) ORDER BY created_at DESC LIMIT ?3 OFFSET ?4",
-        )?;
-        let ids = statement
-            .query_map(params![tenant, query.state, limit, offset], |r| {
-                r.get::<_, String>(0)
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        (ids, total)
+    let q = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| text.chars().take(200).collect::<String>());
+    if q.is_some() {
+        // Old archives predate the index. Index a bounded batch before answering so the first
+        // search is still useful without making every query walk every result.json.
+        let app = app.clone();
+        let tenant = tenant.clone();
+        let _ =
+            tokio::task::spawn_blocking(move || app.index_pending_for_search(&tenant, 40)).await;
+    }
+    let (ids, total, matches) = if let Some(q) = &q {
+        let (ids, total) = {
+            let db = app.db.lock().unwrap();
+            let total: i64 = db.query_row(
+                "SELECT count(*) FROM jobs j WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND (instr(lower(j.filename),lower(?3))>0 OR EXISTS(SELECT 1 FROM search_units s WHERE s.job_id=j.id AND instr(lower(s.text),lower(?3))>0))",
+                params![tenant, query.state, q],
+                |r| r.get(0),
+            )?;
+            let mut statement = db.prepare(
+                "SELECT j.id FROM jobs j WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND (instr(lower(j.filename),lower(?3))>0 OR EXISTS(SELECT 1 FROM search_units s WHERE s.job_id=j.id AND instr(lower(s.text),lower(?3))>0)) ORDER BY j.created_at DESC LIMIT ?4 OFFSET ?5",
+            )?;
+            let ids = statement
+                .query_map(params![tenant, query.state, q, limit, offset], |r| {
+                    r.get::<_, String>(0)
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            (ids, total)
+        };
+        let mut matches = Vec::new();
+        {
+            let db = app.db.lock().unwrap();
+            let mut statement = db.prepare(
+                "SELECT s.job_id,j.filename,s.unit_id,s.unit_name,s.unit_index,s.block_id,s.kind,instr(lower(s.text),lower(?3)),s.text FROM search_units s JOIN jobs j ON j.id=s.job_id WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND instr(lower(s.text),lower(?3))>0 ORDER BY j.created_at DESC,s.unit_index ASC,s.block_id ASC LIMIT 120",
+            )?;
+            let mut rows = statement.query(params![tenant, query.state, q])?;
+            let mut seen: HashSet<(String, String, Option<String>)> = HashSet::new();
+            while let Some(row) = rows.next()? {
+                let job_id: String = row.get(0)?;
+                let filename: String = row.get(1)?;
+                let unit_id: String = row.get(2)?;
+                let unit_name: String = row.get(3)?;
+                let unit_index: i64 = row.get(4)?;
+                let block_id: Option<String> = row.get(5)?;
+                let kind: String = row.get(6)?;
+                let position: i64 = row.get(7)?;
+                let text: String = row.get(8)?;
+                if !seen.insert((job_id.clone(), unit_id.clone(), block_id.clone())) {
+                    continue;
+                }
+                matches.push(json!({
+                    "job_id": job_id,
+                    "filename": filename,
+                    "unit_id": unit_id,
+                    "unit_name": unit_name,
+                    "page": unit_index + 1,
+                    "block_id": block_id,
+                    "kind": kind,
+                    "snippet": search_snippet(&text, position.max(1) as usize),
+                }));
+            }
+        }
+        (ids, total, matches)
+    } else {
+        let (ids, total) = {
+            let db = app.db.lock().unwrap();
+            let total: i64 = db.query_row(
+                "SELECT count(*) FROM jobs WHERE tenant=?1 AND (?2 IS NULL OR state=?2)",
+                params![tenant, query.state],
+                |r| r.get(0),
+            )?;
+            let mut statement = db.prepare(
+                "SELECT id FROM jobs WHERE tenant=?1 AND (?2 IS NULL OR state=?2) ORDER BY created_at DESC LIMIT ?3 OFFSET ?4",
+            )?;
+            let ids = statement
+                .query_map(params![tenant, query.state, limit, offset], |r| {
+                    r.get::<_, String>(0)
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            (ids, total)
+        };
+        (ids, total, Vec::new())
     };
     let jobs = ids
         .iter()
         .filter_map(|id| app.job(id).ok())
         .collect::<Vec<_>>();
-    Ok(Json(
-        json!({"jobs": jobs, "total": total, "limit": limit, "offset": offset}),
-    ))
+    Ok(Json(json!({
+        "jobs": jobs,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "q": q,
+        "matches": matches,
+    })))
 }
 async fn stats(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     let tenant = app.tenant(&headers)?;
@@ -1988,6 +2298,23 @@ fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> 
             std::io::copy(&mut std::fs::File::open(&source)?, &mut zip)?;
         }
     }
+    // Keep the original upload in the archive under a readable name. The staged `input` file
+    // has no extension, so recover the filename from request.json.
+    if let Ok(bytes) = std::fs::read(dir.join("request.json")) {
+        if let Ok(request) = serde_json::from_slice::<Value>(&bytes) {
+            if let Some(name) = request.get("filename").and_then(Value::as_str) {
+                let safe = std::path::Path::new(name)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("original");
+                let input = dir.join("input");
+                if input.is_file() {
+                    zip.start_file(format!("original/{safe}"), options)?;
+                    std::io::copy(&mut std::fs::File::open(&input)?, &mut zip)?;
+                }
+            }
+        }
+    }
     for (folder, prefix) in [("assets", "assets"), ("pages", "pages"), ("units", "units")] {
         if folder == "units" && !include_units {
             continue;
@@ -2038,10 +2365,12 @@ async fn delete(
     if app.dir(&id).exists() {
         tokio::fs::remove_dir_all(app.dir(&id)).await?;
     }
-    app.db
-        .lock()
-        .unwrap()
-        .execute("DELETE FROM jobs WHERE id=?1", [&id])?;
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("DELETE FROM search_units WHERE job_id=?1", [&id])?;
+        db.execute("DELETE FROM search_state WHERE job_id=?1", [&id])?;
+        db.execute("DELETE FROM jobs WHERE id=?1", [&id])?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 pub fn capabilities() -> Value {
@@ -2058,7 +2387,33 @@ pub fn openapi() -> Value {
             "get",
             "List jobs for the caller",
             "200",
-            json!({"type":"object","required":["jobs","total"],"properties":{"jobs":{"type":"array","items":job_schema.clone()},"total":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}}),
+            json!({
+                "type": "object",
+                "required": ["jobs", "total"],
+                "properties": {
+                    "jobs": {"type": "array", "items": job_schema.clone()},
+                    "total": {"type": "integer"},
+                    "limit": {"type": "integer"},
+                    "offset": {"type": "integer"},
+                    "q": {"type": ["string", "null"]},
+                    "matches": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "job_id": {"type": "string"},
+                                "filename": {"type": "string"},
+                                "unit_id": {"type": "string"},
+                                "unit_name": {"type": "string"},
+                                "page": {"type": "integer"},
+                                "block_id": {"type": ["string", "null"]},
+                                "kind": {"type": "string"},
+                                "snippet": {"type": "string"}
+                            }
+                        }
+                    }
+                }
+            }),
         ),
         (
             "/v1/extractions",
@@ -2159,7 +2514,7 @@ pub fn openapi() -> Value {
             }
         }
         if path.ends_with("/result") {
-            params.push(json!({"name":"format","in":"query","description":"Export format; defaults to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl","html","chunks"]}}));
+            params.push(json!({"name":"format","in":"query","description":"Export format; `original` returns the uploaded file, other values default to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl","html","chunks","original"]}}));
         }
         if path.ends_with("/units/{unit_id}") {
             params.push(json!({"name":"from","in":"query","description":"First table row of the slice (used with count)","schema":{"type":"integer","minimum":0}}));
@@ -2170,6 +2525,7 @@ pub fn openapi() -> Value {
         }
         if path == "/v1/extractions" && method == "get" {
             params.push(json!({"name":"state","in":"query","schema":{"type":"string","enum":["queued","running","completed","failed","cancelled"]}}));
+            params.push(json!({"name":"q","in":"query","description":"Search filenames, unit names and extracted text; completed results are indexed on first use","schema":{"type":"string","maxLength":200}}));
             params.push(json!({"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":200}}));
             params.push(
                 json!({"name":"offset","in":"query","schema":{"type":"integer","minimum":0}}),
@@ -2607,6 +2963,34 @@ fn multipart_error(e: axum::extract::multipart::MultipartError, code: &str) -> A
         },
         &e.to_string(),
     )
+}
+
+fn mime_for_filename(name: &str) -> &'static str {
+    match name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "tif" | "tiff" => "image/tiff",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "txt" | "log" | "csv" | "tsv" => "text/plain; charset=utf-8",
+        "md" | "markdown" => "text/markdown; charset=utf-8",
+        "html" | "htm" => "text/html; charset=utf-8",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn stream_file(path: PathBuf, mime: &str) -> ApiResult<Response> {

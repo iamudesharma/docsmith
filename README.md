@@ -24,6 +24,8 @@ DOC_XBERG=/path/to/xberg target/debug/doc-extractor extract fixtures/digital.pdf
 
 # HTTP service:
 target/debug/doc-extractor serve --bind 127.0.0.1:8787 --data-dir data/service
+# Workbench: ⌘K search, deep-linkable pages, live progress/cancel/retry, table CSV export.
+open http://127.0.0.1:8787/
 # Interactive API console (Swagger UI; assets are compiled into the binary, no CDN):
 open http://127.0.0.1:8787/docs
 curl -F file=@fixtures/document.docx -F 'options={"ocr":false,"vision":false}' http://127.0.0.1:8787/v1/extractions
@@ -37,8 +39,10 @@ curl -F file=@fixtures/digital.pdf -F file=@fixtures/quoted.csv http://127.0.0.1
 # Deploy: docker compose up --build   |   deploy/doc-extractor.service (systemd, see docs/DEPLOYMENT.md)
 # Preview rows without downloading a large result (streams the derived export):
 python3 scripts/preview.py JOB_ID                 # also: --unit u1, --markdown, --download out.json
-# Job listing, stats, live events, zip archive and signed webhooks:
+# Job listing, filename/text search, stats, live events, zip archive and signed webhooks:
 curl http://127.0.0.1:8787/v1/extractions?state=completed
+curl 'http://127.0.0.1:8787/v1/extractions?q=invoice%20total'   # block-level matches
+curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=original
 curl http://127.0.0.1:8787/v1/stats
 curl -N http://127.0.0.1:8787/v1/extractions/JOB_ID/events
 curl -O -J http://127.0.0.1:8787/v1/extractions/JOB_ID/archive

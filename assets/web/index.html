@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/assets/web/app.css">
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
   <!-- Inline icon set: no network requests, no emoji. -->
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
     <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3 3 7.5l9 4.5 9-4.5L12 3Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></symbol>
@@ -33,6 +34,9 @@
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5 13.7 9l5.3 1.7-5.3 1.7L12 18l-1.7-5.6L5 10.7 10.3 9 12 3.5Z"/><path d="M18.5 16.5 19 18l1.5.5-1.5.5-.5 1.5-.5-1.5L16.5 18l1.5-.5.5-1Z"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
     <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H19v16H5.5A1.5 1.5 0 0 1 4 18.5v-13Z"/><path d="M4 17.5A1.5 1.5 0 0 1 5.5 16H19"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.6 1.6"/><path d="M14 10.5a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.6-1.6"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6.5 10a5.5 5.5 0 0 1 11 0c0 4 1.5 5.5 1.5 5.5H5s1.5-1.5 1.5-5.5Z"/><path d="M10 18.5a2 2 0 0 0 4 0"/></symbol>
   </svg>
 
   <div class="ambient" aria-hidden="true">
@@ -134,6 +138,11 @@
         </div>
         <div class="header-actions">
           <span class="badge badge-local"><svg class="icon"><use href="#i-shield"/></svg> Local only</span>
+          <button class="btn btn-secondary search-trigger" id="open-search-btn" aria-keyshortcuts="Meta+K Control+K">
+            <svg class="icon"><use href="#i-search"/></svg>
+            Search
+            <kbd class="search-kbd" id="search-kbd">⌘K</kbd>
+          </button>
           <button class="btn btn-secondary" id="sample-synth-btn">
             <svg class="icon"><use href="#i-spark"/></svg>
             Try sample files
@@ -141,7 +150,7 @@
         </div>
       </header>
 
-      <main class="content-wrap">
+      <main class="content-wrap" id="main-content">
         <!-- ==================== DOCUMENTS ==================== -->
         <section class="tab-panel is-active" id="panel-studio" role="tabpanel">
           <div class="two-col-layout">
@@ -160,6 +169,8 @@
                 <span class="upload-box-title" id="dropzone-title">Drop files here, or choose from your computer</span>
                 <span class="upload-box-sub" id="dropzone-sub">PDF · Word · Excel · PowerPoint · CSV · Images · HTML · Markdown · Diagrams</span>
               </label>
+
+              <div class="selected-files" id="selected-files" aria-live="polite"></div>
 
               <div class="simple-options">
                 <div class="field-row">
@@ -245,6 +256,10 @@
                         <input type="checkbox" id="opt-vision">
                         <span>Use local vision model</span>
                       </label>
+                      <label class="checkbox-inline">
+                        <input type="checkbox" id="opt-notify">
+                        <span>Notify me when finished</span>
+                      </label>
                     </div>
                   </div>
                 </details>
@@ -256,7 +271,10 @@
                   Extract selected files
                 </button>
                 <span class="badge" id="options-valid-badge">Ready</span>
-                <span class="status-msg" id="upload-status"></span>
+                <span class="status-msg" id="upload-status" aria-live="polite"></span>
+                <div class="upload-progress hidden" id="upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                  <span class="upload-progress-bar" id="upload-progress-bar"></span>
+                </div>
               </div>
             </div>
 
@@ -273,6 +291,7 @@
                     <option value="running">In progress</option>
                     <option value="queued">Waiting</option>
                     <option value="failed">Failed</option>
+                    <option value="cancelled">Cancelled</option>
                   </select>
                   <button class="btn btn-sm" id="refresh-queue-btn">
                     <svg class="icon"><use href="#i-refresh"/></svg>
@@ -310,11 +329,11 @@
               </label>
 
               <div class="pager-group">
-                <button class="btn btn-sm btn-icon" id="unit-prev-btn" title="Previous page" aria-label="Previous page">
+                <button class="btn btn-sm btn-icon" id="unit-prev-btn" title="Previous page (K)" aria-label="Previous page">
                   <svg class="icon"><use href="#i-arrow-left"/></svg>
                 </button>
                 <select id="inspector-unit-select" aria-label="Select page or section"></select>
-                <button class="btn btn-sm btn-icon" id="unit-next-btn" title="Next page" aria-label="Next page">
+                <button class="btn btn-sm btn-icon" id="unit-next-btn" title="Next page (J)" aria-label="Next page">
                   <svg class="icon"><use href="#i-arrow-right"/></svg>
                 </button>
               </div>
@@ -323,7 +342,11 @@
             </div>
 
             <div class="viewer-bar-right" id="inspector-export-links">
+              <button class="btn btn-sm btn-icon" id="copy-link-btn" title="Copy a link to this page" aria-label="Copy a link to this page">
+                <svg class="icon"><use href="#i-link"/></svg>
+              </button>
               <span class="field-inline-label">Download</span>
+              <a class="btn btn-sm" id="dl-original" href="#" download>Original</a>
               <a class="btn btn-sm" id="dl-md" href="#" target="_blank" rel="noopener">Markdown</a>
               <a class="btn btn-sm" id="dl-txt" href="#" target="_blank" rel="noopener">Text</a>
               <a class="btn btn-sm" id="dl-html" href="#" target="_blank" rel="noopener">HTML</a>
@@ -376,7 +399,17 @@
                   <h3 class="card-title" id="canvas-title">Page preview</h3>
                   <p class="card-desc" id="canvas-subtitle">Click a highlighted box to jump to that text.</p>
                 </div>
-                <span class="badge hidden" id="canvas-timing"></span>
+                <div class="canvas-tools">
+                  <button class="btn btn-sm" id="copy-page-text-btn" title="Copy this page as text">
+                    <svg class="icon"><use href="#i-copy"/></svg>
+                    Copy
+                  </button>
+                  <button class="btn btn-sm" id="download-page-text-btn" title="Download this page as a text file">
+                    <svg class="icon"><use href="#i-download"/></svg>
+                    .txt
+                  </button>
+                  <span class="badge hidden" id="canvas-timing"></span>
+                </div>
               </div>
 
               <div class="page-stage-wrap" id="page-stage-wrap">
@@ -384,6 +417,11 @@
                   <div class="page-canvas">
                     <img id="page-raster-img" class="page-raster-img hidden" alt="Rendered page preview">
                     <div id="page-svg-layer" class="page-svg-layer"></div>
+                    <div class="page-empty hidden" id="page-empty">
+                      <span class="page-empty-icon"><svg class="icon"><use href="#i-book"/></svg></span>
+                      <strong>No page picture for this format</strong>
+                      <p>Read the extracted text on the right, or download the original file.</p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -663,6 +701,27 @@
       </main>
     </div>
   </div>
+
+  <!-- ==================== COMMAND PALETTE ==================== -->
+  <div class="palette-backdrop hidden" id="search-overlay">
+    <div class="palette" role="dialog" aria-modal="true" aria-labelledby="search-title">
+      <h2 class="visually-hidden" id="search-title">Search documents and extracted text</h2>
+      <div class="palette-input-row">
+        <svg class="icon palette-search-icon" aria-hidden="true"><use href="#i-search"/></svg>
+        <input id="search-input" type="search" placeholder="Search documents, pages and tables…" autocomplete="off" spellcheck="false" aria-controls="search-results" aria-autocomplete="list">
+        <kbd>Esc</kbd>
+      </div>
+      <div class="palette-results" id="search-results" role="listbox" aria-label="Search results"></div>
+      <div class="palette-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+        <span><kbd>↵</kbd> open</span>
+        <span><kbd>Esc</kbd> close</span>
+        <span class="palette-hint">Searches extracted text on this machine</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-region" id="toast-region" role="status" aria-live="polite" aria-atomic="false"></div>
 
   <script src="/assets/web/app.js"></script>
 </body>
