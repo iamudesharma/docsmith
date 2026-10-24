@@ -170,6 +170,8 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   _,j=upload('scan.png',{'page_images':'all'});imagejob=j['id'];wait(imagejob)
   image_report=request(f'/v1/extractions/{imagejob}/result?format=report')[1]
   check('report embeds page images',b'data:image/png;base64,' in image_report)
+  bundle=request(f'/v1/extractions/{jsonljob}/archive?jobs={jsonljob},{reviewjob}')[1]
+  check('multi-document bundle includes manifest and jobs',bundle[:2]==b'PK' and b'manifest.json' in bundle and f'jobs/{reviewjob}/result.json'.encode() in bundle)
   code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','status':'reviewed'}).encode(),headers={'Content-Type':'application/json'})
   check('review page verification persists',code==200 and json.loads(review_path.read_text())['units']['u1']['status']=='reviewed')
   code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','block_id':text_block['id'],'revert':True}).encode(),headers={'Content-Type':'application/json'})

@@ -5,6 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#e8f1f2">
   <title>Doc Extractor — Offline Document Reader</title>
+  <script>
+    try {
+      var savedTheme = localStorage.getItem("docsmith-theme");
+      var dark = savedTheme
+        ? savedTheme === "dark"
+        : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+    } catch (_) {}
+  </script>
   <link rel="stylesheet" href="/assets/web/app.css">
 </head>
 <body>
@@ -41,6 +50,8 @@
     <symbol id="i-badge-check" viewBox="0 0 24 24"><path d="M12 3.5 5 6v6c0 4.5 3 7.4 7 8.5 4-1.1 7-4 7-8.5V6l-7-2.5Z"/><path d="m9 12 2 2 4-4"/></symbol>
     <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.9L12 3.5Z"/></symbol>
     <symbol id="i-tag" viewBox="0 0 24 24"><path d="m4 4 7.2.6 8.2 8.2a2 2 0 0 1 0 2.8l-4.6 4.6a2 2 0 0 1-2.8 0L4.6 12 4 4Z"/><circle cx="8.2" cy="8.2" r="1.2"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></symbol>
   </svg>
 
   <div class="ambient" aria-hidden="true">
@@ -122,6 +133,10 @@
           <summary>Server access key (optional)</summary>
           <input id="token-input" type="password" placeholder="Paste bearer token" autocomplete="off">
         </details>
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false">
+          <svg class="icon"><use href="#i-moon"/></svg>
+          <span id="theme-label">Dark mode</span>
+        </button>
         <div class="sidebar-links">
           <a href="/docs" target="_blank" rel="noopener">API docs</a>
           <a href="/v1/stats" target="_blank" rel="noopener">Stats</a>
@@ -327,6 +342,10 @@
               <div class="bulk-bar hidden" id="bulk-bar">
                 <span id="bulk-count">0 selected</span>
                 <button class="btn btn-sm" id="bulk-select-all-btn">Select all</button>
+                <button class="btn btn-sm" id="bulk-download-btn">
+                  <svg class="icon"><use href="#i-download"/></svg>
+                  Download
+                </button>
                 <button class="btn btn-sm" id="bulk-favorite-btn">
                   <svg class="icon"><use href="#i-star"/></svg>
                   Favorite

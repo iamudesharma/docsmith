@@ -420,6 +420,37 @@
     return (bytes / (1024 * 1024)).toFixed(2) + " MB";
   }
 
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("docsmith-theme", theme);
+    var button = document.getElementById("theme-toggle");
+    var label = document.getElementById("theme-label");
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (button) {
+      button.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
+      var use = button.querySelector("use");
+      if (use) use.setAttribute("href", theme === "dark" ? "#i-sun" : "#i-moon");
+    }
+    if (label) label.textContent = theme === "dark" ? "Light mode" : "Dark mode";
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#0b1417" : "#e8f1f2");
+  }
+
+  function initTheme() {
+    var saved = localStorage.getItem("docsmith-theme");
+    var preferred =
+      saved ||
+      (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light");
+    applyTheme(preferred === "dark" ? "dark" : "light");
+  }
+
+  function toggleTheme() {
+    applyTheme(
+      document.documentElement.dataset.theme === "dark" ? "light" : "dark"
+    );
+  }
+
   function formatDuration(seconds) {
     if (!isFinite(seconds) || seconds <= 0) return "";
     if (seconds < 60) return Math.ceil(seconds) + "s";
@@ -2017,6 +2048,38 @@
       });
     }
     renderJobsTable();
+  }
+
+  function downloadSelectedBundle() {
+    var ids = selectedJobIds();
+    if (!ids.length) return;
+    if (ids.length > 50) {
+      showToast("A bundle can contain at most 50 documents");
+      return;
+    }
+    var unfinished = ids.filter(function (id) {
+      var job = state.jobs.find(function (candidate) {
+        return candidate.id === id;
+      });
+      return !job || job.state !== "completed";
+    });
+    if (unfinished.length) {
+      showToast("Bundles can only include completed documents");
+      return;
+    }
+    var anchor = ids[0];
+    var url =
+      "/v1/extractions/" +
+      encodeURIComponent(anchor) +
+      "/archive?jobs=" +
+      ids.map(encodeURIComponent).join(",");
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = "library-" + ids.length + "-documents.zip";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast("Building a bundle of " + ids.length + " documents…");
   }
 
   function bulkSetFavorite(favorite) {
@@ -4093,6 +4156,7 @@
 
   // ==================== EVENT LISTENERS ====================
   function bindEvents() {
+    document.getElementById("theme-toggle").addEventListener("click", toggleTheme);
     document.querySelectorAll(".nav-item").forEach(function (btn) {
       btn.addEventListener("click", function () {
         switchTab(btn.getAttribute("data-tab"));
@@ -4267,6 +4331,9 @@
       .getElementById("bulk-select-all-btn")
       .addEventListener("click", selectAllVisibleJobs);
     document
+      .getElementById("bulk-download-btn")
+      .addEventListener("click", downloadSelectedBundle);
+    document
       .getElementById("bulk-favorite-btn")
       .addEventListener("click", function () {
         bulkSetFavorite(true);
@@ -4400,6 +4467,8 @@
   }
 
   // ==================== BOOTSTRAP ====================
+  initTheme();
+
   document.addEventListener("DOMContentLoaded", function () {
     bindEvents();
     document.getElementById("pg-source-input").value = PRESETS.doctags.source;

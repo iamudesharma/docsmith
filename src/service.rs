@@ -2961,6 +2961,9 @@ async fn events(
 #[derive(Deserialize)]
 struct ArchiveQuery {
     units: Option<bool>,
+    /// Comma-separated job ids for a multi-document export packet. The path id remains the
+    /// authorization anchor and must belong to the caller.
+    jobs: Option<String>,
 }
 async fn view() -> Html<&'static str> {
     Html(WEB_INDEX)
@@ -2972,6 +2975,56 @@ async fn archive(
     Query(query): Query<ArchiveQuery>,
 ) -> ApiResult<Response> {
     app.authorize(&id, &headers)?;
+    let include_units = query.units.unwrap_or(false);
+    if let Some(raw) = query
+        .jobs
+        .as_deref()
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+    {
+        let mut ids: Vec<String> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(str::to_owned)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        if ids.len() > 50 {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_bundle",
+                "A bundle can contain at most 50 jobs",
+            ));
+        }
+        let mut jobs = Vec::with_capacity(ids.len());
+        for job_id in ids {
+            app.authorize(&job_id, &headers)?;
+            let job = app.job(&job_id)?;
+            if job.state != "completed" {
+                return Err(error(
+                    StatusCode::CONFLICT,
+                    "not_ready",
+                    "Every bundled job must have completed",
+                ));
+            }
+            jobs.push(job);
+        }
+        let data_dir = app.config.data_dir.clone();
+        let count = jobs.len();
+        let path =
+            tokio::task::spawn_blocking(move || build_bundle(&data_dir, &jobs, include_units))
+                .await
+                .map_err(anyhow::Error::from)??;
+        let mut response = stream_file(path, "application/zip").await?;
+        response.headers_mut().insert(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"library-{count}-documents.zip\"")
+                .parse()
+                .expect("static header"),
+        );
+        return Ok(response);
+    }
     if app.job(&id)?.state != "completed" {
         return Err(error(
             StatusCode::CONFLICT,
@@ -2980,7 +3033,6 @@ async fn archive(
         ));
     }
     let dir = app.dir(&id);
-    let include_units = query.units.unwrap_or(false);
     let path = tokio::task::spawn_blocking(move || build_archive(&dir, include_units))
         .await
         .map_err(anyhow::Error::from)??;
@@ -2993,20 +3045,16 @@ async fn archive(
     );
     Ok(response)
 }
-/// Zip the result artifacts (and optionally unit checkpoints) into a temp file inside the
-/// job directory; the file streams back and is replaced on the next archive request.
-fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> {
-    use std::io::{BufWriter, Write};
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("archive.zip.tmp-") {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
-    let path = dir.join(format!("archive.zip.tmp-{}", uuid::Uuid::new_v4()));
-    let mut zip = zip::ZipWriter::new(BufWriter::new(std::fs::File::create(&path)?));
+type ArchiveZip = zip::ZipWriter<std::io::BufWriter<std::fs::File>>;
+
+/// Add one job's artifacts to an open zip under `prefix` (empty for a single-job archive).
+fn add_archive_entries(
+    zip: &mut ArchiveZip,
+    dir: &std::path::Path,
+    prefix: &str,
+    include_units: bool,
+) -> Result<()> {
+    use std::io::Write;
     let options = zip::write::SimpleFileOptions::default();
     for name in [
         "result.json",
@@ -3022,8 +3070,8 @@ fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> 
     ] {
         let source = dir.join(name);
         if source.is_file() {
-            zip.start_file(name, options)?;
-            std::io::copy(&mut std::fs::File::open(&source)?, &mut zip)?;
+            zip.start_file(format!("{prefix}{name}"), options)?;
+            std::io::copy(&mut std::fs::File::open(&source)?, zip)?;
         }
     }
     // Keep the original upload in the archive under a readable name. The staged `input` file
@@ -3037,8 +3085,8 @@ fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> 
                     .unwrap_or("original");
                 let input = dir.join("input");
                 if input.is_file() {
-                    zip.start_file(format!("original/{safe}"), options)?;
-                    std::io::copy(&mut std::fs::File::open(&input)?, &mut zip)?;
+                    zip.start_file(format!("{prefix}original/{safe}"), options)?;
+                    std::io::copy(&mut std::fs::File::open(&input)?, zip)?;
                 }
             }
         }
@@ -3048,16 +3096,16 @@ fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> 
         if let Ok(bytes) = std::fs::read(dir.join("result.json")) {
             if let Ok(mut document) = serde_json::from_slice::<Document>(&bytes) {
                 apply_review(&mut document, &review);
-                zip.start_file("reviewed/result.md", options)?;
+                zip.start_file(format!("{prefix}reviewed/result.md"), options)?;
                 zip.write_all(crate::model::markdown(&document).as_bytes())?;
-                zip.start_file("reviewed/result.txt", options)?;
+                zip.start_file(format!("{prefix}reviewed/result.txt"), options)?;
                 zip.write_all(crate::model::plaintext(&document).as_bytes())?;
-                zip.start_file("reviewed/result.html", options)?;
+                zip.start_file(format!("{prefix}reviewed/result.html"), options)?;
                 zip.write_all(reviewed_html(&document).as_bytes())?;
             }
         }
     }
-    for (folder, prefix) in [("assets", "assets"), ("pages", "pages"), ("units", "units")] {
+    for (folder, sub) in [("assets", "assets"), ("pages", "pages"), ("units", "units")] {
         if folder == "units" && !include_units {
             continue;
         }
@@ -3072,9 +3120,64 @@ fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> 
             .collect::<Vec<_>>();
         names.sort();
         for name in names {
-            zip.start_file(format!("{prefix}/{name}"), options)?;
-            std::io::copy(&mut std::fs::File::open(source.join(&name))?, &mut zip)?;
+            zip.start_file(format!("{prefix}{sub}/{name}"), options)?;
+            std::io::copy(&mut std::fs::File::open(source.join(&name))?, zip)?;
         }
+    }
+    Ok(())
+}
+
+/// Zip the result artifacts (and optionally unit checkpoints) into a temp file inside the
+/// job directory; the file streams back and is replaced on the next archive request.
+fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> {
+    use std::io::{BufWriter, Write};
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("archive.zip.tmp-") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let path = dir.join(format!("archive.zip.tmp-{}", uuid::Uuid::new_v4()));
+    let mut zip = zip::ZipWriter::new(BufWriter::new(std::fs::File::create(&path)?));
+    add_archive_entries(&mut zip, dir, "", include_units)?;
+    let mut writer = zip.finish()?;
+    writer.flush()?;
+    Ok(path)
+}
+
+/// Bundle several completed jobs into one zip with a manifest and per-job folders.
+fn build_bundle(data_dir: &std::path::Path, jobs: &[Job], include_units: bool) -> Result<PathBuf> {
+    use std::io::{BufWriter, Write};
+    if let Ok(entries) = std::fs::read_dir(data_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("bundle.zip.tmp-") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let path = data_dir.join(format!("bundle.zip.tmp-{}", uuid::Uuid::new_v4()));
+    let mut zip = zip::ZipWriter::new(BufWriter::new(std::fs::File::create(&path)?));
+    let options = zip::write::SimpleFileOptions::default();
+    zip.start_file("manifest.json", options)?;
+    zip.write_all(
+        serde_json::to_string_pretty(&json!({
+            "schema_version": "bundle1",
+            "created_at": epoch(),
+            "count": jobs.len(),
+            "jobs": jobs,
+        }))?
+        .as_bytes(),
+    )?;
+    for job in jobs {
+        add_archive_entries(
+            &mut zip,
+            &data_dir.join("jobs").join(&job.id),
+            &format!("jobs/{}/", job.id),
+            include_units,
+        )?;
     }
     let mut writer = zip.finish()?;
     writer.flush()?;
@@ -3275,6 +3378,7 @@ pub fn openapi() -> Value {
         }
         if path.ends_with("/archive") {
             params.push(json!({"name":"units","in":"query","description":"Include unit checkpoints in the archive","schema":{"type":"boolean"}}));
+            params.push(json!({"name":"jobs","in":"query","description":"Comma-separated completed job ids for a multi-document bundle with manifest.json","schema":{"type":"string"}}));
         }
         if path == "/v1/extractions/{id}" && method == "patch" {
             params.push(json!({"name":"library","in":"query","description":"Update display name, collection, tags and favorite instead of review data","schema":{"type":"boolean"}}));
