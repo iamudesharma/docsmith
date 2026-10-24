@@ -3,7 +3,7 @@
     "health readiness",
     "unauthorized upload rejected",
     "multipart 202",
-    "durable complete {'id': 'dde6e5ee-8622-4f61-9cd6-ae38898ecf07', 'state': 'completed', 'filename': 'quoted.csv', 'created_at': 1792837555, 'updated_at': 1792837556, 'progress': 1, 'total': 1, 'options': {'parser': 'direct', 'ocr': False, 'ocr_auto_rotate': True, 'ocr_provider': 'tesseract', 'languages': 'eng', 'vision': False, 'interpret_diagrams': False, 'delimiter': None, 'flexible_rows': True, 'compact_tables': False, 'result_format': 'json', 'pages': None, 'chunk_chars': None, 'chunk_overlap': None, 'page_images': 'none'}, 'result_status': 'complete', 'error': None, 'warnings': [], 'unit_failures': []}",
+    "durable complete {'id': 'c9aa84dc-167a-40ca-8a29-baa7811fa9dc', 'state': 'completed', 'filename': 'quoted.csv', 'created_at': 1792843541, 'updated_at': 1792843541, 'progress': 1, 'total': 1, 'options': {'parser': 'direct', 'ocr': False, 'ocr_auto_rotate': True, 'ocr_provider': 'tesseract', 'languages': 'eng', 'vision': False, 'interpret_diagrams': False, 'delimiter': None, 'flexible_rows': True, 'compact_tables': False, 'result_format': 'json', 'pages': None, 'chunk_chars': None, 'chunk_overlap': None, 'page_images': 'none'}, 'display_name': None, 'collection': None, 'tags': [], 'favorite': False, 'result_status': 'complete', 'error': None, 'warnings': [], 'unit_failures': []}",
     "sink command runs on completion",
     "canonical cells",
     "unit endpoint",
@@ -45,6 +45,11 @@
     "canonical JSON keeps original text",
     "review sidecar is fetchable",
     "archive includes reviewed exports",
+    "portable report is self-contained and reviewed",
+    "library metadata persists",
+    "library metadata appears in listings",
+    "search matches the display title",
+    "report embeds page images",
     "review page verification persists",
     "review revert removes the correction",
     "review patch saves a table cell correction",
@@ -75,7 +80,7 @@
     "tenant disk quota rejects new storage",
     "native S3 upload signs and PUTs the result"
   ],
-  "count": 74,
+  "count": 79,
   "date": "2026-10-24",
   "platform": "darwin"
 }

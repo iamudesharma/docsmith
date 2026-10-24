@@ -24,8 +24,9 @@ DOC_XBERG=/path/to/xberg target/debug/doc-extractor extract fixtures/digital.pdf
 
 # HTTP service:
 target/debug/doc-extractor serve --bind 127.0.0.1:8787 --data-dir data/service
-# Workbench: ⌘K search, deep-linkable pages, live progress/cancel/retry, table CSV export,
-# page quality/review, inline corrections and on-demand PDF page previews.
+# Workbench: ⌘K search, deep-linkable pages, live progress/cancel/retry, library tags and
+# collections, continuous reading, table CSV, page review/corrections, on-demand PDF previews
+# and a self-contained HTML report.
 open http://127.0.0.1:8787/
 # Interactive API console (Swagger UI; assets are compiled into the binary, no CDN):
 open http://127.0.0.1:8787/docs
@@ -50,6 +51,12 @@ curl -X PATCH http://127.0.0.1:8787/v1/extractions/JOB_ID \
   -H 'content-type: application/json' \
   -d '{"unit_id":"u1","block_id":"u1-b2","text":"corrected text"}'
 curl 'http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=markdown&review=true'
+# Library title, collection, tags and favorite:
+curl -X PATCH 'http://127.0.0.1:8787/v1/extractions/JOB_ID?library=true' \
+  -H 'content-type: application/json' \
+  -d '{"display_name":"October board pack","collection":"Board","tags":["finance"],"favorite":true}'
+# Self-contained printable report with embedded page images:
+curl -o report.html 'http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=report'
 curl http://127.0.0.1:8787/v1/stats
 curl -N http://127.0.0.1:8787/v1/extractions/JOB_ID/events
 curl -O -J http://127.0.0.1:8787/v1/extractions/JOB_ID/archive

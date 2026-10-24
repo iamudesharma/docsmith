@@ -39,6 +39,8 @@
     <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6.5 10a5.5 5.5 0 0 1 11 0c0 4 1.5 5.5 1.5 5.5H5s1.5-1.5 1.5-5.5Z"/><path d="M10 18.5a2 2 0 0 0 4 0"/></symbol>
     <symbol id="i-pencil" viewBox="0 0 24 24"><path d="m4.5 19.5 4.2-1 9.6-9.6a2.1 2.1 0 0 0-3-3L5.7 15.5l-1.2 4Z"/><path d="m13.8 7.4 3 3"/></symbol>
     <symbol id="i-badge-check" viewBox="0 0 24 24"><path d="M12 3.5 5 6v6c0 4.5 3 7.4 7 8.5 4-1.1 7-4 7-8.5V6l-7-2.5Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.9L12 3.5Z"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="m4 4 7.2.6 8.2 8.2a2 2 0 0 1 0 2.8l-4.6 4.6a2 2 0 0 1-2.8 0L4.6 12 4 4Z"/><circle cx="8.2" cy="8.2" r="1.2"/></symbol>
   </svg>
 
   <div class="ambient" aria-hidden="true">
@@ -302,6 +304,37 @@
                 </div>
               </div>
 
+              <div class="library-bar">
+                <select id="library-collection-filter" aria-label="Filter by collection">
+                  <option value="">All collections</option>
+                </select>
+                <select id="library-tag-filter" aria-label="Filter by tag">
+                  <option value="">All tags</option>
+                </select>
+                <label class="checkbox-inline">
+                  <input type="checkbox" id="library-favorites-filter">
+                  <span>Favorites</span>
+                </label>
+                <select id="library-sort" aria-label="Sort documents">
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                  <option value="name">Name A–Z</option>
+                  <option value="pages">Most pages</option>
+                  <option value="favorite">Favorites first</option>
+                </select>
+              </div>
+
+              <div class="bulk-bar hidden" id="bulk-bar">
+                <span id="bulk-count">0 selected</span>
+                <button class="btn btn-sm" id="bulk-select-all-btn">Select all</button>
+                <button class="btn btn-sm" id="bulk-favorite-btn">
+                  <svg class="icon"><use href="#i-star"/></svg>
+                  Favorite
+                </button>
+                <button class="btn btn-sm" id="bulk-unfavorite-btn">Unfavorite</button>
+                <button class="btn btn-sm" id="bulk-clear-btn">Clear</button>
+              </div>
+
               <div class="table-wrap">
                 <table class="clean-table" id="jobs-table">
                   <thead>
@@ -341,6 +374,10 @@
               </div>
 
               <span class="badge" id="inspector-doc-status">Ready</span>
+              <button class="btn btn-sm" id="continuous-toggle-btn" aria-pressed="false">
+                <svg class="icon"><use href="#i-book"/></svg>
+                Read all pages
+              </button>
             </div>
 
             <div class="viewer-bar-right" id="inspector-export-links">
@@ -352,6 +389,7 @@
               <a class="btn btn-sm" id="dl-md" href="#" target="_blank" rel="noopener">Markdown</a>
               <a class="btn btn-sm" id="dl-txt" href="#" target="_blank" rel="noopener">Text</a>
               <a class="btn btn-sm" id="dl-html" href="#" target="_blank" rel="noopener">HTML</a>
+              <a class="btn btn-sm" id="dl-report" href="#" target="_blank" rel="noopener">Report</a>
               <a class="btn btn-sm" id="dl-json" href="#" target="_blank" rel="noopener">JSON</a>
               <a class="btn btn-sm" id="dl-jsonl" href="#" target="_blank" rel="noopener">JSONL</a>
               <a class="btn btn-sm btn-primary" id="dl-zip" href="#">
@@ -394,7 +432,9 @@
             <div class="page-filmstrip" id="page-filmstrip" role="list"></div>
           </div>
 
-          <div class="viewer-split">
+          <div class="continuous-reader hidden" id="continuous-reader"></div>
+
+          <div class="viewer-split" id="reader-split">
             <div class="card viewer-left">
               <div class="card-head-row compact">
                 <div>
@@ -640,6 +680,38 @@
 
         <!-- ==================== STATUS ==================== -->
         <section class="tab-panel" id="panel-system" role="tabpanel">
+          <div class="card" style="margin-bottom:1rem">
+            <div class="card-head-row compact">
+              <div>
+                <h2 class="card-title">Your library</h2>
+                <p class="card-desc">Live counts from the documents in this local workspace.</p>
+              </div>
+              <span class="badge badge-primary" id="library-overview-badge">Local workspace</span>
+            </div>
+            <div class="summary-grid" id="library-overview">
+              <div class="summary-box">
+                <span class="summary-label">Documents</span>
+                <strong class="summary-value" id="overview-documents">0</strong>
+                <span class="summary-note">Retained extraction jobs</span>
+              </div>
+              <div class="summary-box">
+                <span class="summary-label">Pages and sections</span>
+                <strong class="summary-value" id="overview-pages">0</strong>
+                <span class="summary-note">Across the current view</span>
+              </div>
+              <div class="summary-box">
+                <span class="summary-label">Favorites</span>
+                <strong class="summary-value" id="overview-favorites">0</strong>
+                <span class="summary-note">Pinned for quick access</span>
+              </div>
+              <div class="summary-box">
+                <span class="summary-label">Collections and tags</span>
+                <strong class="summary-value" id="overview-collections">0</strong>
+                <span class="summary-note" id="overview-tags-note">0 tags in use</span>
+              </div>
+            </div>
+          </div>
+
           <div class="two-col-layout">
             <div class="card">
               <div class="card-head-row">
@@ -727,6 +799,45 @@
           </div>
         </section>
       </main>
+    </div>
+  </div>
+
+  <!-- ==================== LIBRARY EDITOR ==================== -->
+  <div class="modal-backdrop hidden" id="library-modal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="library-modal-title">
+      <div class="modal-head">
+        <div>
+          <h2 class="card-title" id="library-modal-title">Edit document details</h2>
+          <p class="card-desc">Titles, collections and tags stay in the local job database.</p>
+        </div>
+        <button class="btn btn-sm btn-icon" id="library-modal-close" aria-label="Close">
+          <svg class="icon"><use href="#i-x"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <label class="field-group">
+          <span class="field-label">Display title</span>
+          <input id="library-name-input" type="text" maxlength="200" placeholder="Use the original filename">
+        </label>
+        <label class="field-group">
+          <span class="field-label">Collection</span>
+          <input id="library-collection-input" type="text" maxlength="100" list="library-collection-options" placeholder="e.g. Invoices">
+          <datalist id="library-collection-options"></datalist>
+        </label>
+        <label class="field-group">
+          <span class="field-label">Tags</span>
+          <input id="library-tags-input" type="text" maxlength="800" placeholder="invoice, 2026, review">
+          <span class="field-help">Comma-separated; up to 32 tags.</span>
+        </label>
+        <label class="checkbox-inline" style="margin-top:2px">
+          <input type="checkbox" id="library-favorite-input">
+          <span>Favorite this document</span>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="library-modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="library-modal-save">Save details</button>
+      </div>
     </div>
   </div>
 

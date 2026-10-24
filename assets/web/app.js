@@ -46,6 +46,10 @@
     pendingDeletes: {},
     lastJobStates: {},
     jobsSignature: "",
+    selectedJobIds: {},
+    libraryModalJobId: "",
+    continuousMode: false,
+    continuousLimit: 40,
     notify: localStorage.getItem("docsmith-notify") === "1",
   };
 
@@ -1219,6 +1223,7 @@
         type: "doc",
         job_id: job.id,
         filename: job.filename,
+        display_name: job.display_name,
         state: job.state,
         snippet:
           job.total > 0
@@ -1284,6 +1289,7 @@
               type: "doc",
               job_id: job.id,
               filename: job.filename,
+              display_name: job.display_name,
               state: job.state,
               snippet:
                 job.total > 0
@@ -1299,6 +1305,7 @@
             type: "match",
             job_id: match.job_id,
             filename: match.filename,
+            display_name: match.display_name,
             unit_id: match.unit_id,
             unit_name: match.unit_name,
             page: match.page,
@@ -1355,12 +1362,13 @@
           ? "i-book"
           : "i-file"
         : "i-file";
+      var label = item.display_name || item.filename;
       var title = item.type === "match"
-        ? escapeHtml(item.filename) +
+        ? escapeHtml(label) +
           " <span>" +
           escapeHtml(item.unit_name || "Page " + item.page) +
           "</span>"
-        : escapeHtml(item.filename) + " <span>" + escapeHtml(item.state || "") + "</span>";
+        : escapeHtml(label) + " <span>" + escapeHtml(item.state || "") + "</span>";
       var snippet = item.type === "match" && item.snippet ? item.snippet : item.snippet || "";
       button.innerHTML =
         "<span class='palette-result-icon'><svg class='icon'><use href='#" +
@@ -1776,10 +1784,266 @@
     uploadFiles(files, false);
   }
 
+  // ==================== LIBRARY ====================
+  function jobDisplayName(job) {
+    return (job && job.display_name) || (job && job.filename) || "Document";
+  }
+
+  function renderLibraryOverview() {
+    var documents = document.getElementById("overview-documents");
+    if (!documents) return;
+    var pages = 0;
+    var favorites = 0;
+    var collections = {};
+    var tags = {};
+    state.jobs.forEach(function (job) {
+      pages += job.total || job.progress || 0;
+      if (job.favorite) favorites += 1;
+      if (job.collection) collections[job.collection] = true;
+      (job.tags || []).forEach(function (tag) {
+        tags[tag] = true;
+      });
+    });
+    documents.textContent = state.jobs.length;
+    document.getElementById("overview-pages").textContent = pages;
+    document.getElementById("overview-favorites").textContent = favorites;
+    document.getElementById("overview-collections").textContent =
+      Object.keys(collections).length;
+    document.getElementById("overview-tags-note").textContent =
+      Object.keys(tags).length + " tags in use";
+  }
+
+  function patchLibrary(jobId, updates) {
+    return fetch(
+      "/v1/extractions/" + encodeURIComponent(jobId) + "?library=true",
+      {
+        method: "PATCH",
+        headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+        body: JSON.stringify(updates),
+      }
+    ).then(function (response) {
+      return response.json().then(function (body) {
+        if (!response.ok) {
+          throw new Error(
+            (body.error && body.error.message) || "Could not update document details"
+          );
+        }
+        var index = state.jobs.findIndex(function (job) {
+          return job.id === jobId;
+        });
+        if (index >= 0) state.jobs[index] = body;
+        if (state.currentJobId === jobId) {
+          state.currentJobMeta = body;
+          if (state.activeTab === "inspector") {
+            document.getElementById("app-title").textContent =
+              "Reader — " + jobDisplayName(body);
+          }
+        }
+        return body;
+      });
+    });
+  }
+
+  function visibleLibraryJobs() {
+    var collection = document.getElementById("library-collection-filter").value;
+    var tag = document.getElementById("library-tag-filter").value;
+    var favoritesOnly = document.getElementById("library-favorites-filter").checked;
+    var sort = document.getElementById("library-sort").value;
+    var jobs = state.jobs.filter(function (job) {
+      if (collection && job.collection !== collection) return false;
+      if (tag && !(job.tags || []).includes(tag)) return false;
+      if (favoritesOnly && !job.favorite) return false;
+      return true;
+    });
+    jobs.sort(function (a, b) {
+      if (sort === "oldest") return a.created_at - b.created_at;
+      if (sort === "name") {
+        return jobDisplayName(a).localeCompare(jobDisplayName(b), undefined, {
+          sensitivity: "base",
+        });
+      }
+      if (sort === "pages") return (b.total || 0) - (a.total || 0);
+      if (sort === "favorite") {
+        return Number(b.favorite) - Number(a.favorite) || b.created_at - a.created_at;
+      }
+      return b.created_at - a.created_at;
+    });
+    return jobs;
+  }
+
+  function refreshLibraryFilters() {
+    var collectionSelect = document.getElementById("library-collection-filter");
+    var tagSelect = document.getElementById("library-tag-filter");
+    if (!collectionSelect || !tagSelect) return;
+    var collections = {};
+    var tags = {};
+    state.jobs.forEach(function (job) {
+      if (job.collection) collections[job.collection] = true;
+      (job.tags || []).forEach(function (tag) {
+        tags[tag] = true;
+      });
+    });
+    var previousCollection = collectionSelect.value;
+    var previousTag = tagSelect.value;
+    function fill(select, values, emptyLabel, previous) {
+      select.innerHTML = "";
+      var empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = emptyLabel;
+      select.appendChild(empty);
+      values.forEach(function (value) {
+        var option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+      });
+      select.value = values.includes(previous) ? previous : "";
+    }
+    fill(
+      collectionSelect,
+      Object.keys(collections).sort(),
+      "All collections",
+      previousCollection
+    );
+    fill(tagSelect, Object.keys(tags).sort(), "All tags", previousTag);
+    var datalist = document.getElementById("library-collection-options");
+    if (datalist) {
+      datalist.innerHTML = "";
+      Object.keys(collections)
+        .sort()
+        .forEach(function (collection) {
+          var option = document.createElement("option");
+          option.value = collection;
+          datalist.appendChild(option);
+        });
+    }
+  }
+
+  function openLibraryModal(jobId) {
+    var job = state.jobs.find(function (candidate) {
+      return candidate.id === jobId;
+    });
+    if (!job) return;
+    state.libraryModalJobId = jobId;
+    document.getElementById("library-name-input").value = job.display_name || "";
+    document.getElementById("library-collection-input").value = job.collection || "";
+    document.getElementById("library-tags-input").value = (job.tags || []).join(", ");
+    document.getElementById("library-favorite-input").checked = Boolean(job.favorite);
+    var modal = document.getElementById("library-modal");
+    modal.classList.remove("hidden");
+    document.getElementById("library-name-input").focus();
+  }
+
+  function closeLibraryModal() {
+    state.libraryModalJobId = "";
+    document.getElementById("library-modal").classList.add("hidden");
+  }
+
+  function saveLibraryModal() {
+    if (!state.libraryModalJobId) return;
+    var jobId = state.libraryModalJobId;
+    var tags = document
+      .getElementById("library-tags-input")
+      .value.split(",")
+      .map(function (tag) {
+        return tag.trim();
+      })
+      .filter(Boolean);
+    var name = document.getElementById("library-name-input").value.trim();
+    var collection = document.getElementById("library-collection-input").value.trim();
+    patchLibrary(jobId, {
+      display_name: name,
+      collection: collection,
+      tags: tags,
+      favorite: document.getElementById("library-favorite-input").checked,
+    })
+      .then(function () {
+        closeLibraryModal();
+        refreshLibraryFilters();
+        renderJobsTable();
+        populateJobSelector();
+        showToast("Document details saved");
+      })
+      .catch(function (error) {
+        showToast(String(error.message || error));
+      });
+  }
+
+  function toggleJobFavorite(job) {
+    patchLibrary(job.id, { favorite: !job.favorite })
+      .then(function (updated) {
+        refreshLibraryFilters();
+        renderJobsTable();
+        populateJobSelector();
+        showToast(updated.favorite ? "Added to favorites" : "Removed from favorites");
+      })
+      .catch(function (error) {
+        showToast(String(error.message || error));
+      });
+  }
+
+  function toggleJobSelection(jobId, selected) {
+    if (selected) state.selectedJobIds[jobId] = true;
+    else delete state.selectedJobIds[jobId];
+    updateBulkBar();
+  }
+
+  function selectedJobIds() {
+    return Object.keys(state.selectedJobIds).filter(function (id) {
+      return state.jobs.some(function (job) {
+        return job.id === id;
+      });
+    });
+  }
+
+  function updateBulkBar() {
+    var ids = selectedJobIds();
+    var bar = document.getElementById("bulk-bar");
+    var count = document.getElementById("bulk-count");
+    if (!bar || !count) return;
+    count.textContent = ids.length + " selected";
+    bar.classList.toggle("hidden", ids.length === 0);
+  }
+
+  function selectAllVisibleJobs() {
+    var jobs = visibleLibraryJobs();
+    var allSelected = jobs.every(function (job) {
+      return state.selectedJobIds[job.id];
+    });
+    state.selectedJobIds = {};
+    if (!allSelected) {
+      jobs.forEach(function (job) {
+        state.selectedJobIds[job.id] = true;
+      });
+    }
+    renderJobsTable();
+  }
+
+  function bulkSetFavorite(favorite) {
+    var ids = selectedJobIds();
+    if (!ids.length) return;
+    var chain = Promise.resolve();
+    ids.forEach(function (id) {
+      chain = chain.then(function () {
+        return patchLibrary(id, { favorite: favorite });
+      });
+    });
+    chain
+      .then(function () {
+        state.selectedJobIds = {};
+        refreshLibraryFilters();
+        renderJobsTable();
+        showToast(favorite ? "Selected documents favorited" : "Favorites removed");
+      })
+      .catch(function (error) {
+        showToast(String(error.message || error));
+      });
+  }
+
   // ==================== QUEUE LISTING ====================
   function refreshQueue() {
     var filter = document.getElementById("queue-state-filter").value;
-    var url = "/v1/extractions?limit=50" + (filter ? "&state=" + encodeURIComponent(filter) : "");
+    var url = "/v1/extractions?limit=200" + (filter ? "&state=" + encodeURIComponent(filter) : "");
     apiGet(url)
       .then(function (data) {
         var previous = state.lastJobStates;
@@ -1793,6 +2057,7 @@
           }
           previous[job.id] = job.state;
         });
+        refreshLibraryFilters();
         var signature = JSON.stringify(
           state.jobs.map(function (job) {
             return [
@@ -1802,6 +2067,10 @@
               job.total,
               job.updated_at,
               job.filename,
+              job.display_name,
+              job.collection,
+              job.tags,
+              job.favorite,
               job.unit_failures ? job.unit_failures.length : 0,
               job.options,
             ];
@@ -1913,15 +2182,22 @@
   function renderJobsTable() {
     var tbody = document.getElementById("jobs-tbody");
     tbody.innerHTML = "";
-    if (!state.jobs.length) {
+    var jobs = visibleLibraryJobs();
+    if (!jobs.length) {
       var tr = document.createElement("tr");
       tr.innerHTML =
-        "<td colspan='4' class='muted'>No documents here yet. Add files on the left, or search your archive from the header.</td>";
+        "<td colspan='4' class='muted'>" +
+        (state.jobs.length
+          ? "No documents match these library filters."
+          : "No documents here yet. Add files on the left, or search your archive from the header.") +
+        "</td>";
       tbody.appendChild(tr);
+      updateBulkBar();
+      renderLibraryOverview();
       return;
     }
 
-    state.jobs.forEach(function (job, index) {
+    jobs.forEach(function (job) {
       var tr = document.createElement("tr");
       var failures = job.unit_failures || [];
       var hasFailures = failures.length > 0;
@@ -1964,16 +2240,83 @@
       if (opts.pages) optSummary.push("Pages " + opts.pages);
 
       var tdDoc = document.createElement("td");
-      tdDoc.innerHTML =
-        "<div class='row-title'>" +
-        escapeHtml(job.filename || "Document") +
-        "</div><div class='row-sub'>" +
-        escapeHtml(job.id.slice(0, 8)) +
-        "</div><div class='row-options' title='" +
-        escapeHtml(optSummary.join(" · ") || "Standard options") +
-        "'>" +
-        escapeHtml(optSummary.join(" · ") || "Standard") +
-        "</div>";
+      var titleLine = document.createElement("div");
+      titleLine.className = "row-title-line";
+      var selectBox = document.createElement("input");
+      selectBox.type = "checkbox";
+      selectBox.className = "job-select";
+      selectBox.checked = Boolean(state.selectedJobIds[job.id]);
+      selectBox.setAttribute("aria-label", "Select " + jobDisplayName(job));
+      selectBox.addEventListener("change", function () {
+        toggleJobSelection(job.id, selectBox.checked);
+      });
+      titleLine.appendChild(selectBox);
+      var favorite = document.createElement("button");
+      favorite.type = "button";
+      favorite.className =
+        "favorite-btn" + (job.favorite ? " is-favorite" : "");
+      favorite.title = job.favorite ? "Remove from favorites" : "Add to favorites";
+      favorite.setAttribute("aria-label", favorite.title);
+      favorite.innerHTML = "<svg class='icon'><use href='#i-star'/></svg>";
+      favorite.addEventListener("click", function () {
+        toggleJobFavorite(job);
+      });
+      titleLine.appendChild(favorite);
+      var title = document.createElement("div");
+      title.className = "row-title";
+      title.textContent = jobDisplayName(job);
+      titleLine.appendChild(title);
+      var edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "favorite-btn";
+      edit.title = "Edit title, collection and tags";
+      edit.setAttribute("aria-label", edit.title);
+      edit.innerHTML = "<svg class='icon'><use href='#i-pencil'/></svg>";
+      edit.addEventListener("click", function () {
+        openLibraryModal(job.id);
+      });
+      titleLine.appendChild(edit);
+      tdDoc.appendChild(titleLine);
+      var sub = document.createElement("div");
+      sub.className = "row-sub";
+      sub.textContent =
+        (job.display_name ? job.filename + " · " : "") + job.id.slice(0, 8);
+      tdDoc.appendChild(sub);
+      if (job.collection || (job.tags && job.tags.length)) {
+        var tagsLine = document.createElement("div");
+        tagsLine.className = "row-tags";
+        if (job.collection) {
+          var collectionChip = document.createElement("button");
+          collectionChip.type = "button";
+          collectionChip.className = "collection-chip";
+          collectionChip.textContent = job.collection;
+          collectionChip.title = "Filter by this collection";
+          collectionChip.addEventListener("click", function () {
+            document.getElementById("library-collection-filter").value =
+              job.collection;
+            renderJobsTable();
+          });
+          tagsLine.appendChild(collectionChip);
+        }
+        (job.tags || []).forEach(function (tag) {
+          var chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "tag-chip";
+          chip.textContent = tag;
+          chip.title = "Filter by this tag";
+          chip.addEventListener("click", function () {
+            document.getElementById("library-tag-filter").value = tag;
+            renderJobsTable();
+          });
+          tagsLine.appendChild(chip);
+        });
+        tdDoc.appendChild(tagsLine);
+      }
+      var options = document.createElement("div");
+      options.className = "row-options";
+      options.title = optSummary.join(" · ") || "Standard options";
+      options.textContent = optSummary.join(" · ") || "Standard";
+      tdDoc.appendChild(options);
 
       var tdState = document.createElement("td");
       tdState.innerHTML =
@@ -2055,7 +2398,7 @@
       delBtn.setAttribute("aria-label", "Remove this document");
       delBtn.innerHTML = "<svg class='icon'><use href='#i-x'/></svg>";
       delBtn.addEventListener("click", function () {
-        scheduleDelete(job.id, index);
+        scheduleDelete(job.id);
       });
       tdAct.appendChild(delBtn);
 
@@ -2065,6 +2408,8 @@
       tr.appendChild(tdAct);
       tbody.appendChild(tr);
     });
+    updateBulkBar();
+    renderLibraryOverview();
   }
 
   function cancelExtraction(job) {
@@ -2113,11 +2458,16 @@
       });
   }
 
-  function scheduleDelete(jobId, index) {
+  function scheduleDelete(jobId) {
+    var index = state.jobs.findIndex(function (candidate) {
+      return candidate.id === jobId;
+    });
     var job = state.jobs[index];
     if (!job) return;
     state.pendingDeletes[jobId] = true;
+    delete state.selectedJobIds[jobId];
     state.jobs.splice(index, 1);
+    updateBulkBar();
     renderJobsTable();
     populateJobSelector();
     var timer = setTimeout(function () {
@@ -2167,7 +2517,7 @@
     state.jobs.forEach(function (job) {
       var opt = document.createElement("option");
       opt.value = job.id;
-      opt.textContent = job.filename + " (" + job.id.slice(0, 8) + ")";
+      opt.textContent = jobDisplayName(job) + " (" + job.id.slice(0, 8) + ")";
       sel.appendChild(opt);
     });
     if (prev && state.jobs.some(function (j) { return j.id === prev; })) {
@@ -2205,7 +2555,7 @@
         state.currentJobMeta = jobMeta;
         if (state.activeTab === "inspector") {
           document.getElementById("app-title").textContent =
-            "Reader — " + (jobMeta.filename || jobId.slice(0, 8));
+            "Reader — " + jobDisplayName(jobMeta);
         }
         document.getElementById("inspector-doc-status").textContent =
           jobMeta.state === "completed" ? "Completed" : jobMeta.state;
@@ -2250,6 +2600,8 @@
     document.getElementById("dl-txt").href = base + "/result?format=text" + reviewed;
     document.getElementById("dl-jsonl").href = base + "/result?format=jsonl";
     document.getElementById("dl-html").href = base + "/result?format=html" + reviewed;
+    var report = document.getElementById("dl-report");
+    if (report) report.href = base + "/result?format=report";
     document.getElementById("dl-zip").href = base + "/archive";
     var original = document.getElementById("dl-original");
     if (original) original.href = base + "/result?format=original";
@@ -2309,6 +2661,7 @@
   }
 
   function selectUnit(unitId) {
+    if (state.continuousMode) setContinuousMode(false);
     state.currentUnitId = unitId;
     var pendingBlock = state.pendingBlockId;
     state.activeBlockId = pendingBlock || "";
@@ -2471,6 +2824,139 @@
       var delta =
         activeRect.left - stripRect.left - (strip.clientWidth - activeRect.width) / 2;
       strip.scrollLeft += delta;
+    }
+  }
+
+  function setContinuousMode(enabled) {
+    if (enabled && !state.currentDoc) {
+      showToast("Open a document first");
+      return;
+    }
+    state.continuousMode = enabled;
+    var button = document.getElementById("continuous-toggle-btn");
+    var split = document.getElementById("reader-split");
+    var reader = document.getElementById("continuous-reader");
+    if (!button || !split || !reader) return;
+    button.setAttribute("aria-pressed", enabled ? "true" : "false");
+    button.innerHTML =
+      "<svg class='icon'><use href='#" +
+      (enabled ? "i-file" : "i-book") +
+      "'/></svg>" +
+      (enabled ? "Single page" : "Read all pages");
+    reader.classList.toggle("hidden", !enabled);
+    split.classList.toggle("hidden", enabled);
+    if (enabled) {
+      state.continuousLimit = 40;
+      renderContinuousReader();
+    }
+  }
+
+  function renderContinuousReader() {
+    var container = document.getElementById("continuous-reader");
+    if (!container || !state.currentDoc) return;
+    var units = state.currentDoc.units || [];
+    container.innerHTML = "";
+    units.slice(0, state.continuousLimit).forEach(function (unit) {
+      var quality = unitQuality(unit);
+      var section = document.createElement("article");
+      section.className = "continuous-page";
+      var head = document.createElement("div");
+      head.className = "continuous-page-head";
+      head.innerHTML =
+        "<h3>" +
+        escapeHtml(unit.name) +
+        "</h3>" +
+        qualityBadgeHtml(quality, true);
+      var open = document.createElement("button");
+      open.className = "btn btn-sm";
+      open.textContent = "Open page";
+      open.addEventListener("click", function () {
+        selectUnit(unit.id);
+        switchSubtab("blocks");
+      });
+      head.appendChild(open);
+      section.appendChild(head);
+
+      var body = document.createElement("div");
+      body.className = "continuous-page-body";
+      var raster = findUnitRasterAsset(unit, state.currentDoc);
+      var preview = state.previewRasters[unit.id];
+      var imageUrl = preview
+        ? preview.url
+        : raster && state.currentJobId
+        ? "/v1/extractions/" +
+          encodeURIComponent(state.currentJobId) +
+          "/assets/" +
+          encodeURIComponent(raster.asset_id)
+        : "";
+      if (imageUrl) {
+        var image = document.createElement("div");
+        image.className = "continuous-page-image";
+        image.innerHTML =
+          "<img loading='lazy' src='" +
+          escapeHtml(imageUrl) +
+          "' alt='" +
+          escapeHtml(unit.name) +
+          "'>";
+        body.appendChild(image);
+      } else {
+        body.classList.add("no-image");
+      }
+      var text = document.createElement("div");
+      text.className = "continuous-text";
+      (unit.blocks || []).forEach(function (block) {
+        if (block.table) {
+          var grid = tableGrid(block);
+          if (!grid.length) return;
+          var wrapper = document.createElement("div");
+          wrapper.className = "continuous-table";
+          var table = document.createElement("table");
+          var maxRows = Math.min(grid.length, 60);
+          for (var r = 0; r < maxRows; r++) {
+            var tr = document.createElement("tr");
+            grid[r].forEach(function (value) {
+              var cell = document.createElement(r === 0 ? "th" : "td");
+              cell.textContent = value;
+              tr.appendChild(cell);
+            });
+            table.appendChild(tr);
+          }
+          wrapper.appendChild(table);
+          if (grid.length > maxRows) {
+            var note = document.createElement("div");
+            note.className = "continuous-empty";
+            note.textContent =
+              "Showing " + maxRows + " of " + grid.length + " table rows";
+            wrapper.appendChild(note);
+          }
+          text.appendChild(wrapper);
+        } else if (block.text) {
+          var paragraph = document.createElement("p");
+          paragraph.textContent = block.text;
+          paragraph.style.marginBottom = "0.7rem";
+          text.appendChild(paragraph);
+        }
+      });
+      if (!text.children.length) {
+        text.innerHTML = "<p class='continuous-empty'>No text on this page.</p>";
+      }
+      body.appendChild(text);
+      section.appendChild(body);
+      container.appendChild(section);
+    });
+    if (units.length > state.continuousLimit) {
+      var more = document.createElement("div");
+      more.className = "continuous-load-more";
+      var button = document.createElement("button");
+      button.className = "btn btn-sm";
+      button.textContent =
+        "Load " + Math.min(40, units.length - state.continuousLimit) + " more pages";
+      button.addEventListener("click", function () {
+        state.continuousLimit += 40;
+        renderContinuousReader();
+      });
+      more.appendChild(button);
+      container.appendChild(more);
     }
   }
 
@@ -3765,6 +4251,45 @@
     });
 
     document.getElementById("refresh-queue-btn").addEventListener("click", refreshQueue);
+    ["library-collection-filter", "library-tag-filter", "library-sort"].forEach(function (id) {
+      document.getElementById(id).addEventListener("change", function () {
+        state.selectedJobIds = {};
+        renderJobsTable();
+      });
+    });
+    document
+      .getElementById("library-favorites-filter")
+      .addEventListener("change", function () {
+        state.selectedJobIds = {};
+        renderJobsTable();
+      });
+    document
+      .getElementById("bulk-select-all-btn")
+      .addEventListener("click", selectAllVisibleJobs);
+    document
+      .getElementById("bulk-favorite-btn")
+      .addEventListener("click", function () {
+        bulkSetFavorite(true);
+      });
+    document
+      .getElementById("bulk-unfavorite-btn")
+      .addEventListener("click", function () {
+        bulkSetFavorite(false);
+      });
+    document.getElementById("bulk-clear-btn").addEventListener("click", function () {
+      state.selectedJobIds = {};
+      renderJobsTable();
+    });
+    document.getElementById("library-modal-close").addEventListener("click", closeLibraryModal);
+    document.getElementById("library-modal-cancel").addEventListener("click", closeLibraryModal);
+    document.getElementById("library-modal-save").addEventListener("click", saveLibraryModal);
+    document.getElementById("library-modal").addEventListener("click", function (ev) {
+      if (ev.target === this) closeLibraryModal();
+    });
+    document.getElementById("library-modal").addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape") closeLibraryModal();
+      else if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") saveLibraryModal();
+    });
 
     document.getElementById("inspector-job-select").addEventListener("change", function (ev) {
       selectJobForInspection(ev.target.value, false);
@@ -3778,6 +4303,11 @@
     document.getElementById("unit-next-btn").addEventListener("click", function () {
       stepUnit(1);
     });
+    document
+      .getElementById("continuous-toggle-btn")
+      .addEventListener("click", function () {
+        setContinuousMode(!state.continuousMode);
+      });
     document.getElementById("toggle-raster-bg").addEventListener("change", renderCurrentUnit);
 
     document.querySelectorAll(".filter-chip").forEach(function (chip) {

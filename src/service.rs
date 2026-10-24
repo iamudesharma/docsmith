@@ -14,6 +14,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::Engine as _;
 use hmac::{Hmac, Mac};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -106,6 +107,15 @@ pub struct Job {
     /// The options this job was queued with, so the UI can show and reuse them.
     #[serde(default)]
     pub options: Options,
+    /// Optional user-facing title; the original `filename` is always retained.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub collection: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub favorite: bool,
     pub result_status: Option<String>,
     pub error: Option<Failure>,
     pub warnings: Vec<String>,
@@ -222,8 +232,15 @@ impl App {
         db.pragma_update(None, "journal_mode", "WAL")?;
         db.pragma_update(None, "synchronous", "FULL")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, filename TEXT NOT NULL, cache_key TEXT NOT NULL, options TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, error TEXT); CREATE INDEX IF NOT EXISTS job_queue ON jobs(state,created_at); CREATE INDEX IF NOT EXISTS job_cache ON jobs(tenant,cache_key,state);")?;
-        // Additive migration: databases created before webhooks lack this column.
+        // Additive migrations: older databases lack these optional columns.
         let _ = db.execute("ALTER TABLE jobs ADD COLUMN callback_url TEXT", []);
+        let _ = db.execute("ALTER TABLE jobs ADD COLUMN display_name TEXT", []);
+        let _ = db.execute("ALTER TABLE jobs ADD COLUMN collection TEXT", []);
+        let _ = db.execute("ALTER TABLE jobs ADD COLUMN tags TEXT", []);
+        let _ = db.execute(
+            "ALTER TABLE jobs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         db.execute_batch("CREATE TABLE IF NOT EXISTS webhook_deliveries(id TEXT PRIMARY KEY, job_id TEXT NOT NULL, url TEXT NOT NULL, event TEXT NOT NULL, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, delivered_at INTEGER, last_error TEXT); CREATE INDEX IF NOT EXISTS webhook_pending ON webhook_deliveries(delivered_at,next_at); CREATE INDEX IF NOT EXISTS webhook_job ON webhook_deliveries(job_id);")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS sink_runs(job_id TEXT PRIMARY KEY, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, completed_at INTEGER, last_error TEXT); CREATE INDEX IF NOT EXISTS sink_pending ON sink_runs(completed_at,next_at);")?;
         // Full-text-ish search over completed results. One row per block (plus one per unit
@@ -320,11 +337,12 @@ impl App {
     pub fn job(&self, id: &str) -> Result<Job> {
         let db = self.db.lock().unwrap();
         let mut job = db.query_row(
-            "SELECT id,state,filename,created_at,updated_at,error,options FROM jobs WHERE id=?1",
+            "SELECT id,state,filename,created_at,updated_at,error,options,display_name,collection,tags,favorite FROM jobs WHERE id=?1",
             [id],
             |r| {
                 let e: Option<String> = r.get(5)?;
                 let options: String = r.get(6)?;
+                let tags: Option<String> = r.get(9)?;
                 Ok(Job {
                     id: r.get(0)?,
                     state: r.get(1)?,
@@ -334,6 +352,12 @@ impl App {
                     progress: 0,
                     total: 0,
                     options: serde_json::from_str(&options).unwrap_or_default(),
+                    display_name: r.get(7)?,
+                    collection: r.get(8)?,
+                    tags: tags
+                        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+                        .unwrap_or_default(),
+                    favorite: r.get::<_, i64>(10)? != 0,
                     result_status: None,
                     error: e.and_then(|s| serde_json::from_str(&s).ok()),
                     warnings: vec![],
@@ -1449,9 +1473,67 @@ async fn update_review(
     State(app): State<App>,
     ApiPath(id): ApiPath<String>,
     headers: HeaderMap,
+    Query(query): Query<UpdateQuery>,
     Json(update): Json<ReviewUpdate>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Response> {
     app.authorize(&id, &headers)?;
+    if query.library.unwrap_or(false) {
+        let job = app.job(&id)?;
+        let display_name = update
+            .display_name
+            .as_deref()
+            .map(|value| value.trim().to_owned())
+            .map(|value| if value.is_empty() { None } else { Some(value) })
+            .unwrap_or(job.display_name);
+        if display_name.as_ref().is_some_and(|name| name.len() > 200) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_library",
+                "Display name is too long",
+            ));
+        }
+        let collection = update
+            .collection
+            .as_deref()
+            .map(|value| value.trim().to_owned())
+            .map(|value| if value.is_empty() { None } else { Some(value) })
+            .unwrap_or(job.collection);
+        if collection.as_ref().is_some_and(|name| name.len() > 100) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_library",
+                "Collection name is too long",
+            ));
+        }
+        let mut tags = update.tags.unwrap_or(job.tags);
+        tags = tags
+            .into_iter()
+            .map(|tag| tag.trim().to_owned())
+            .filter(|tag| !tag.is_empty())
+            .collect();
+        tags.sort();
+        tags.dedup();
+        if tags.len() > 32 || tags.iter().any(|tag| tag.len() > 40) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_library",
+                "Use at most 32 tags of 40 characters or less",
+            ));
+        }
+        let favorite = update.favorite.unwrap_or(job.favorite);
+        app.db.lock().unwrap().execute(
+            "UPDATE jobs SET display_name=?2,collection=?3,tags=?4,favorite=?5,updated_at=?6 WHERE id=?1",
+            params![
+                id,
+                display_name,
+                collection,
+                serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into()),
+                if favorite { 1i64 } else { 0i64 },
+                epoch()
+            ],
+        )?;
+        return Ok(Json(app.job(&id)?).into_response());
+    }
     if app.job(&id)?.state != "completed" {
         return Err(error(
             StatusCode::CONFLICT,
@@ -1459,15 +1541,13 @@ async fn update_review(
             "Review is available after extraction completes",
         ));
     }
-    if !valid_part(&update.unit_id, 'u') {
-        return Err(error(
-            StatusCode::BAD_REQUEST,
-            "invalid_review",
-            "Unknown unit",
-        ));
-    }
+    let unit_id = update
+        .unit_id
+        .clone()
+        .filter(|unit| valid_part(unit, 'u'))
+        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "invalid_review", "Unknown unit"))?;
     if let Some(block) = &update.block_id {
-        let prefix = format!("{}-b", update.unit_id);
+        let prefix = format!("{unit_id}-b");
         if !block.starts_with(&prefix)
             || block.len() > 96
             || !block.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
@@ -1559,9 +1639,7 @@ async fn update_review(
         review["units"] = json!({});
     }
     let units = review["units"].as_object_mut().unwrap();
-    let unit = units
-        .entry(update.unit_id.clone())
-        .or_insert_with(|| json!({}));
+    let unit = units.entry(unit_id.clone()).or_insert_with(|| json!({}));
     if !unit.is_object() {
         *unit = json!({});
     }
@@ -1629,7 +1707,7 @@ async fn update_review(
     tokio::spawn(async move {
         let _ = tokio::task::spawn_blocking(move || worker.index_job_for_search(&index_id)).await;
     });
-    Ok(Json(review))
+    Ok(Json(review).into_response())
 }
 #[derive(Deserialize)]
 struct Export {
@@ -1639,7 +1717,8 @@ struct Export {
 }
 #[derive(Deserialize)]
 struct ReviewUpdate {
-    unit_id: String,
+    #[serde(default)]
+    unit_id: Option<String>,
     #[serde(default)]
     block_id: Option<String>,
     #[serde(default)]
@@ -1659,6 +1738,19 @@ struct ReviewUpdate {
     note: Option<String>,
     #[serde(default)]
     revert: bool,
+    // Library metadata updates (`?library=true`).
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    collection: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    favorite: Option<bool>,
+}
+#[derive(Deserialize)]
+struct UpdateQuery {
+    library: Option<bool>,
 }
 /// `result_format` recorded at upload time; used when the request has no `?format=`.
 async fn job_result_format(app: &App, id: &str) -> Option<String> {
@@ -1795,6 +1887,174 @@ async fn review_export(dir: &std::path::Path, format: &str, review: &Value) -> A
         .into_response())
 }
 
+/// Self-contained, printable evidence report. Page images are embedded as data URIs so the
+/// file can be opened or archived without the service or a sidecar asset directory.
+async fn report_export(dir: &std::path::Path, review: &Value) -> ApiResult<Response> {
+    let bytes = tokio::fs::read(dir.join("result.json")).await?;
+    let mut document: Document = serde_json::from_slice(&bytes).map_err(anyhow::Error::from)?;
+    apply_review(&mut document, review);
+    const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+    let mut embedded = 0u64;
+    let mut out = String::new();
+    out.push_str("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">");
+    out.push_str("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
+    out.push_str(&format!(
+        "<title>{} — extraction report</title><style>",
+        crate::model::html_escape(&document.filename)
+    ));
+    out.push_str(":root{--ink:#102229;--muted:#61757d;--line:#d7e2e3;--accent:#0d6a72;--warm:#8a5a1e}*{box-sizing:border-box}body{margin:0;background:#eef4f4;color:var(--ink);font:14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}.report{max-width:960px;margin:0 auto;padding:36px 20px 70px}h1,h2,h3{font-family:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;font-weight:500;letter-spacing:-.02em}h1{font-size:38px;margin:0 0 6px}.meta{color:var(--muted);font-size:12px;margin-bottom:22px}.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:18px 0 26px}.stat{padding:11px 13px;background:#fff;border:1px solid var(--line);border-radius:10px}.stat strong{display:block;font-size:20px}.stat span{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em}.toc{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:24px}.toc a{padding:4px 8px;color:var(--accent);font-size:11px;text-decoration:none;background:#fff;border:1px solid var(--line);border-radius:999px}.page{padding:18px 20px;margin-bottom:16px;background:#fff;border:1px solid var(--line);border-radius:14px;break-inside:avoid}.page>h2{font-size:22px;margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}.badges{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;font-size:10px}.badge{padding:3px 7px;border:1px solid var(--line);border-radius:999px;color:var(--muted)}.badge.ok{color:#177a5b;background:#e2f3eb}.badge.warn{color:var(--warm);background:#fbf0dd}.page img{display:block;max-width:100%;max-height:720px;margin:0 auto 14px;border:1px solid var(--line);border-radius:8px}.unit{font-size:13px}.unit h2{display:none}.unit table{border-collapse:collapse;width:100%;margin:8px 0;font-size:11px}.unit td,.unit th{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}.unit p{white-space:pre-wrap;overflow-wrap:anywhere}.warning{padding:7px 9px;margin:6px 0;color:#6b4a1f;background:#fbf0dd;border-left:3px solid var(--warm);border-radius:6px;font-size:11px}.footer{margin-top:24px;color:var(--muted);font-size:10px;text-align:center}@media print{body{background:#fff}.report{max-width:none;padding:0}.page{border:0;padding:0;margin:0 0 24px;break-after:page}.toc{display:none}.summary{grid-template-columns:repeat(4,1fr)}}@media(max-width:640px){.summary{grid-template-columns:repeat(2,1fr)}h1{font-size:30px}}");
+    out.push_str("</style></head><body><main class=\"report\">");
+    out.push_str(&format!(
+        "<h1>{}</h1><div class=\"meta\">Extraction report · {} · {} · {} unit(s)</div>",
+        crate::model::html_escape(&document.filename),
+        crate::model::html_escape(&document.status),
+        document.schema_version,
+        document.units.len()
+    ));
+    let corrected = review_has_corrections(review);
+    let reviewed_units = review
+        .get("units")
+        .and_then(Value::as_object)
+        .map(|units| {
+            units
+                .values()
+                .filter(|unit| unit.get("status").and_then(Value::as_str) == Some("reviewed"))
+                .count()
+        })
+        .unwrap_or(0);
+    let table_count: usize = document
+        .units
+        .iter()
+        .flat_map(|unit| unit.blocks.iter())
+        .filter(|block| block.table.is_some())
+        .count();
+    out.push_str(&format!(
+        "<div class=\"summary\"><div class=\"stat\"><strong>{}</strong><span>Pages</span></div><div class=\"stat\"><strong>{}</strong><span>Tables</span></div><div class=\"stat\"><strong>{}</strong><span>Verified</span></div><div class=\"stat\"><strong>{}</strong><span>Review edits</span></div></div>",
+        document.units.len(),
+        table_count,
+        reviewed_units,
+        if corrected { "Yes" } else { "No" }
+    ));
+    if document.units.len() > 1 {
+        out.push_str("<nav class=\"toc\">");
+        for unit in &document.units {
+            out.push_str(&format!(
+                "<a href=\"#{}\">{}</a>",
+                crate::model::html_escape(&unit.id),
+                crate::model::html_escape(&unit.name)
+            ));
+        }
+        out.push_str("</nav>");
+    }
+    for unit in &document.units {
+        out.push_str("<section class=\"page\">");
+        let image_id = unit
+            .blocks
+            .iter()
+            .find_map(|block| {
+                block
+                    .attributes
+                    .get("page_image")
+                    .and_then(|meta| meta.get("asset_id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .or_else(|| {
+                unit.blocks.iter().find_map(|block| {
+                    if block.kind == "figure" {
+                        block.asset_id.clone()
+                    } else {
+                        None
+                    }
+                })
+            });
+        if let Some(asset_id) = image_id {
+            if let Some(asset) = document
+                .assets
+                .iter()
+                .find(|asset| asset.id == asset_id && asset.mime.starts_with("image/"))
+            {
+                if embedded + asset.bytes <= MAX_IMAGE_BYTES {
+                    if let Ok(data) = tokio::fs::read(dir.join("assets").join(&asset.id)).await {
+                        embedded += data.len() as u64;
+                        out.push_str(&format!(
+                            "<img src=\"data:{};base64,{}\" alt=\"{}\">",
+                            asset.mime,
+                            base64::engine::general_purpose::STANDARD.encode(data),
+                            crate::model::html_escape(&unit.name)
+                        ));
+                    }
+                }
+            }
+        }
+        let review_state = review.get("units").and_then(|units| units.get(&unit.id));
+        let status = review_state
+            .and_then(|state| state.get("status"))
+            .and_then(Value::as_str);
+        let edits = review_state
+            .map(|state| {
+                state
+                    .get("blocks")
+                    .and_then(Value::as_object)
+                    .map(|blocks| blocks.len())
+                    .unwrap_or(0)
+                    + state
+                        .get("cells")
+                        .and_then(Value::as_object)
+                        .map(|cells| {
+                            cells
+                                .values()
+                                .filter_map(Value::as_object)
+                                .map(|cells| cells.len())
+                                .sum::<usize>()
+                        })
+                        .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        out.push_str("<div class=\"badges\">");
+        if let Some(timing) = &unit.timing {
+            out.push_str(&format!(
+                "<span class=\"badge\">{} · {} ms</span>",
+                crate::model::html_escape(&timing.method),
+                timing.total_ms
+            ));
+        }
+        if status == Some("reviewed") {
+            out.push_str("<span class=\"badge ok\">Verified</span>");
+        }
+        if edits > 0 {
+            out.push_str(&format!(
+                "<span class=\"badge warn\">{edits} edit(s)</span>"
+            ));
+        }
+        out.push_str("</div>");
+        crate::model::unit_html(unit, &mut out);
+        for warning in &unit.warnings {
+            if warning.starts_with("Scanned page:") || warning.starts_with("Poppler reading order")
+            {
+                continue;
+            }
+            out.push_str(&format!(
+                "<div class=\"warning\">{}</div>",
+                crate::model::html_escape(warning)
+            ));
+        }
+        out.push_str("</section>");
+    }
+    out.push_str(&format!(
+        "<div class=\"footer\">Generated by doc-extractor · {} · self-contained report</div></main></body></html>",
+        crate::model::html_escape(&document.id)
+    ));
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8".to_owned()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+        ],
+        out,
+    )
+        .into_response())
+}
+
 async fn result(
     State(app): State<App>,
     ApiPath(id): ApiPath<String>,
@@ -1854,6 +2114,9 @@ async fn result(
             "Result is not complete; use unit endpoint for checkpoints",
         ));
     }
+    if format == "report" {
+        return report_export(&app.dir(&id), &read_review(&app.dir(&id))).await;
+    }
     if export.review.unwrap_or(false) && ["markdown", "md", "text", "txt", "html"].contains(&format)
     {
         let review = read_review(&app.dir(&id));
@@ -1861,21 +2124,20 @@ async fn result(
             return review_export(&app.dir(&id), format, &review).await;
         }
     }
-    let (file, mime) = match format {
-        "json" => ("result.json", "application/json"),
-        "markdown" | "md" => ("result.md", "text/markdown; charset=utf-8"),
-        "text" | "txt" => ("result.txt", "text/plain; charset=utf-8"),
-        "jsonl" | "ndjson" => ("result.jsonl", "application/x-ndjson; charset=utf-8"),
-        "html" => ("result.html", "text/html; charset=utf-8"),
-        "chunks" => ("result.chunks.jsonl", "application/x-ndjson; charset=utf-8"),
-        _ => {
-            return Err(error(
+    let (file, mime) =
+        match format {
+            "json" => ("result.json", "application/json"),
+            "markdown" | "md" => ("result.md", "text/markdown; charset=utf-8"),
+            "text" | "txt" => ("result.txt", "text/plain; charset=utf-8"),
+            "jsonl" | "ndjson" => ("result.jsonl", "application/x-ndjson; charset=utf-8"),
+            "html" => ("result.html", "text/html; charset=utf-8"),
+            "chunks" => ("result.chunks.jsonl", "application/x-ndjson; charset=utf-8"),
+            _ => return Err(error(
                 StatusCode::BAD_REQUEST,
                 "invalid_format",
-                "Expected json, markdown, text, jsonl, html, chunks, review or original",
-            ))
-        }
-    };
+                "Expected json, markdown, text, jsonl, html, chunks, report, review or original",
+            )),
+        };
     let path = app.dir(&id).join(file);
     if tokio::fs::try_exists(&path).await.unwrap_or(false) {
         stream_file(path, mime).await
@@ -2444,12 +2706,12 @@ async fn list(
         let (ids, total) = {
             let db = app.db.lock().unwrap();
             let total: i64 = db.query_row(
-                "SELECT count(*) FROM jobs j WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND (instr(lower(j.filename),lower(?3))>0 OR EXISTS(SELECT 1 FROM search_units s WHERE s.job_id=j.id AND instr(lower(s.text),lower(?3))>0))",
+                "SELECT count(*) FROM jobs j WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND (instr(lower(j.filename),lower(?3))>0 OR instr(lower(COALESCE(j.display_name,'')),lower(?3))>0 OR EXISTS(SELECT 1 FROM search_units s WHERE s.job_id=j.id AND instr(lower(s.text),lower(?3))>0))",
                 params![tenant, query.state, q],
                 |r| r.get(0),
             )?;
             let mut statement = db.prepare(
-                "SELECT j.id FROM jobs j WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND (instr(lower(j.filename),lower(?3))>0 OR EXISTS(SELECT 1 FROM search_units s WHERE s.job_id=j.id AND instr(lower(s.text),lower(?3))>0)) ORDER BY j.created_at DESC LIMIT ?4 OFFSET ?5",
+                "SELECT j.id FROM jobs j WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND (instr(lower(j.filename),lower(?3))>0 OR instr(lower(COALESCE(j.display_name,'')),lower(?3))>0 OR EXISTS(SELECT 1 FROM search_units s WHERE s.job_id=j.id AND instr(lower(s.text),lower(?3))>0)) ORDER BY j.created_at DESC LIMIT ?4 OFFSET ?5",
             )?;
             let ids = statement
                 .query_map(params![tenant, query.state, q, limit, offset], |r| {
@@ -2462,26 +2724,28 @@ async fn list(
         {
             let db = app.db.lock().unwrap();
             let mut statement = db.prepare(
-                "SELECT s.job_id,j.filename,s.unit_id,s.unit_name,s.unit_index,s.block_id,s.kind,instr(lower(s.text),lower(?3)),s.text FROM search_units s JOIN jobs j ON j.id=s.job_id WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND instr(lower(s.text),lower(?3))>0 ORDER BY j.created_at DESC,s.unit_index ASC,s.block_id ASC LIMIT 120",
+                "SELECT s.job_id,j.filename,j.display_name,s.unit_id,s.unit_name,s.unit_index,s.block_id,s.kind,instr(lower(s.text),lower(?3)),s.text FROM search_units s JOIN jobs j ON j.id=s.job_id WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND instr(lower(s.text),lower(?3))>0 ORDER BY j.created_at DESC,s.unit_index ASC,s.block_id ASC LIMIT 120",
             )?;
             let mut rows = statement.query(params![tenant, query.state, q])?;
             let mut seen: HashSet<(String, String, Option<String>)> = HashSet::new();
             while let Some(row) = rows.next()? {
                 let job_id: String = row.get(0)?;
                 let filename: String = row.get(1)?;
-                let unit_id: String = row.get(2)?;
-                let unit_name: String = row.get(3)?;
-                let unit_index: i64 = row.get(4)?;
-                let block_id: Option<String> = row.get(5)?;
-                let kind: String = row.get(6)?;
-                let position: i64 = row.get(7)?;
-                let text: String = row.get(8)?;
+                let display_name: Option<String> = row.get(2)?;
+                let unit_id: String = row.get(3)?;
+                let unit_name: String = row.get(4)?;
+                let unit_index: i64 = row.get(5)?;
+                let block_id: Option<String> = row.get(6)?;
+                let kind: String = row.get(7)?;
+                let position: i64 = row.get(8)?;
+                let text: String = row.get(9)?;
                 if !seen.insert((job_id.clone(), unit_id.clone(), block_id.clone())) {
                     continue;
                 }
                 matches.push(json!({
                     "job_id": job_id,
                     "filename": filename,
+                    "display_name": display_name,
                     "unit_id": unit_id,
                     "unit_name": unit_name,
                     "page": unit_index + 1,
@@ -2881,6 +3145,7 @@ pub fn openapi() -> Value {
                             "properties": {
                                 "job_id": {"type": "string"},
                                 "filename": {"type": "string"},
+                                "display_name": {"type": ["string", "null"]},
                                 "unit_id": {"type": "string"},
                                 "unit_name": {"type": "string"},
                                 "page": {"type": "integer"},
@@ -2999,7 +3264,7 @@ pub fn openapi() -> Value {
             }
         }
         if path.ends_with("/result") {
-            params.push(json!({"name":"format","in":"query","description":"Export format; `original` returns the uploaded file, `review` returns the correction sidecar, other values default to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl","html","chunks","review","original"]}}));
+            params.push(json!({"name":"format","in":"query","description":"Export format; `original` returns the uploaded file, `review` returns the correction sidecar, other values default to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl","html","chunks","report","review","original"]}}));
             params.push(json!({"name":"review","in":"query","description":"Apply reviewer text corrections to markdown, text or HTML","schema":{"type":"boolean"}}));
         }
         if path.ends_with("/units/{unit_id}") {
@@ -3010,6 +3275,9 @@ pub fn openapi() -> Value {
         }
         if path.ends_with("/archive") {
             params.push(json!({"name":"units","in":"query","description":"Include unit checkpoints in the archive","schema":{"type":"boolean"}}));
+        }
+        if path == "/v1/extractions/{id}" && method == "patch" {
+            params.push(json!({"name":"library","in":"query","description":"Update display name, collection, tags and favorite instead of review data","schema":{"type":"boolean"}}));
         }
         if path == "/v1/extractions" && method == "get" {
             params.push(json!({"name":"state","in":"query","schema":{"type":"string","enum":["queued","running","completed","failed","cancelled"]}}));
@@ -3065,7 +3333,7 @@ pub fn openapi() -> Value {
             operation["requestBody"] = json!({"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary","description":"Repeat the field to submit up to 32 files in one request; each becomes a job and the response then contains a jobs array"},"options":{"type":"string","description":"JSON encoded Options (empty uses defaults)","example":"{\"ocr\":false,\"vision\":false}"},"callback_url":{"type":"string","description":"Optional http(s) URL notified when the job reaches a terminal state (signed when webhook_secret is set)","example":"https://example.com/hooks/docsmith"}}}}}});
         }
         if path == "/v1/extractions/{id}" && method == "patch" {
-            operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"type":"object","required":["unit_id"],"properties":{"unit_id":{"type":"string","example":"u1"},"block_id":{"type":"string","example":"u1-b2"},"text":{"type":"string","description":"Corrected block or cell text"},"original":{"type":"string","description":"Raw text before the correction, used by the UI to revert"},"cell_row":{"type":"integer","description":"Zero-based table row when correcting one cell"},"cell_column":{"type":"integer","description":"Zero-based table column when correcting one cell"},"status":{"type":"string","enum":["reviewed","needs_review","clear"]},"note":{"type":"string"},"revert":{"type":"boolean","description":"Remove the block or cell correction"}}}}}});
+            operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"unit_id":{"type":"string","example":"u1"},"block_id":{"type":"string","example":"u1-b2"},"text":{"type":"string","description":"Corrected block or cell text"},"original":{"type":"string","description":"Raw text before the correction, used by the UI to revert"},"cell_row":{"type":"integer","description":"Zero-based table row when correcting one cell"},"cell_column":{"type":"integer","description":"Zero-based table column when correcting one cell"},"status":{"type":"string","enum":["reviewed","needs_review","clear"]},"note":{"type":"string"},"revert":{"type":"boolean","description":"Remove the block or cell correction"},"display_name":{"type":"string","description":"Library title; empty clears it (with ?library=true)"},"collection":{"type":"string","description":"Collection name; empty clears it"},"tags":{"type":"array","items":{"type":"string"},"description":"Replacement tag list"},"favorite":{"type":"boolean"}}}}}});
         }
         paths.entry(path).or_insert(json!({}))[method] = operation;
     }

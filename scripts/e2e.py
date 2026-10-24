@@ -158,6 +158,18 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('canonical JSON keeps original text',b'REVIEW MARKER' not in request(f'/v1/extractions/{reviewjob}/result?format=json')[1])
   check('review sidecar is fetchable',json.loads(request(f'/v1/extractions/{reviewjob}/result?format=review')[1])['units']['u1']['blocks'][text_block['id']]['text']=='REVIEW MARKER')
   check('archive includes reviewed exports',b'reviewed/result.md' in request(f'/v1/extractions/{reviewjob}/archive')[1])
+  report=request(f'/v1/extractions/{reviewjob}/result?format=report')[1]
+  check('portable report is self-contained and reviewed',report.startswith(b'<!doctype html>') and b'REVIEW MARKER' in report and b'Extraction report' in report)
+  code,libbody=request(f'/v1/extractions/{reviewjob}?library=true','PATCH',json.dumps({'display_name':'Quarterly review','collection':'Reports','tags':['finance','2026'],'favorite':True}).encode(),headers={'Content-Type':'application/json'})
+  libjob=json.loads(libbody)
+  check('library metadata persists',code==200 and libjob['display_name']=='Quarterly review' and libjob['collection']=='Reports' and libjob['tags']==['2026','finance'] and libjob['favorite'] is True)
+  liblisting=json.loads(request('/v1/extractions?limit=200')[1])
+  check('library metadata appears in listings',any(j['id']==reviewjob and j['collection']=='Reports' for j in liblisting['jobs']))
+  libsearch=json.loads(request('/v1/extractions?q=Quarterly&limit=20')[1])
+  check('search matches the display title',any(j['id']==reviewjob for j in libsearch['jobs']))
+  _,j=upload('scan.png',{'page_images':'all'});imagejob=j['id'];wait(imagejob)
+  image_report=request(f'/v1/extractions/{imagejob}/result?format=report')[1]
+  check('report embeds page images',b'data:image/png;base64,' in image_report)
   code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','status':'reviewed'}).encode(),headers={'Content-Type':'application/json'})
   check('review page verification persists',code==200 and json.loads(review_path.read_text())['units']['u1']['status']=='reviewed')
   code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','block_id':text_block['id'],'revert':True}).encode(),headers={'Content-Type':'application/json'})
