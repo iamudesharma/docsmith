@@ -54,6 +54,9 @@
     redactionMatches: [],
     redactionSaved: [],
     redactionSelected: {},
+    llmConfigured: false,
+    llmModel: "",
+    askResult: null,
     notify: localStorage.getItem("docsmith-notify") === "1",
   };
 
@@ -1319,6 +1322,138 @@
     renderRedactionList();
   }
 
+  function askDocument() {
+    if (!state.currentJobId) return;
+    var input = document.getElementById("ask-input");
+    var question = input.value.trim();
+    if (!question) {
+      showToast("Type a question first");
+      input.focus();
+      return;
+    }
+    var button = document.getElementById("ask-btn");
+    var message = document.getElementById("ask-message");
+    button.disabled = true;
+    button.textContent = "Thinking…";
+    message.textContent = "Searching the extracted pages…";
+    fetch(
+      "/v1/extractions/" + encodeURIComponent(state.currentJobId) +
+        "/result?format=ask",
+      {
+        method: "POST",
+        headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+        body: JSON.stringify({ question: question }),
+      }
+    )
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) {
+            throw new Error(
+              (body.error && body.error.message) || "Could not answer the question"
+            );
+          }
+          return body;
+        });
+      })
+      .then(function (data) {
+        renderAskResponse(data);
+      })
+      .catch(function (error) {
+        message.textContent = String(error.message || error);
+        document.getElementById("ask-answer").classList.add("hidden");
+      })
+      .finally(function () {
+        button.disabled = false;
+        button.textContent = "Ask";
+      });
+  }
+
+  function renderAskResponse(data) {
+    state.askResult = data;
+    var message = document.getElementById("ask-message");
+    var answer = document.getElementById("ask-answer");
+    var sourcesBox = document.getElementById("ask-sources");
+    var prompt = document.getElementById("ask-prompt");
+    var promptWrap = document.getElementById("ask-prompt-wrap");
+    var sourceMap = {};
+    (data.sources || []).forEach(function (source) {
+      sourceMap[source.id] = source;
+    });
+    message.textContent =
+      (data.message || "") +
+      (data.context_chars ? " · " + data.context_chars.toLocaleString() + " context chars" : "");
+    answer.classList.toggle("hidden", !data.answer);
+    if (data.answer) {
+      var html = escapeHtml(data.answer)
+        .replace(/\[S(\d+)\]/g, function (_match, number) {
+          return (
+            "<button class='ask-cite' type='button' data-source='S" +
+            number +
+            "'>[S" +
+            number +
+            "]</button>"
+          );
+        })
+        .replace(/\n/g, "<br>");
+      answer.innerHTML = html;
+      answer.querySelectorAll(".ask-cite").forEach(function (button) {
+        button.addEventListener("click", function () {
+          openAskSource(sourceMap[button.getAttribute("data-source")]);
+        });
+      });
+    } else {
+      answer.innerHTML = "";
+    }
+    sourcesBox.innerHTML = "";
+    if ((data.sources || []).length) {
+      var label = document.createElement("div");
+      label.className = "ask-sources-label";
+      label.textContent = "Sources used";
+      sourcesBox.appendChild(label);
+    }
+    (data.sources || []).forEach(function (source) {
+      var card = document.createElement("button");
+      card.type = "button";
+      card.className = "ask-source";
+      card.innerHTML =
+        "<strong>" +
+        escapeHtml(source.id) +
+        "</strong><small>" +
+        escapeHtml(
+          source.unit_name + " · " + (source.preview || "").slice(0, 180)
+        ) +
+        "</small>";
+      card.addEventListener("click", function () {
+        openAskSource(source);
+      });
+      sourcesBox.appendChild(card);
+    });
+    prompt.textContent = data.prompt || "";
+    promptWrap.open = !data.answer;
+  }
+
+  function openAskSource(source) {
+    if (!source) return;
+    state.pendingBlockId = source.block_id || "";
+    selectUnit(source.unit_id);
+    switchSubtab("blocks");
+  }
+
+  function resetAskPanel() {
+    state.askResult = null;
+    var answer = document.getElementById("ask-answer");
+    var sources = document.getElementById("ask-sources");
+    var message = document.getElementById("ask-message");
+    var prompt = document.getElementById("ask-prompt");
+    if (answer) {
+      answer.classList.add("hidden");
+      answer.innerHTML = "";
+    }
+    if (sources) sources.innerHTML = "";
+    if (message) message.textContent = "";
+    if (prompt) prompt.textContent = "";
+  }
+
   function fileNameForUnit(unit, extension) {
     var stem = (state.currentJobMeta && state.currentJobMeta.filename) || "document";
     stem = stem.replace(/\.[^.]+$/, "").replace(/[^\w.-]+/g, "-");
@@ -1704,6 +1839,16 @@
         if (langLabel) {
           langLabel.textContent = installed.length ? installed.join(", ") : "none";
         }
+        state.llmConfigured = Boolean(caps.llm && caps.llm.configured);
+        state.llmModel = (caps.llm && caps.llm.model) || "";
+        var askStatus = document.getElementById("ask-model-status");
+        if (askStatus) {
+          askStatus.textContent = state.llmConfigured
+            ? "Local model: " + (state.llmModel || "ready")
+            : "No local model";
+          askStatus.className =
+            "badge " + (state.llmConfigured ? "badge-success" : "badge-warn");
+        }
         var matrix = document.getElementById("capabilities-matrix");
         matrix.innerHTML = "";
         var items = [
@@ -1739,6 +1884,13 @@
             detail: state.wasmReady
               ? "Active: instant previews and highlights"
               : "Loading",
+          },
+          {
+            title: "Local document Q&A",
+            ok: state.llmConfigured,
+            detail: state.llmConfigured
+              ? "Local model: " + (state.llmModel || "ready")
+              : "Optional; set DOC_LLM_URL or DOC_VLM_URL",
           }
         ];
         items.forEach(function (item) {
@@ -2833,6 +2985,8 @@
       state.redactionMatches = [];
       state.redactionSaved = [];
       state.redactionSelected = {};
+      state.askResult = null;
+      resetAskPanel();
     }
     var sel = document.getElementById("inspector-job-select");
     if (sel) sel.value = jobId;
@@ -4659,6 +4813,21 @@
     document
       .getElementById("clear-redactions-btn")
       .addEventListener("click", clearRedactions);
+    document.getElementById("ask-btn").addEventListener("click", askDocument);
+    document.getElementById("ask-input").addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        askDocument();
+      }
+    });
+    document
+      .getElementById("ask-copy-prompt-btn")
+      .addEventListener("click", function () {
+        copyText(
+          document.getElementById("ask-prompt").textContent,
+          "Prompt copied"
+        );
+      });
 
     document.querySelectorAll(".fmt-btn").forEach(function (btn) {
       btn.addEventListener("click", function () {

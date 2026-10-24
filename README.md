@@ -26,7 +26,8 @@ DOC_XBERG=/path/to/xberg target/debug/doc-extractor extract fixtures/digital.pdf
 target/debug/doc-extractor serve --bind 127.0.0.1:8787 --data-dir data/service
 # Workbench: dark mode, ⌘K search, deep-linkable pages, live progress/cancel/retry, library
 # tags/collections, continuous reading, table CSV, review/corrections, on-demand PDF previews,
-# a self-contained HTML report, multi-document bundles and reviewable safe-share redaction.
+# a self-contained HTML report, multi-document bundles, safe-share redaction and grounded
+# local Q&A with page citations.
 open http://127.0.0.1:8787/
 # Interactive API console (Swagger UI; assets are compiled into the binary, no CDN):
 open http://127.0.0.1:8787/docs
@@ -93,6 +94,7 @@ See [validation evidence](docs/VALIDATION.md), [accuracy report](docs/ACCURACY.m
 - Apple Vision: run `scripts/build-apple-vision.sh`, set `DOC_APPLE_VISION` to the emitted executable, and use `{"ocr":true,"ocr_provider":"apple_vision","languages":"en-US"}`. Query `target/helpers/apple-vision --languages` before selecting other languages. A CPU path avoids observed local GPU runtime failures.
 - Xberg: provision the evaluated 1.3.8 CLI plus its bundled libraries, set `DOC_XBERG`, and use `{"parser":"xberg"}` (or `--parser xberg`). The adapter is verified end-to-end and forces `NO_COLOR=1` because the CLI colorizes piped output. The direct adapter retains more spreadsheet formula/merge fidelity on the current fixtures.
 - Vision: provision llama.cpp, SmolVLM2 Q4 weights and matching Q8 projector; run `scripts/run-vision.sh`, set `DOC_VLM_URL=http://127.0.0.1:8799`, `DOC_VLM_MODEL=SmolVLM2`, and opt in with `{"vision":true}`. Add `interpret_diagrams:true` to request unverified graph proposals. Nothing is downloaded during extraction. Vision caching requires `DOC_VLM_REVISION` to identify immutable weights/projector/configuration. For lightweight page OCR, `scripts/run-smoldocling.sh` starts SmolDocling-256M (MLX or GGUF) and `{"ocr_provider":"smoldocling"}` parses its DocTags/OTSL tables in pure Rust; if the server is absent, Tesseract is used with a warning.
+- Local Q&A: point `DOC_LLM_URL` at an OpenAI-compatible chat server on loopback (for example Ollama or llama.cpp) and optionally set `DOC_LLM_MODEL`; if `DOC_LLM_URL` is unset, the vision endpoint is reused. `POST /v1/extractions/{id}/result?format=ask` selects up to 20 relevant page/block sources, builds a grounded prompt, and returns an answer with `[S1]` citations. Without a model it still returns the ready-to-copy prompt and sources. No cloud endpoint is accepted and nothing is downloaded.
 
 ## Checks
 

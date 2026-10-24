@@ -21,6 +21,19 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   def log_message(self,*_a):pass
  hook=http.server.HTTPServer(('127.0.0.1',0),_Hook);hook_port=hook.server_address[1]
  threading.Thread(target=hook.serve_forever,daemon=True).start()
+ # Local OpenAI-compatible chat server proves the grounded-ask path without a real model.
+ llm_calls=[]
+ class _LLM(http.server.BaseHTTPRequestHandler):
+  def do_POST(self):
+   body=self.rfile.read(int(self.headers.get('content-length',0)))
+   llm_calls.append(body)
+   payload=json.dumps({'choices':[{'message':{'content':'The best answer is in the first source. [S1]'}}]}).encode()
+   self.send_response(200);self.send_header('content-type','application/json');self.send_header('content-length',str(len(payload)));self.end_headers();self.wfile.write(payload)
+  def log_message(self,*_a):pass
+ llm=http.server.HTTPServer(('127.0.0.1',0),_LLM);llm_port=llm.server_address[1]
+ threading.Thread(target=llm.serve_forever,daemon=True).start()
+ env['DOC_LLM_URL']=f'http://127.0.0.1:{llm_port}'
+ env['DOC_LLM_MODEL']='e2e-local'
  def start():
   p=subprocess.Popen([str(BIN),'serve','--config',str(tmp/'config.json')],env=env,stdout=subprocess.DEVNULL,stderr=open(tmp/'server.log','a'))
   for _ in range(100):
@@ -188,6 +201,11 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('redacted report masks values',b'ada@example.com' not in redacted_report and b'[REDACTED]' in redacted_report)
   check('archive includes redacted exports',b'redacted/result.md' in request(f'/v1/extractions/{piijob}/archive')[1])
   check('redaction clear works',request(f'/v1/extractions/{piijob}?redaction=true','PATCH',json.dumps({'clear_redactions':True}).encode(),headers={'Content-Type':'application/json'})[0]==200 and b'ada@example.com' in request(f'/v1/extractions/{piijob}/result?format=markdown&redact=true')[1])
+  code,askbody=request(f'/v1/extractions/{reviewjob}/result?format=ask','POST',json.dumps({'question':'What does the summary say?'}).encode(),headers={'Content-Type':'application/json'})
+  ask=json.loads(askbody)
+  check('grounded ask returns prompt and sources',code==200 and ask['sources'] and '[S1]' in ask['prompt'] and ask['question']=='What does the summary say?')
+  check('grounded ask uses the local chat model',ask['configured'] is True and ask['model']=='e2e-local' and '[S1]' in (ask['answer'] or '') and bool(llm_calls))
+  check('grounded ask rejects empty questions',request(f'/v1/extractions/{reviewjob}/result?format=ask','POST',json.dumps({'question':''}).encode(),headers={'Content-Type':'application/json'})[0]==400)
   code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','status':'reviewed'}).encode(),headers={'Content-Type':'application/json'})
   check('review page verification persists',code==200 and json.loads(review_path.read_text())['units']['u1']['status']=='reviewed')
   code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','block_id':text_block['id'],'revert':True}).encode(),headers={'Content-Type':'application/json'})

@@ -508,6 +508,7 @@
                 <button class="subtab-btn" data-subtab="review">Review <span class="subtab-count hidden" id="review-count">0</span></button>
                 <button class="subtab-btn" data-subtab="tables">Tables</button>
                 <button class="subtab-btn" data-subtab="formats">Export</button>
+                <button class="subtab-btn" data-subtab="ask">Ask</button>
                 <button class="subtab-btn" data-subtab="chunks">AI passages</button>
               </div>
 
@@ -590,6 +591,30 @@
                   </label>
                 </div>
                 <pre class="code-viewer" id="derived-code-viewer"></pre>
+              </div>
+
+              <div class="subtab-panel" id="subpanel-ask">
+                <div class="ask-head">
+                  <div>
+                    <h3 class="card-title">Ask this document</h3>
+                    <p class="card-desc">Grounded in the extracted pages. Answers cite their sources and never leave this machine.</p>
+                  </div>
+                  <span class="badge" id="ask-model-status">Local model</span>
+                </div>
+                <div class="ask-input-row">
+                  <input id="ask-input" type="text" placeholder="What is the total amount, and on which page?" autocomplete="off">
+                  <button class="btn btn-primary" id="ask-btn">Ask</button>
+                </div>
+                <div class="ask-message" id="ask-message"></div>
+                <div class="ask-answer hidden" id="ask-answer"></div>
+                <div class="ask-sources" id="ask-sources"></div>
+                <details class="ask-prompt" id="ask-prompt-wrap">
+                  <summary>Prompt for a local model</summary>
+                  <div class="ask-prompt-actions">
+                    <button class="btn btn-sm" id="ask-copy-prompt-btn">Copy prompt</button>
+                  </div>
+                  <pre class="code-viewer" id="ask-prompt"></pre>
+                </details>
               </div>
 
               <div class="subtab-panel" id="subpanel-chunks">

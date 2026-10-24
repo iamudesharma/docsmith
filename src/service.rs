@@ -1793,6 +1793,13 @@ struct RedactionMatch {
     context: String,
 }
 #[derive(Deserialize)]
+struct AskRequest {
+    question: String,
+    #[serde(default)]
+    max_sources: Option<usize>,
+}
+
+#[derive(Deserialize)]
 struct ReviewUpdate {
     #[serde(default)]
     unit_id: Option<String>,
@@ -2442,6 +2449,225 @@ async fn report_export(
         out,
     )
         .into_response())
+}
+
+struct AskChunk {
+    unit_id: String,
+    unit_name: String,
+    block_id: String,
+    page: usize,
+    order: usize,
+    text: String,
+    score: usize,
+}
+
+fn ask_chunks(document: &Document, question: &str, max_sources: usize) -> Vec<AskChunk> {
+    let lower_question = question.to_lowercase();
+    let stop = [
+        "the", "and", "for", "with", "from", "that", "this", "what", "which", "where", "when",
+        "how", "why", "does", "did", "are", "was", "were", "can", "could", "would", "should",
+        "about", "into", "than", "then", "there", "their", "have", "has", "had", "you", "your",
+        "document", "page",
+    ];
+    let terms: Vec<String> = lower_question
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|term| term.len() >= 3 && !stop.contains(term))
+        .map(str::to_owned)
+        .collect();
+    let broad = terms.len() <= 1
+        || [
+            "summary",
+            "summarize",
+            "overview",
+            "main points",
+            "key points",
+        ]
+        .iter()
+        .any(|word| lower_question.contains(word));
+    let mut chunks = Vec::new();
+    let mut order = 0usize;
+    for unit in &document.units {
+        for block in &unit.blocks {
+            let mut text = if let Some(table) = &block.table {
+                let cells: std::collections::HashMap<_, _> = table
+                    .cells
+                    .iter()
+                    .map(|cell| ((cell.row, cell.column), cell.raw.as_str()))
+                    .collect();
+                let mut out = String::new();
+                for row in 0..table.rows.min(30) {
+                    for column in 0..table.columns {
+                        if column > 0 {
+                            out.push('\t');
+                        }
+                        out.push_str(
+                            cells
+                                .get(&(row as u32, column as u32))
+                                .copied()
+                                .unwrap_or(""),
+                        );
+                    }
+                    out.push('\n');
+                    if out.len() > 2400 {
+                        break;
+                    }
+                }
+                out
+            } else {
+                block.text.clone()
+            };
+            if text.trim().is_empty() {
+                continue;
+            }
+            if text.chars().count() > 2400 {
+                text = text.chars().take(2400).collect();
+            }
+            let text_lower = text.to_lowercase();
+            let mut score = 0usize;
+            for term in &terms {
+                score += text_lower.matches(term).count().min(6);
+                if unit.name.to_lowercase().contains(term) {
+                    score += 2;
+                }
+            }
+            chunks.push(AskChunk {
+                unit_id: unit.id.clone(),
+                unit_name: unit.name.clone(),
+                block_id: block.id.clone(),
+                page: unit.index + 1,
+                order,
+                text,
+                score,
+            });
+            order += 1;
+        }
+    }
+    if chunks.is_empty() {
+        return chunks;
+    }
+    let max_sources = max_sources.clamp(3, 20);
+    if broad && chunks.len() > max_sources {
+        let step = (chunks.len() / max_sources).max(1);
+        let mut sampled: Vec<AskChunk> = chunks
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| index % step == 0)
+            .map(|(_, chunk)| chunk)
+            .take(max_sources)
+            .collect();
+        if sampled.is_empty() {
+            return Vec::new();
+        }
+        sampled.sort_by_key(|chunk| chunk.order);
+        return sampled;
+    }
+    chunks.sort_by(|a, b| b.score.cmp(&a.score).then(a.order.cmp(&b.order)));
+    chunks.truncate(max_sources);
+    chunks.sort_by_key(|chunk| chunk.order);
+    chunks
+}
+
+async fn ask_result(
+    State(app): State<App>,
+    ApiPath(id): ApiPath<String>,
+    headers: HeaderMap,
+    Json(request): Json<AskRequest>,
+) -> ApiResult<Response> {
+    app.authorize(&id, &headers)?;
+    if app.job(&id)?.state != "completed" {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "not_ready",
+            "Questions are available after extraction completes",
+        ));
+    }
+    let question = request.question.trim();
+    if question.len() < 2 || question.chars().count() > 2000 {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_question",
+            "Ask a question between 2 and 2000 characters",
+        ));
+    }
+    let dir = app.dir(&id);
+    let bytes = tokio::fs::read(dir.join("result.json")).await?;
+    let mut document: Document = serde_json::from_slice(&bytes).map_err(anyhow::Error::from)?;
+    apply_review(&mut document, &read_review(&dir));
+    let chunks = ask_chunks(
+        &document,
+        question,
+        request.max_sources.unwrap_or(10).clamp(3, 20),
+    );
+    if chunks.is_empty() {
+        return Ok(Json(json!({
+            "configured": providers::llm_configured(),
+            "question": question,
+            "answer": null,
+            "sources": [],
+            "prompt": "",
+            "message": "This document has no extracted text to answer from.",
+        }))
+        .into_response());
+    }
+    let mut sources = Vec::new();
+    let mut prompt = format!(
+        "Question about one local document: {question}\n\nUse only these sources. Cite each claim as [S1], [S2], and so on.\n\n"
+    );
+    let mut context_chars = 0usize;
+    for (index, chunk) in chunks.iter().enumerate() {
+        let id = format!("S{}", index + 1);
+        prompt.push_str(&format!(
+            "[{id}] {} · page {} · {}\n{}\n\n",
+            chunk.unit_name, chunk.page, chunk.block_id, chunk.text
+        ));
+        context_chars += chunk.text.len();
+        let preview: String = chunk
+            .text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(240)
+            .collect();
+        sources.push(json!({
+            "id": id,
+            "unit_id": chunk.unit_id,
+            "unit_name": chunk.unit_name,
+            "block_id": chunk.block_id,
+            "page": chunk.page,
+            "preview": preview,
+        }));
+    }
+    let configured = providers::llm_configured();
+    let (answer, model, error_message) = if configured {
+        let prompt_for_model = prompt.clone();
+        match tokio::task::spawn_blocking(move || providers::llm_answer(&prompt_for_model)).await {
+            Ok(Ok((answer, model))) => (Some(answer), Some(model), None),
+            Ok(Err(e)) => (None, None, Some(format!("{e:#}"))),
+            Err(e) => (None, None, Some(e.to_string())),
+        }
+    } else {
+        (None, None, None)
+    };
+    let answered = answer.is_some();
+    Ok(Json(json!({
+        "configured": configured,
+        "question": question,
+        "answer": answer,
+        "model": model,
+        "error": error_message,
+        "sources": sources,
+        "prompt": prompt,
+        "context_chars": context_chars,
+        "message": if !configured {
+            "No local text model is configured. Copy the prompt into a local model, or set DOC_LLM_URL."
+        } else if !answered {
+            "The local model could not answer. You can copy the prompt into the model directly."
+        } else {
+            "Answer generated locally from the extracted pages."
+        }
+    }))
+    .into_response())
 }
 
 async fn result(
@@ -3653,7 +3879,7 @@ async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 pub fn capabilities() -> Value {
-    json!({"engine":ENGINE_VERSION,"xberg":{"configured":std::env::var("DOC_XBERG").is_ok(),"required_version":"1.3.8","mapping":"partial"},"native_formats":["txt","md","json","xml","html","csv","tsv","xlsx","xls","xlsm","xlsb","ods","docx","pptx","odt","odp","epub","eml","rtf","drawio","svg","mermaid","dot","plantuml","dbml","doctags","vsdx"],"pdf":{"available":providers::available("pdfinfo")&&providers::available("pdftotext")&&providers::available("pdfimages"),"backend":"poppler","tables":"unvalidated","page_geometry":true,"page_images":{"available":providers::available("pdftoppm"),"dpi":150},"vector_source_preserved":true},"ocr":{"tesseract":providers::available("tesseract"),"languages":providers::languages(),"apple_vision":cfg!(target_os="macos")&&std::env::var("DOC_APPLE_VISION").is_ok(),"smoldocling":std::env::var("DOC_SMOLDOCLING_URL").is_ok()||std::env::var("DOC_VLM_URL").is_ok(),"paddle_onnx":false},"vision":{"configured":std::env::var("DOC_VLM_URL").is_ok(),"model":std::env::var("DOC_VLM_MODEL").ok(),"automatic_downloads":false},"offline_default":true,"limitations":["Logical Word/ODT sections are not physical pages","Legacy DOC/PPT/VSD are unsupported","Visio/SmartArt source preserved; semantics unsupported","Text diagram parsers implement documented subsets","Spreadsheet formulas are not recalculated"]})
+    json!({"engine":ENGINE_VERSION,"xberg":{"configured":std::env::var("DOC_XBERG").is_ok(),"required_version":"1.3.8","mapping":"partial"},"native_formats":["txt","md","json","xml","html","csv","tsv","xlsx","xls","xlsm","xlsb","ods","docx","pptx","odt","odp","epub","eml","rtf","drawio","svg","mermaid","dot","plantuml","dbml","doctags","vsdx"],"pdf":{"available":providers::available("pdfinfo")&&providers::available("pdftotext")&&providers::available("pdfimages"),"backend":"poppler","tables":"unvalidated","page_geometry":true,"page_images":{"available":providers::available("pdftoppm"),"dpi":150},"vector_source_preserved":true},"ocr":{"tesseract":providers::available("tesseract"),"languages":providers::languages(),"apple_vision":cfg!(target_os="macos")&&std::env::var("DOC_APPLE_VISION").is_ok(),"smoldocling":std::env::var("DOC_SMOLDOCLING_URL").is_ok()||std::env::var("DOC_VLM_URL").is_ok(),"paddle_onnx":false},"vision":{"configured":std::env::var("DOC_VLM_URL").is_ok(),"model":std::env::var("DOC_VLM_MODEL").ok(),"automatic_downloads":false},"llm":{"configured":providers::llm_configured(),"model":std::env::var("DOC_LLM_MODEL").or_else(|_| std::env::var("DOC_VLM_MODEL")).ok(),"endpoint":"local-only"},"offline_default":true,"limitations":["Logical Word/ODT sections are not physical pages","Legacy DOC/PPT/VSD are unsupported","Visio/SmartArt source preserved; semantics unsupported","Text diagram parsers implement documented subsets","Spreadsheet formulas are not recalculated"]})
 }
 pub fn openapi() -> Value {
     let doc_schema = serde_json::to_value(schemars::schema_for!(Document)).unwrap();
@@ -3736,6 +3962,13 @@ pub fn openapi() -> Value {
             "Canonical JSON or derived export",
             "200",
             doc_schema,
+        ),
+        (
+            "/v1/extractions/{id}/result",
+            "post",
+            "Ask a grounded question over extracted pages (optional local model)",
+            "200",
+            json!({"type":"object","properties":{"configured":{"type":"boolean"},"question":{"type":"string"},"answer":{"type":["string","null"]},"model":{"type":["string","null"]},"error":{"type":["string","null"]},"prompt":{"type":"string"},"context_chars":{"type":"integer"},"sources":{"type":"array","items":{"type":"object"}}}}),
         ),
         (
             "/v1/extractions/{id}/units/{unit_id}",
@@ -3875,6 +4108,9 @@ pub fn openapi() -> Value {
         if path == "/v1/extractions/{id}" && method == "patch" {
             operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"unit_id":{"type":"string","example":"u1"},"block_id":{"type":"string","example":"u1-b2"},"text":{"type":"string","description":"Corrected block or cell text"},"original":{"type":"string","description":"Raw text before the correction, used by the UI to revert"},"cell_row":{"type":"integer","description":"Zero-based table row when correcting one cell"},"cell_column":{"type":"integer","description":"Zero-based table column when correcting one cell"},"status":{"type":"string","enum":["reviewed","needs_review","clear"]},"note":{"type":"string"},"revert":{"type":"boolean","description":"Remove the block or cell correction"},"display_name":{"type":"string","description":"Library title; empty clears it (with ?library=true)"},"collection":{"type":"string","description":"Collection name; empty clears it"},"tags":{"type":"array","items":{"type":"string"},"description":"Replacement tag list"},"favorite":{"type":"boolean"},"redactions":{"type":"array","description":"Saved redaction targets (with ?redaction=true)","items":{"type":"object","properties":{"unit_id":{"type":"string"},"block_id":{"type":"string"},"row":{"type":"integer"},"column":{"type":"integer"},"category":{"type":"string"},"value":{"type":"string"}}}},"clear_redactions":{"type":"boolean"}}}}}});
         }
+        if path.ends_with("/result") && method == "post" {
+            operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"type":"object","required":["question"],"properties":{"question":{"type":"string","maxLength":2000},"max_sources":{"type":"integer","minimum":3,"maximum":20}}}}}});
+        }
         paths.entry(path).or_insert(json!({}))[method] = operation;
     }
     let mut spec = json!({"openapi":"3.1.0","info":{"title":"Document Extractor","version":env!("CARGO_PKG_VERSION")},"paths":paths,"components":{"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"}},"schemas":{"Options":options_schema,"Failure":serde_json::to_value(schemars::schema_for!(Failure)).unwrap()}}});
@@ -3916,7 +4152,7 @@ pub fn router(app: App) -> Router {
             "/v1/extractions/{id}",
             get(status).delete(delete).patch(update_review),
         )
-        .route("/v1/extractions/{id}/result", get(result))
+        .route("/v1/extractions/{id}/result", get(result).post(ask_result))
         .route("/v1/extractions/{id}/units/{unit_id}", get(unit))
         .route("/v1/extractions/{id}/assets/{asset_id}", get(asset))
         .route("/v1/extractions/{id}/cancel", post(cancel))
