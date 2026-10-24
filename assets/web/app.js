@@ -50,6 +50,10 @@
     libraryModalJobId: "",
     continuousMode: false,
     continuousLimit: 40,
+    redactionJobId: "",
+    redactionMatches: [],
+    redactionSaved: [],
+    redactionSelected: {},
     notify: localStorage.getItem("docsmith-notify") === "1",
   };
 
@@ -795,6 +799,7 @@
     })
       .then(function (review) {
         state.review = review;
+        invalidateRedactionScan();
         state.reviewOriginals[block.id] = original;
         findBlock(unitId, block.id).text = text;
         findBlock(unitId, block.id).attributes = Object.assign(
@@ -826,6 +831,7 @@
     })
       .then(function (review) {
         state.review = review;
+        invalidateRedactionScan();
         var target = findBlock(unitId, block.id);
         var original = state.reviewOriginals[block.id];
         if (original != null) target.text = original;
@@ -862,6 +868,7 @@
     })
       .then(function (review) {
         state.review = review;
+        invalidateRedactionScan();
         state.reviewOriginalCells[key] = original;
         var target = findCell(unitId, block.id, row, column);
         target.raw = text;
@@ -893,6 +900,7 @@
     })
       .then(function (review) {
         state.review = review;
+        invalidateRedactionScan();
         var target = findCell(unitId, block.id, row, column);
         var original = state.reviewOriginalCells[key];
         if (original != null) {
@@ -1098,6 +1106,219 @@
     }
   }
 
+  function redactionKey(item) {
+    return [
+      item.unit_id,
+      item.block_id,
+      item.row == null ? "" : item.row,
+      item.column == null ? "" : item.column,
+      item.value,
+    ].join("|");
+  }
+
+  function invalidateRedactionScan() {
+    state.redactionJobId = "";
+    state.redactionMatches = [];
+    state.redactionSaved = [];
+    state.redactionSelected = {};
+  }
+
+  function loadRedactions(force) {
+    if (!state.currentJobId) return;
+    if (
+      !force &&
+      state.redactionJobId === state.currentJobId &&
+      (state.redactionMatches.length || state.redactionSaved.length)
+    ) {
+      renderRedactionList();
+      return;
+    }
+    var status = document.getElementById("redaction-status");
+    if (status) status.textContent = "Scanning…";
+    apiGet(
+      "/v1/extractions/" +
+        encodeURIComponent(state.currentJobId) +
+        "/result?format=redactions"
+    )
+      .then(function (data) {
+        state.redactionJobId = state.currentJobId;
+        state.redactionMatches = data.matches || [];
+        state.redactionSaved = data.saved || [];
+        var savedKeys = {};
+        state.redactionSaved.forEach(function (item) {
+          savedKeys[redactionKey(item)] = true;
+        });
+        state.redactionSelected = {};
+        state.redactionMatches.forEach(function (item, index) {
+          state.redactionSelected[index] =
+            state.redactionSaved.length === 0 || savedKeys[redactionKey(item)];
+        });
+        updateRedactedLinks();
+        renderRedactionList();
+      })
+      .catch(function () {
+        if (status) status.textContent = "Scan unavailable";
+        showToast("Could not scan for identifiers");
+      });
+  }
+
+  function renderRedactionList() {
+    var list = document.getElementById("redaction-list");
+    var status = document.getElementById("redaction-status");
+    var save = document.getElementById("save-redactions-btn");
+    if (!list) return;
+    if (status) {
+      status.textContent =
+        (state.redactionSaved.length
+          ? state.redactionSaved.length + " saved"
+          : "Not saved") +
+        " · " +
+        state.redactionMatches.length +
+        (state.redactionMatches.length === 1 ? " match" : " matches");
+    }
+    if (save) save.disabled = !state.redactionMatches.length;
+    list.innerHTML = "";
+    if (!state.redactionMatches.length) {
+      list.innerHTML =
+        "<p class='muted'>No obvious identifiers found. This is not a guarantee; review the page before sharing.</p>";
+      return;
+    }
+    state.redactionMatches.forEach(function (item, index) {
+      var row = document.createElement("label");
+      row.className = "redaction-item";
+      var box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = Boolean(state.redactionSelected[index]);
+      box.addEventListener("change", function () {
+        state.redactionSelected[index] = box.checked;
+      });
+      var copy = document.createElement("span");
+      copy.className = "redaction-copy";
+      copy.innerHTML =
+        "<strong><span class='redaction-category'>" +
+        escapeHtml(item.category) +
+        "</span> " +
+        escapeHtml(item.preview) +
+        "</strong><small>" +
+        escapeHtml((item.unit_name || item.unit_id) + " · " + item.context) +
+        "</small>";
+      row.appendChild(box);
+      row.appendChild(copy);
+      list.appendChild(row);
+    });
+  }
+
+  function selectedRedactions() {
+    var seen = {};
+    var specs = [];
+    state.redactionMatches.forEach(function (item, index) {
+      if (!state.redactionSelected[index]) return;
+      var key = redactionKey(item);
+      if (seen[key]) return;
+      seen[key] = true;
+      specs.push({
+        unit_id: item.unit_id,
+        block_id: item.block_id,
+        row: item.row,
+        column: item.column,
+        category: item.category,
+        value: item.value,
+      });
+    });
+    return specs;
+  }
+
+  function saveRedactions() {
+    if (!state.currentJobId) return;
+    var specs = selectedRedactions();
+    fetch(
+      "/v1/extractions/" + encodeURIComponent(state.currentJobId) + "?redaction=true",
+      {
+        method: "PATCH",
+        headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+        body: JSON.stringify({ redactions: specs }),
+      }
+    )
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) {
+            throw new Error(
+              (body.error && body.error.message) || "Could not save redactions"
+            );
+          }
+          return body;
+        });
+      })
+      .then(function (body) {
+        state.redactionSaved = body.redactions || [];
+        updateRedactedLinks();
+        renderRedactionList();
+        showToast(
+          state.redactionSaved.length
+            ? state.redactionSaved.length + " redaction(s) saved"
+            : "No redactions selected"
+        );
+      })
+      .catch(function (error) {
+        showToast(String(error.message || error));
+      });
+  }
+
+  function clearRedactions() {
+    if (!state.currentJobId) return;
+    fetch(
+      "/v1/extractions/" + encodeURIComponent(state.currentJobId) + "?redaction=true",
+      {
+        method: "PATCH",
+        headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+        body: JSON.stringify({ clear_redactions: true }),
+      }
+    )
+      .then(function (response) {
+        if (!response.ok) throw new Error("clear failed");
+        return response.json();
+      })
+      .then(function () {
+        state.redactionSaved = [];
+        updateRedactedLinks();
+        renderRedactionList();
+        showToast("Saved redactions cleared");
+      })
+      .catch(function () {
+        showToast("Could not clear redactions");
+      });
+  }
+
+  function updateRedactedLinks() {
+    if (!state.currentJobId) return;
+    var base = "/v1/extractions/" + encodeURIComponent(state.currentJobId);
+    var suffix = "&redact=true";
+    var paths = {
+      "dl-redacted-md": "/result?format=markdown" + suffix,
+      "dl-redacted-txt": "/result?format=text" + suffix,
+      "dl-redacted-report": "/result?format=report" + suffix,
+    };
+    var disabled = state.redactionSaved.length === 0;
+    Object.keys(paths).forEach(function (id) {
+      var link = document.getElementById(id);
+      if (!link) return;
+      link.href = base + paths[id];
+      link.classList.toggle("is-disabled", disabled);
+      link.setAttribute("aria-disabled", disabled ? "true" : "false");
+      link.title = disabled ? "Save at least one redaction first" : "";
+    });
+  }
+
+  function selectAllRedactions() {
+    var anyUnchecked = state.redactionMatches.some(function (item, index) {
+      return !state.redactionSelected[index];
+    });
+    state.redactionMatches.forEach(function (item, index) {
+      state.redactionSelected[index] = anyUnchecked;
+    });
+    renderRedactionList();
+  }
+
   function fileNameForUnit(unit, extension) {
     var stem = (state.currentJobMeta && state.currentJobMeta.filename) || "document";
     stem = stem.replace(/\.[^.]+$/, "").replace(/[^\w.-]+/g, "-");
@@ -1205,6 +1426,9 @@
     });
     if (subName === "review" && state.currentUnit) {
       renderReviewPanel(state.currentUnit);
+    }
+    if (subName === "formats" && state.currentJobId) {
+      loadRedactions(false);
     }
   }
 
@@ -2605,6 +2829,10 @@
       state.reviewOriginals = {};
       state.reviewOriginalCells = {};
       state.previewRasters = {};
+      state.redactionJobId = "";
+      state.redactionMatches = [];
+      state.redactionSaved = [];
+      state.redactionSelected = {};
     }
     var sel = document.getElementById("inspector-job-select");
     if (sel) sel.value = jobId;
@@ -2612,6 +2840,7 @@
       switchTab("inspector");
     }
     updateExportLinks(jobId);
+    updateRedactedLinks();
 
     apiGet("/v1/extractions/" + encodeURIComponent(jobId))
       .then(function (jobMeta) {
@@ -2695,6 +2924,9 @@
     state.pendingUnitId = "";
     selectUnit(exists ? target : firstUnit);
     renderPageFilmstrip();
+    if (state.activeSubtab === "formats") {
+      loadRedactions(true);
+    }
   }
 
   function loadSingleUnitFromServer(jobId, unitId) {
@@ -4412,6 +4644,21 @@
         renderCurrentUnit();
       });
     });
+
+    document
+      .getElementById("scan-redactions-btn")
+      .addEventListener("click", function () {
+        loadRedactions(true);
+      });
+    document
+      .getElementById("redaction-select-all-btn")
+      .addEventListener("click", selectAllRedactions);
+    document
+      .getElementById("save-redactions-btn")
+      .addEventListener("click", saveRedactions);
+    document
+      .getElementById("clear-redactions-btn")
+      .addEventListener("click", clearRedactions);
 
     document.querySelectorAll(".fmt-btn").forEach(function (btn) {
       btn.addEventListener("click", function () {

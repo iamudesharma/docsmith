@@ -552,6 +552,32 @@
               </div>
 
               <div class="subtab-panel" id="subpanel-formats">
+                <div class="safe-share">
+                  <div class="safe-share-head">
+                    <div>
+                      <h4>Safe sharing</h4>
+                      <p>Best-effort local scan for emails, phone numbers, cards, IBANs and common IDs. Review every match; detection is not a guarantee.</p>
+                    </div>
+                    <span class="badge" id="redaction-status">Not scanned</span>
+                  </div>
+                  <div class="safe-share-actions">
+                    <button class="btn btn-sm" id="scan-redactions-btn">Scan for identifiers</button>
+                    <button class="btn btn-sm" id="redaction-select-all-btn">Select all</button>
+                    <button class="btn btn-sm btn-primary" id="save-redactions-btn" disabled>Save selected</button>
+                    <button class="btn btn-sm" id="clear-redactions-btn">Clear saved</button>
+                  </div>
+                  <div class="redaction-list" id="redaction-list">
+                    <p class="muted">Open this tab to scan the current document.</p>
+                  </div>
+                  <p class="safe-share-note">Redacted reports omit page images because image content is not redacted. ZIP archives still contain the raw originals.</p>
+                  <div class="safe-share-exports">
+                    <span class="field-inline-label">Share with redactions</span>
+                    <a class="btn btn-sm" id="dl-redacted-md" href="#" target="_blank" rel="noopener">Markdown</a>
+                    <a class="btn btn-sm" id="dl-redacted-txt" href="#" target="_blank" rel="noopener">Text</a>
+                    <a class="btn btn-sm" id="dl-redacted-report" href="#" target="_blank" rel="noopener">Report</a>
+                  </div>
+                </div>
+
                 <div class="format-pills">
                   <button class="fmt-btn is-active" data-fmt="markdown">Markdown</button>
                   <button class="fmt-btn" data-fmt="plaintext">Plain text</button>

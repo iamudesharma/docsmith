@@ -26,7 +26,7 @@ DOC_XBERG=/path/to/xberg target/debug/doc-extractor extract fixtures/digital.pdf
 target/debug/doc-extractor serve --bind 127.0.0.1:8787 --data-dir data/service
 # Workbench: dark mode, ⌘K search, deep-linkable pages, live progress/cancel/retry, library
 # tags/collections, continuous reading, table CSV, review/corrections, on-demand PDF previews,
-# a self-contained HTML report and multi-document export bundles.
+# a self-contained HTML report, multi-document bundles and reviewable safe-share redaction.
 open http://127.0.0.1:8787/
 # Interactive API console (Swagger UI; assets are compiled into the binary, no CDN):
 open http://127.0.0.1:8787/docs
@@ -59,6 +59,12 @@ curl -X PATCH 'http://127.0.0.1:8787/v1/extractions/JOB_ID?library=true' \
 curl -o report.html 'http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=report'
 # Multi-document export bundle (manifest.json + jobs/<id>/ artifacts):
 curl -o library.zip 'http://127.0.0.1:8787/v1/extractions/JOB_A/archive?jobs=JOB_A,JOB_B'
+# Reviewable PII scan and redacted safe-share exports:
+curl 'http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=redactions'
+curl -X PATCH 'http://127.0.0.1:8787/v1/extractions/JOB_ID?redaction=true' \
+  -H 'content-type: application/json' \
+  -d '{"redactions":[{"unit_id":"u1","block_id":"u1-b1","category":"email","value":"a@example.com"}]}'
+curl 'http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=report&redact=true'
 curl http://127.0.0.1:8787/v1/stats
 curl -N http://127.0.0.1:8787/v1/extractions/JOB_ID/events
 curl -O -J http://127.0.0.1:8787/v1/extractions/JOB_ID/archive

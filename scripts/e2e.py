@@ -172,6 +172,22 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('report embeds page images',b'data:image/png;base64,' in image_report)
   bundle=request(f'/v1/extractions/{jsonljob}/archive?jobs={jsonljob},{reviewjob}')[1]
   check('multi-document bundle includes manifest and jobs',bundle[:2]==b'PK' and b'manifest.json' in bundle and f'jobs/{reviewjob}/result.json'.encode() in bundle)
+  pii_text=b'Contact ada@example.com or +1 (415) 555-2671. Card 4111 1111 1111 1111. SSN 123-45-6789.'
+  _,j=upload('pii.txt',content=pii_text,options={'ocr':False});piijob=j['id'];wait(piijob)
+  scan=json.loads(request(f'/v1/extractions/{piijob}/result?format=redactions')[1])
+  categories={m['category'] for m in scan['matches']}
+  check('PII scan finds common identifiers',{'email','phone','card','ssn'} <= categories and scan['saved']==[])
+  chosen=[m for m in scan['matches'] if m['category'] in ('email','card','ssn')]
+  specs=[{'unit_id':m['unit_id'],'block_id':m['block_id'],'row':m.get('row'),'column':m.get('column'),'category':m['category'],'value':m['value']} for m in chosen]
+  code,body=request(f'/v1/extractions/{piijob}?redaction=true','PATCH',json.dumps({'redactions':specs}).encode(),headers={'Content-Type':'application/json'})
+  check('redactions persist',code==200 and len(json.loads(body)['redactions'])==len(specs))
+  redacted=request(f'/v1/extractions/{piijob}/result?format=markdown&redact=true')[1]
+  check('redacted exports mask selected values',b'[REDACTED]' in redacted and b'ada@example.com' not in redacted and b'4111 1111 1111 1111' not in redacted and b'123-45-6789' not in redacted)
+  check('canonical JSON keeps original PII',b'ada@example.com' in request(f'/v1/extractions/{piijob}/result?format=json')[1])
+  redacted_report=request(f'/v1/extractions/{piijob}/result?format=report&redact=true')[1]
+  check('redacted report masks values',b'ada@example.com' not in redacted_report and b'[REDACTED]' in redacted_report)
+  check('archive includes redacted exports',b'redacted/result.md' in request(f'/v1/extractions/{piijob}/archive')[1])
+  check('redaction clear works',request(f'/v1/extractions/{piijob}?redaction=true','PATCH',json.dumps({'clear_redactions':True}).encode(),headers={'Content-Type':'application/json'})[0]==200 and b'ada@example.com' in request(f'/v1/extractions/{piijob}/result?format=markdown&redact=true')[1])
   code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','status':'reviewed'}).encode(),headers={'Content-Type':'application/json'})
   check('review page verification persists',code==200 and json.loads(review_path.read_text())['units']['u1']['status']=='reviewed')
   code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','block_id':text_block['id'],'revert':True}).encode(),headers={'Content-Type':'application/json'})
