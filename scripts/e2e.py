@@ -142,7 +142,7 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   arch=request(f'/v1/extractions/{jsonljob}/archive')[1]
   check('archive zip',arch[:2]==b'PK')
   view_code,view_page=request(f'/view/{jsonljob}')
-  check('viewer page',view_code==200 and b'doc-extractor viewer' in view_page)
+  check('viewer page',view_code==200 and b'Doc Extractor' in view_page)
   wasm_code,wasm_bytes=request('/wasm/doc_extractor.wasm')
   js_code,js_bytes=request('/assets/web/app.js')
   css_code,css_bytes=request('/assets/web/app.css')

@@ -33,24 +33,24 @@
         "Upload PDF, Office, spreadsheet, or image files to extract clean text, tables, and diagrams.",
     },
     inspector: {
-      title: "Document Viewer",
+      title: "Reader",
       subtitle:
-        "Read extracted text and tables side-by-side with the page preview. Click any box on the page to find its text.",
+        "Read a page and its extracted text side by side. Click any highlighted box to jump to that text.",
     },
     pages: {
-      title: "Saved Page Images (For AI)",
+      title: "Page images",
       subtitle:
-        "Pages that were blank, scanned, or diagram-heavy are saved here as clear images ready for AI reading.",
+        "Every page is extracted to text. Pages that are blank, scanned or diagram-heavy are also kept as clean 150 DPI images for a vision model.",
     },
     playground: {
-      title: "Instant Try-Out",
+      title: "Instant try-out",
       subtitle:
-        "Test how tables, diagrams, and Markdown are read right inside your browser — no file upload needed.",
+        "Test how tables, diagrams and Markdown are read in your browser. Nothing leaves this machine.",
     },
     system: {
-      title: "Speed & System Status",
+      title: "Status",
       subtitle:
-        "Verified accuracy across 20 concurrent PDFs (316 pages) and a live check of installed document tools.",
+        "Speed and accuracy across 20 PDFs and 316 pages, plus the local document tools installed here.",
     },
   };
 
@@ -426,10 +426,9 @@
     apiGet("/v1/stats")
       .then(function (stats) {
         var w = stats.workers || { active: 0, slots: 0 };
-        document.getElementById("stat-workers").textContent = w.active + " of " + w.slots + " busy";
+        document.getElementById("stat-workers").textContent = w.active + " / " + w.slots;
         var j = stats.jobs || {};
-        document.getElementById("stat-jobs").textContent =
-          (j.completed || 0) + " done" + (j.running ? " (" + j.running + " running)" : "");
+        document.getElementById("stat-jobs").textContent = String(j.completed || 0);
         document.getElementById("stat-disk").textContent = formatBytes(stats.disk_bytes || 0);
       })
       .catch(function () {});
@@ -448,35 +447,36 @@
         matrix.innerHTML = "";
         var items = [
           {
-            title: "PDF Reader & Page Images",
-            ok: caps.pdf && caps.pdf.pdftotext && caps.pdf.page_images,
-            detail: "Reads digital PDFs and saves 150 DPI page images",
+            title: "PDF reader and page images",
+            ok: Boolean(caps.pdf && caps.pdf.available),
+            detail: "Poppler backend · 150 DPI page rasters",
           },
           {
-            title: "Scanned Text Reader (OCR)",
-            ok: caps.ocr && caps.ocr.available,
+            title: "Scanned text (OCR)",
+            ok: Boolean(caps.ocr && (caps.ocr.tesseract || caps.ocr.apple_vision || caps.ocr.smoldocling || caps.ocr.paddle_onnx)),
             detail:
-              "Installed languages: " +
+              (caps.ocr && caps.ocr.tesseract ? "Tesseract" : "No engine") +
+              " · languages: " +
               ((caps.ocr && caps.ocr.languages && caps.ocr.languages.join(", ")) || "none"),
           },
           {
             title: "Apple Vision OCR (macOS)",
-            ok: caps.apple_vision && caps.apple_vision.available,
+            ok: Boolean(caps.ocr && caps.ocr.apple_vision),
             detail:
-              caps.apple_vision && caps.apple_vision.available
+              caps.ocr && caps.ocr.apple_vision
                 ? "Installed and ready"
-                : "Optional (not enabled)",
+                : "Optional; not enabled",
           },
           {
-            title: "Office, Sheets & Diagrams",
+            title: "Office, sheets and diagrams",
             ok: true,
             detail: "Word, Excel, PowerPoint, CSV, HTML, Markdown, Mermaid, DBML, draw.io",
           },
           {
-            title: "In-Browser Rust + WASM",
+            title: "In-browser Rust and WASM",
             ok: state.wasmReady,
             detail: state.wasmReady
-              ? "Active — instant previews and highlights"
+              ? "Active: instant previews and highlights"
               : "Loading",
           }
         ];
@@ -526,7 +526,7 @@
     try {
       var res = wasmCall("validate_options", { options: opts });
       if (res.valid) {
-        badge.textContent = "Settings Ready";
+        badge.textContent = "Options ready";
         badge.className = "badge badge-success";
         if (res.selected_pages_count != null) {
           hint.textContent =
@@ -669,10 +669,12 @@
 
       var tdDoc = document.createElement("td");
       tdDoc.innerHTML =
-        "<strong>" +
+        "<div class='row-title'>" +
         escapeHtml(job.filename || "Document") +
-        "</strong><div class='muted' style='font-size:11.5px'>ID: " +
+        "</div><div class='row-sub'>" +
         escapeHtml(job.id.slice(0, 8)) +
+        "</div><div class='row-options'>" +
+        escapeHtml(optSummary.join(" · ") || "Standard") +
         "</div>";
 
       var tdState = document.createElement("td");
@@ -691,13 +693,8 @@
       var tdProg = document.createElement("td");
       tdProg.textContent = (job.progress || 0) + (job.progress === 1 ? " page / section" : " pages / sections");
 
-      var tdOpts = document.createElement("td");
-      tdOpts.innerHTML =
-        "<span class='muted' style='font-size:12.5px'>" +
-        escapeHtml(optSummary.join(", ") || "Standard") +
-        "</span>";
-
       var tdAct = document.createElement("td");
+      tdAct.className = "row-actions";
       var openBtn = document.createElement("button");
       openBtn.className = "btn btn-sm btn-primary";
       openBtn.textContent = "Open";
@@ -708,17 +705,19 @@
 
       if (job.state === "completed") {
         var zipLink = document.createElement("a");
-        zipLink.className = "btn btn-sm";
-        zipLink.style.marginLeft = "6px";
+        zipLink.className = "btn btn-sm btn-icon";
+        zipLink.title = "Download the result archive";
+        zipLink.setAttribute("aria-label", "Download the result archive");
         zipLink.href = "/v1/extractions/" + encodeURIComponent(job.id) + "/archive";
-        zipLink.textContent = "Download .zip";
+        zipLink.innerHTML = "<svg class='icon'><use href='#i-download'/></svg>";
         tdAct.appendChild(zipLink);
       }
 
       var delBtn = document.createElement("button");
-      delBtn.className = "btn btn-sm";
-      delBtn.style.marginLeft = "6px";
-      delBtn.textContent = "Remove";
+      delBtn.className = "btn btn-sm btn-icon";
+      delBtn.title = "Remove this document";
+      delBtn.setAttribute("aria-label", "Remove this document");
+      delBtn.innerHTML = "<svg class='icon'><use href='#i-x'/></svg>";
       delBtn.addEventListener("click", function () {
         fetch("/v1/extractions/" + encodeURIComponent(job.id), {
           method: "DELETE",
@@ -733,7 +732,6 @@
       tr.appendChild(tdDoc);
       tr.appendChild(tdState);
       tr.appendChild(tdProg);
-      tr.appendChild(tdOpts);
       tr.appendChild(tdAct);
       tbody.appendChild(tr);
     });
@@ -772,7 +770,7 @@
         state.currentJobMeta = jobMeta;
         if (state.activeTab === "inspector") {
           document.getElementById("app-title").textContent =
-            "Document Viewer — " + (jobMeta.filename || jobId.slice(0, 8));
+            "Reader — " + (jobMeta.filename || jobId.slice(0, 8));
         }
         document.getElementById("inspector-doc-status").textContent =
           jobMeta.state === "completed" ? "Completed" : jobMeta.state;
@@ -1162,12 +1160,40 @@
       div.textContent = "Could not read part of this page: " + (e.message || e.code);
       warningsBox.appendChild(div);
     });
+    var notes = [];
+    var visibleWarnings = [];
     (unit.warnings || []).forEach(function (w) {
+      if (
+        w.indexOf("Scanned page:") === 0 ||
+        w.indexOf("Embedded images retained;") === 0 ||
+        w.indexOf("Poppler reading order") === 0
+      ) {
+        notes.push(w);
+      } else {
+        visibleWarnings.push(w);
+      }
+    });
+    visibleWarnings.forEach(function (w) {
       var div = document.createElement("div");
       div.className = "alert-item";
-      div.textContent = "Note: " + w;
+      div.textContent = w;
       warningsBox.appendChild(div);
     });
+    if (notes.length) {
+      var details = document.createElement("details");
+      details.className = "reading-notes";
+      var summary = document.createElement("summary");
+      summary.textContent =
+        "Page notes (" + notes.length + ") · provenance and reading order";
+      details.appendChild(summary);
+      notes.forEach(function (w) {
+        var div = document.createElement("div");
+        div.className = "alert-item";
+        div.textContent = w;
+        details.appendChild(div);
+      });
+      warningsBox.appendChild(details);
+    }
 
     var list = document.getElementById("blocks-list");
     list.innerHTML = "";
@@ -1474,7 +1500,7 @@
       var timingNote = timing
         ? " · " +
           (timing.total_ms / 1000).toFixed(1) +
-          " s total" +
+          " s" +
           (timing.ocr_ms
             ? " (OCR " + (timing.ocr_ms / 1000).toFixed(1) + " s)"
             : timing.method
