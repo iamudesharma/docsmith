@@ -15,7 +15,11 @@ pub mod pdf_source;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod providers;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod refine;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod s3;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod service;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tables;
 pub mod wasm;

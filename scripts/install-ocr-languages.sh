@@ -12,7 +12,7 @@ fi
 if [ "$#" -gt 0 ]; then
   LANGUAGES="$*"
 else
-  LANGUAGES="eng hin"
+  LANGUAGES="eng hin osd"
 fi
 
 TARGET="${TESSDATA_PREFIX:-}"

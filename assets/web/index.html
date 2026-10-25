@@ -3,82 +3,143 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>doc-extractor viewer</title>
+  <meta name="theme-color" content="#e8f1f2">
+  <title>Doc Extractor — Offline Document Reader</title>
+  <script>
+    try {
+      var savedTheme = localStorage.getItem("docsmith-theme");
+      var dark = savedTheme
+        ? savedTheme === "dark"
+        : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+    } catch (_) {}
+  </script>
   <link rel="stylesheet" href="/assets/web/app.css">
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <!-- Inline icon set: no network requests, no emoji. -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3 3 7.5l9 4.5 9-4.5L12 3Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h3.2l2 2H18a2.5 2.5 0 0 1 2.5 2.5v8A2.5 2.5 0 0 1 18 20H6a2.5 2.5 0 0 1-2.5-2.5v-10Z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M7 3.5h6.6L19 8.9v11.6H7z"/><path d="M13.4 3.8V9H19"/><path d="M10 13h6M10 16.5h6"/></symbol>
+    <symbol id="i-images" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.5"/><path d="m4.5 17 5-5 4 4 2.5-2.5 3.5 3.5"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.5 2.5 4 14h6.5L9.5 21.5 20 10h-6.5z"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-7 5 14 2.5-7H21"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m7.5 8.5 4.5-4.5 4.5 4.5"/><path d="M4 15.5v3A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-3"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12"/><path d="m7.5 11.5 4.5 4.5 4.5-4.5"/><path d="M4 18.5v1A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5v-1"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.6 6"/><path d="M20 5v6h-6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 3.5 19h17L12 4Z"/><path d="M12 9.5v4.5M12 17h.01"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5 5 6v6c0 4.5 3 7.4 7 8.5 4-1.1 7-4 7-8.5V6l-7-2.5Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-table" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 10h17M9.5 10v9"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8.5 8-4 4 4 4M15.5 8l4 4-4 4M13 5.5l-2 13"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+    <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m10 7-5 5 5 5"/></symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m14 7 5 5-5 5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5 13.7 9l5.3 1.7-5.3 1.7L12 18l-1.7-5.6L5 10.7 10.3 9 12 3.5Z"/><path d="M18.5 16.5 19 18l1.5.5-1.5.5-.5 1.5-.5-1.5L16.5 18l1.5-.5.5-1Z"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H19v16H5.5A1.5 1.5 0 0 1 4 18.5v-13Z"/><path d="M4 17.5A1.5 1.5 0 0 1 5.5 16H19"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.6 1.6"/><path d="M14 10.5a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.6-1.6"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6.5 10a5.5 5.5 0 0 1 11 0c0 4 1.5 5.5 1.5 5.5H5s1.5-1.5 1.5-5.5Z"/><path d="M10 18.5a2 2 0 0 0 4 0"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="m4.5 19.5 4.2-1 9.6-9.6a2.1 2.1 0 0 0-3-3L5.7 15.5l-1.2 4Z"/><path d="m13.8 7.4 3 3"/></symbol>
+    <symbol id="i-badge-check" viewBox="0 0 24 24"><path d="M12 3.5 5 6v6c0 4.5 3 7.4 7 8.5 4-1.1 7-4 7-8.5V6l-7-2.5Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.9L12 3.5Z"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="m4 4 7.2.6 8.2 8.2a2 2 0 0 1 0 2.8l-4.6 4.6a2 2 0 0 1-2.8 0L4.6 12 4 4Z"/><circle cx="8.2" cy="8.2" r="1.2"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></symbol>
+  </svg>
+
+  <div class="ambient" aria-hidden="true">
+    <span class="orb orb-a"></span>
+    <span class="orb orb-b"></span>
+    <span class="orb orb-c"></span>
+  </div>
+
   <div class="app-shell">
-    <!-- ==================== LEFT SIDEBAR ==================== -->
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">DE</div>
-        <div>
+        <div class="brand-mark"><svg class="icon"><use href="#i-layers"/></svg></div>
+        <div class="brand-copy">
           <div class="brand-name">Doc Extractor</div>
-          <div class="brand-tag">Offline Document Reader</div>
+          <div class="brand-tag">Private document reading room</div>
         </div>
       </div>
 
       <nav class="side-nav" role="tablist" aria-label="Main navigation">
         <button class="nav-item is-active" data-tab="studio" role="tab" aria-selected="true">
-          <span class="nav-icon">📁</span>
+          <span class="nav-icon"><svg class="icon"><use href="#i-folder"/></svg></span>
           <span class="nav-text">
             <strong>Documents</strong>
-            <small>Upload &amp; manage files</small>
+            <small>Add and track files</small>
           </span>
         </button>
 
         <button class="nav-item" data-tab="inspector" role="tab" aria-selected="false">
-          <span class="nav-icon">📄</span>
+          <span class="nav-icon"><svg class="icon"><use href="#i-file"/></svg></span>
           <span class="nav-text">
-            <strong>Document Viewer</strong>
-            <small>Read text, tables &amp; pages</small>
+            <strong>Reader</strong>
+            <small>Text, tables and pages</small>
           </span>
         </button>
 
         <button class="nav-item" data-tab="pages" role="tab" aria-selected="false">
-          <span class="nav-icon">🖼️</span>
+          <span class="nav-icon"><svg class="icon"><use href="#i-images"/></svg></span>
           <span class="nav-text">
-            <strong>Saved Page Images</strong>
-            <small>Pages kept for AI reading</small>
+            <strong>Page images</strong>
+            <small>Rasters for vision</small>
           </span>
           <span class="nav-badge" id="pages-tab-count">0</span>
         </button>
 
         <button class="nav-item" data-tab="playground" role="tab" aria-selected="false">
-          <span class="nav-icon">⚡</span>
+          <span class="nav-icon"><svg class="icon"><use href="#i-bolt"/></svg></span>
           <span class="nav-text">
-            <strong>Instant Try-Out</strong>
-            <small>Test tables &amp; diagrams live</small>
+            <strong>Instant try-out</strong>
+            <small>Test a snippet live</small>
           </span>
         </button>
 
         <button class="nav-item" data-tab="system" role="tab" aria-selected="false">
-          <span class="nav-icon">✅</span>
+          <span class="nav-icon"><svg class="icon"><use href="#i-pulse"/></svg></span>
           <span class="nav-text">
-            <strong>Speed &amp; Status</strong>
-            <small>Accuracy report &amp; tools</small>
+            <strong>Status</strong>
+            <small>Speed and installed tools</small>
           </span>
         </button>
       </nav>
 
+      <div class="sidebar-note">
+        <svg class="icon"><use href="#i-shield"/></svg>
+        <p><strong>Private by design.</strong> Extraction runs on this device; files never leave it.</p>
+      </div>
+
       <div class="sidebar-footer">
         <div class="status-row">
           <span class="status-dot is-online" id="wasm-dot"></span>
-          <span id="wasm-status">Browser Engine Ready</span>
+          <span id="wasm-status">Browser engine ready</span>
           <span class="muted-mono" id="wasm-perf"></span>
         </div>
         <div class="status-summary">
-          <span>Active workers: <strong id="stat-workers">0/2</strong></span>
-          <span>Completed: <strong id="stat-jobs">0</strong></span>
-          <span>Storage: <strong id="stat-disk">0 KB</strong></span>
+          <span>Workers <strong id="stat-workers">0/2</strong></span>
+          <span>Done <strong id="stat-jobs">0</strong></span>
+          <span>Storage <strong id="stat-disk">0 KB</strong></span>
         </div>
         <details class="sidebar-auth">
-          <summary>Server Access Key (Optional)</summary>
+          <summary>Server access key (optional)</summary>
           <input id="token-input" type="password" placeholder="Paste bearer token" autocomplete="off">
         </details>
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false">
+          <svg class="icon"><use href="#i-moon"/></svg>
+          <span id="theme-label">Dark mode</span>
+        </button>
         <div class="sidebar-links">
-          <a href="/docs" target="_blank" rel="noopener">API Docs (/docs)</a>
-          <a href="/v1/stats" target="_blank" rel="noopener">Stats (/v1/stats)</a>
+          <a href="/docs" target="_blank" rel="noopener">API docs</a>
+          <a href="/v1/stats" target="_blank" rel="noopener">Stats</a>
           <a href="/openapi.json" target="_blank" rel="noopener">OpenAPI</a>
           <a href="/v1/capabilities" target="_blank" rel="noopener">Capabilities</a>
           <a href="/health/ready" target="_blank" rel="noopener">Health</a>
@@ -86,102 +147,104 @@
       </div>
     </aside>
 
-    <!-- ==================== MAIN CONTENT AREA ==================== -->
     <div class="main-area">
       <header class="page-header">
-        <div>
+        <div class="page-heading">
           <h1 id="app-title">Documents</h1>
           <p class="page-subtitle" id="app-subtitle">
             Upload PDF, Office, spreadsheet, or image files to extract clean text, tables, and diagrams.
           </p>
         </div>
         <div class="header-actions">
+          <span class="badge badge-local"><svg class="icon"><use href="#i-shield"/></svg> Local only</span>
+          <button class="btn btn-secondary search-trigger" id="open-search-btn" aria-keyshortcuts="Meta+K Control+K">
+            <svg class="icon"><use href="#i-search"/></svg>
+            Search
+            <kbd class="search-kbd" id="search-kbd">⌘K</kbd>
+          </button>
           <button class="btn btn-secondary" id="sample-synth-btn">
-            Try With Sample Files
+            <svg class="icon"><use href="#i-spark"/></svg>
+            Try sample files
           </button>
         </div>
       </header>
 
-      <main class="content-wrap">
-        <!-- ==================== 1. DOCUMENTS (UPLOAD + LIST) ==================== -->
+      <main class="content-wrap" id="main-content">
+        <!-- ==================== DOCUMENTS ==================== -->
         <section class="tab-panel is-active" id="panel-studio" role="tabpanel">
           <div class="two-col-layout">
-            <!-- Left: Simple Upload Box -->
-            <div class="card">
-              <h2 class="card-title">1. Upload Files</h2>
-              <p class="card-desc">
-                Select one or more files from your computer. Everything runs locally on your machine.
-              </p>
+            <div class="card card-upload">
+              <div class="card-head-row">
+                <div>
+                  <h2 class="card-title">Add documents</h2>
+                  <p class="card-desc">Files stay on this machine. Nothing is uploaded to a cloud service.</p>
+                </div>
+                <span class="badge badge-primary">Offline</span>
+              </div>
 
               <label class="upload-box" id="dropzone">
                 <input type="file" id="file-input" multiple>
-                <div class="upload-box-icon">📄</div>
-                <div class="upload-box-title" id="dropzone-title">
-                  Click to choose files, or drag and drop them here
-                </div>
-                <div class="upload-box-sub" id="dropzone-sub">
-                  Supports PDF, Word, Excel, PowerPoint, CSV, Images (PNG/JPG), HTML, Markdown, and Diagrams
-                </div>
+                <span class="upload-box-icon"><svg class="icon"><use href="#i-upload"/></svg></span>
+                <span class="upload-box-title" id="dropzone-title">Drop files here, or choose from your computer</span>
+                <span class="upload-box-sub" id="dropzone-sub">PDF · Word · Excel · PowerPoint · CSV · Images · HTML · Markdown · Diagrams</span>
               </label>
+
+              <div class="selected-files" id="selected-files" aria-live="polite"></div>
 
               <div class="simple-options">
                 <div class="field-row">
                   <label class="checkbox-label">
                     <input type="checkbox" id="opt-ocr" checked>
                     <span>
-                      <strong>Read scanned text (OCR)</strong>
-                      <small>Reads text inside scanned PDFs and photos.</small>
+                      <strong>Read scanned text</strong>
+                      <small>Run OCR on scans and photos.</small>
                     </span>
                   </label>
                 </div>
 
                 <div class="field-group">
-                  <label class="field-label" for="opt-page-images">
-                    Save unreadable pages as images
-                  </label>
+                  <label class="field-label" for="opt-page-images">Page images</label>
                   <select id="opt-page-images">
-                    <option value="failed" selected>Automatic — Only when a page is blank, scanned, or unreadable (Recommended)</option>
-                    <option value="all">Every page — Save an image of every PDF page (best for chart/diagram review)</option>
-                    <option value="none">Off — Do not save extra page images</option>
+                    <option value="failed" selected>Automatic: keep only pages that need a closer look</option>
+                    <option value="all">Every page: keep a raster of every PDF page</option>
+                    <option value="none">Off: do not keep extra page images</option>
                   </select>
-                  <span class="field-help">
-                    Saves a clear picture of difficult pages in a separate folder so an AI can read them later.
-                  </span>
+                  <span class="field-help">Page rasters are saved beside the result for a vision model to read later.</span>
                 </div>
 
                 <details class="more-options">
-                  <summary>More options (page range, language, text splitting)</summary>
+                  <summary>More options <svg class="icon"><use href="#i-chevron"/></svg></summary>
                   <div class="more-options-body">
                     <div class="field-group">
-                      <label class="field-label" for="opt-pages">Only extract specific PDF pages</label>
-                      <input id="opt-pages" type="text" placeholder="Example: 1-5, 8, 12- (leave blank for all pages)">
+                      <label class="field-label" for="opt-pages">Pages to extract</label>
+                      <input id="opt-pages" type="text" placeholder="All pages, or a range such as 1-5, 8, 12-">
                       <span class="field-help" id="opt-pages-feedback">All pages will be extracted.</span>
                     </div>
 
                     <div class="field-grid-2">
                       <div class="field-group">
-                        <label class="field-label" for="opt-ocr-provider">OCR Engine</label>
+                        <label class="field-label" for="opt-ocr-provider">OCR engine</label>
                         <select id="opt-ocr-provider">
-                          <option value="tesseract">Tesseract (Default)</option>
-                          <option value="smoldocling">SmolDocling-256M (Pure-Rust DocTags + MLX/GGUF)</option>
+                          <option value="tesseract">Tesseract (default)</option>
+                          <option value="smoldocling">SmolDocling-256M (DocTags + MLX/GGUF)</option>
                           <option value="apple_vision">Apple Vision (macOS)</option>
                         </select>
-                        <span class="field-help">SmolDocling needs <code>scripts/run-smoldocling.sh</code>; if it is not running, Tesseract is used automatically.</span>
+                        <span class="field-help">SmolDocling needs <code>scripts/run-smoldocling.sh</code>; if it is not running, Tesseract is used.</span>
                       </div>
                       <div class="field-group">
-                        <label class="field-label" for="opt-languages">OCR Language</label>
+                        <label class="field-label" for="opt-languages">OCR languages</label>
                         <input id="opt-languages" type="text" value="eng+hin" placeholder="e.g. eng+hin">
-                        <span class="field-help">Use <code>eng+hin</code> for English + Hindi. Installed: <span id="installed-languages">checking…</span>.</span>
+                        <span class="field-help">Use <code>eng+hin</code> for English and Hindi. Installed: <span id="installed-languages">checking…</span>.</span>
                       </div>
                     </div>
 
                     <div class="field-grid-2">
                       <div class="field-group">
-                        <label class="field-label" for="opt-chunk-chars">Paragraph split size (characters)</label>
+                        <label class="field-label" for="opt-chunk-chars">Passage length (characters)</label>
                         <input id="opt-chunk-chars" type="number" min="16" max="16000" step="16" value="320">
                       </div>
                       <div class="field-group">
-                        <label class="field-label" for="opt-chunk-overlap">Overlap characters</label>
+                        <label class="field-label" for="opt-chunk-overlap">Shared overlap (characters)</label>
                         <input id="opt-chunk-overlap" type="number" min="0" max="4000" step="8" value="40">
                       </div>
                     </div>
@@ -189,9 +252,9 @@
                     <div class="field-group">
                       <label class="field-label" for="opt-result-format">Default download format</label>
                       <select id="opt-result-format">
-                        <option value="json">Structured JSON (Default)</option>
-                        <option value="markdown">Markdown Document</option>
-                        <option value="text">Plain Text</option>
+                        <option value="json">Structured JSON (default)</option>
+                        <option value="markdown">Markdown document</option>
+                        <option value="text">Plain text</option>
                       </select>
                     </div>
 
@@ -210,7 +273,11 @@
                       </label>
                       <label class="checkbox-inline">
                         <input type="checkbox" id="opt-vision">
-                        <span>Use local Vision model</span>
+                        <span>Use local vision model</span>
+                      </label>
+                      <label class="checkbox-inline">
+                        <input type="checkbox" id="opt-notify">
+                        <span>Notify me when finished</span>
                       </label>
                     </div>
                   </div>
@@ -219,19 +286,22 @@
 
               <div class="upload-footer">
                 <button class="btn btn-primary btn-lg" id="submit-upload-btn">
-                  Extract Selected Files
+                  <svg class="icon"><use href="#i-upload"/></svg>
+                  Extract selected files
                 </button>
                 <span class="badge" id="options-valid-badge">Ready</span>
-                <span class="status-msg" id="upload-status"></span>
+                <span class="status-msg" id="upload-status" aria-live="polite"></span>
+                <div class="upload-progress hidden" id="upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                  <span class="upload-progress-bar" id="upload-progress-bar"></span>
+                </div>
               </div>
             </div>
 
-            <!-- Right: Clean Document List -->
-            <div class="card">
+            <div class="card card-queue">
               <div class="card-head-row">
                 <div>
-                  <h2 class="card-title">2. Extracted Documents</h2>
-                  <p class="card-desc">Click <strong>Open</strong> on any document to read its pages, tables, and saved images.</p>
+                  <h2 class="card-title">Recent extractions</h2>
+                  <p class="card-desc">Open a document to read its pages, tables and saved images.</p>
                 </div>
                 <div class="inline-controls">
                   <select id="queue-state-filter" aria-label="Filter documents by status">
@@ -240,24 +310,62 @@
                     <option value="running">In progress</option>
                     <option value="queued">Waiting</option>
                     <option value="failed">Failed</option>
+                    <option value="cancelled">Cancelled</option>
                   </select>
-                  <button class="btn btn-sm" id="refresh-queue-btn">Refresh</button>
+                  <button class="btn btn-sm" id="refresh-queue-btn">
+                    <svg class="icon"><use href="#i-refresh"/></svg>
+                    Refresh
+                  </button>
                 </div>
+              </div>
+
+              <div class="library-bar">
+                <select id="library-collection-filter" aria-label="Filter by collection">
+                  <option value="">All collections</option>
+                </select>
+                <select id="library-tag-filter" aria-label="Filter by tag">
+                  <option value="">All tags</option>
+                </select>
+                <label class="checkbox-inline">
+                  <input type="checkbox" id="library-favorites-filter">
+                  <span>Favorites</span>
+                </label>
+                <select id="library-sort" aria-label="Sort documents">
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                  <option value="name">Name A–Z</option>
+                  <option value="pages">Most pages</option>
+                  <option value="favorite">Favorites first</option>
+                </select>
+              </div>
+
+              <div class="bulk-bar hidden" id="bulk-bar">
+                <span id="bulk-count">0 selected</span>
+                <button class="btn btn-sm" id="bulk-select-all-btn">Select all</button>
+                <button class="btn btn-sm" id="bulk-download-btn">
+                  <svg class="icon"><use href="#i-download"/></svg>
+                  Download
+                </button>
+                <button class="btn btn-sm" id="bulk-favorite-btn">
+                  <svg class="icon"><use href="#i-star"/></svg>
+                  Favorite
+                </button>
+                <button class="btn btn-sm" id="bulk-unfavorite-btn">Unfavorite</button>
+                <button class="btn btn-sm" id="bulk-clear-btn">Clear</button>
               </div>
 
               <div class="table-wrap">
                 <table class="clean-table" id="jobs-table">
                   <thead>
                     <tr>
-                      <th>File Name</th>
+                      <th>File</th>
                       <th>Status</th>
-                      <th>Pages / Sections</th>
-                      <th>Settings Used</th>
+                      <th>Pages</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody id="jobs-tbody">
-                    <tr><td colspan="5" class="muted">Loading documents…</td></tr>
+                    <tr><td colspan="4" class="muted">Loading documents…</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -265,133 +373,218 @@
           </div>
         </section>
 
-        <!-- ==================== 2. DOCUMENT VIEWER ==================== -->
+        <!-- ==================== READER ==================== -->
         <section class="tab-panel" id="panel-inspector" role="tabpanel">
-          <!-- Simple Top Bar -->
           <div class="viewer-bar card">
             <div class="viewer-bar-left">
               <label class="inline-field">
-                <span>Document:</span>
+                <span>Document</span>
                 <select id="inspector-job-select"></select>
               </label>
 
               <div class="pager-group">
-                <button class="btn btn-sm" id="unit-prev-btn" title="Previous page">&larr; Prev</button>
+                <button class="btn btn-sm btn-icon" id="unit-prev-btn" title="Previous page (K)" aria-label="Previous page">
+                  <svg class="icon"><use href="#i-arrow-left"/></svg>
+                </button>
                 <select id="inspector-unit-select" aria-label="Select page or section"></select>
-                <button class="btn btn-sm" id="unit-next-btn" title="Next page">Next &rarr;</button>
+                <button class="btn btn-sm btn-icon" id="unit-next-btn" title="Next page (J)" aria-label="Next page">
+                  <svg class="icon"><use href="#i-arrow-right"/></svg>
+                </button>
               </div>
 
               <span class="badge" id="inspector-doc-status">Ready</span>
+              <button class="btn btn-sm" id="continuous-toggle-btn" aria-pressed="false">
+                <svg class="icon"><use href="#i-book"/></svg>
+                Read all pages
+              </button>
             </div>
 
             <div class="viewer-bar-right" id="inspector-export-links">
-              <span class="field-inline-label">Download:</span>
+              <button class="btn btn-sm btn-icon" id="copy-link-btn" title="Copy a link to this page" aria-label="Copy a link to this page">
+                <svg class="icon"><use href="#i-link"/></svg>
+              </button>
+              <span class="field-inline-label">Download</span>
+              <a class="btn btn-sm" id="dl-original" href="#" download>Original</a>
               <a class="btn btn-sm" id="dl-md" href="#" target="_blank" rel="noopener">Markdown</a>
               <a class="btn btn-sm" id="dl-txt" href="#" target="_blank" rel="noopener">Text</a>
               <a class="btn btn-sm" id="dl-html" href="#" target="_blank" rel="noopener">HTML</a>
+              <a class="btn btn-sm" id="dl-report" href="#" target="_blank" rel="noopener">Report</a>
               <a class="btn btn-sm" id="dl-json" href="#" target="_blank" rel="noopener">JSON</a>
               <a class="btn btn-sm" id="dl-jsonl" href="#" target="_blank" rel="noopener">JSONL</a>
-              <a class="btn btn-sm btn-primary" id="dl-zip" href="#">All Files (.zip)</a>
+              <a class="btn btn-sm btn-primary" id="dl-zip" href="#">
+                <svg class="icon"><use href="#i-download"/></svg>
+                All files
+              </a>
             </div>
           </div>
 
-          <!-- Plain-English Source Filter Legend -->
           <div class="legend-bar card">
-            <span class="legend-title">Show content by how it was read:</span>
+            <div class="legend-copy">
+              <span class="legend-title">Show content by source</span>
+              <span class="legend-hint">Every block keeps its provenance.</span>
+            </div>
             <div class="legend-buttons" role="group" aria-label="Content source filter">
               <button class="filter-chip is-active" data-prov="all">
-                All Content (<span id="cnt-prov-all">0</span>)
+                All content (<span id="cnt-prov-all">0</span>)
               </button>
-              <button class="filter-chip chip-native" data-prov="native" title="Copied directly from the digital file (100% exact)">
+              <button class="filter-chip chip-native" data-prov="native" title="Copied directly from the digital file">
                 <span class="dot dot-native"></span>
-                Direct Text (<span id="cnt-prov-native">0</span>)
+                Direct text (<span id="cnt-prov-native">0</span>)
               </button>
               <button class="filter-chip chip-ocr" data-prov="ocr" title="Read from a scanned image using OCR">
                 <span class="dot dot-ocr"></span>
                 Scanned / OCR (<span id="cnt-prov-ocr">0</span>)
               </button>
-              <button class="filter-chip chip-inferred" data-prov="inferred" title="Table grid or diagram structure detected automatically from layout">
+              <button class="filter-chip chip-inferred" data-prov="inferred" title="Table grid or diagram structure detected from layout">
                 <span class="dot dot-inferred"></span>
-                Auto-Detected Layout (<span id="cnt-prov-inferred">0</span>)
+                Inferred layout (<span id="cnt-prov-inferred">0</span>)
               </button>
             </div>
-            <label class="checkbox-inline" style="margin-left:auto">
+            <label class="checkbox-inline legend-toggle">
               <input type="checkbox" id="toggle-raster-bg" checked>
-              <span>Show original page picture when available</span>
+              <span>Show page picture</span>
             </label>
           </div>
 
-          <!-- Split View: Left = Page Preview, Right = Extracted Content -->
-          <div class="viewer-split">
-            <!-- Left: Visual Page Preview -->
+          <div class="page-filmstrip-wrap">
+            <span class="page-filmstrip-caption" id="page-filmstrip-caption">All pages</span>
+            <div class="page-filmstrip" id="page-filmstrip" role="list"></div>
+          </div>
+
+          <div class="continuous-reader hidden" id="continuous-reader"></div>
+
+          <div class="viewer-split" id="reader-split">
             <div class="card viewer-left">
               <div class="card-head-row compact">
                 <div>
-                  <h3 class="card-title" id="canvas-title">Page Preview &amp; Highlights</h3>
-                  <p class="card-desc" id="canvas-subtitle">
-                    Click any highlighted box on the page to jump to that text on the right.
-                  </p>
+                  <h3 class="card-title" id="canvas-title">Page preview</h3>
+                  <p class="card-desc" id="canvas-subtitle">Click a highlighted box to jump to that text.</p>
+                </div>
+                <div class="canvas-tools">
+                  <button class="btn btn-sm hidden" id="render-page-toolbar-btn" title="Render the original PDF page">
+                    <svg class="icon"><use href="#i-images"/></svg>
+                    Render page
+                  </button>
+                  <button class="btn btn-sm" id="copy-page-text-btn" title="Copy this page as text">
+                    <svg class="icon"><use href="#i-copy"/></svg>
+                    Copy
+                  </button>
+                  <button class="btn btn-sm" id="download-page-text-btn" title="Download this page as a text file">
+                    <svg class="icon"><use href="#i-download"/></svg>
+                    .txt
+                  </button>
+                  <span class="badge hidden" id="canvas-quality"></span>
+                  <span class="badge hidden" id="canvas-timing"></span>
                 </div>
               </div>
 
               <div class="page-stage-wrap" id="page-stage-wrap">
                 <div class="page-stage" id="page-stage">
-                  <img id="page-raster-img" class="page-raster-img hidden" alt="Rendered page preview">
-                  <div id="page-svg-layer" class="page-svg-layer"></div>
+                  <div class="page-canvas">
+                    <img id="page-raster-img" class="page-raster-img hidden" alt="Rendered page preview">
+                    <div id="page-svg-layer" class="page-svg-layer"></div>
+                    <div class="page-empty hidden" id="page-empty">
+                      <span class="page-empty-icon"><svg class="icon"><use href="#i-book"/></svg></span>
+                      <strong>No page picture for this format</strong>
+                      <p>Read the extracted text on the right, or download the original file.</p>
+                      <button class="btn btn-sm btn-primary page-empty-render hidden" id="render-page-btn" type="button">
+                        <svg class="icon"><use href="#i-images"/></svg>
+                        Render this page
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
               <div id="unit-diagrams-container" class="unit-diagrams-container hidden">
-                <h4 class="section-subtitle">Detected Diagram</h4>
+                <h4 class="section-subtitle">Detected diagram</h4>
                 <div id="unit-diagram-svg-box" class="diagram-svg-box"></div>
               </div>
             </div>
 
-            <!-- Right: Clean Content Tabs -->
             <div class="card viewer-right">
               <div class="content-tabs" role="tablist">
-                <button class="subtab-btn is-active" data-subtab="blocks">
-                  Reading View (Text &amp; Blocks)
-                </button>
-                <button class="subtab-btn" data-subtab="tables">
-                  Tables
-                </button>
-                <button class="subtab-btn" data-subtab="formats">
-                  Formatted Export
-                </button>
-                <button class="subtab-btn" data-subtab="chunks">
-                  AI Text Chunks
-                </button>
+                <button class="subtab-btn is-active" data-subtab="blocks">Reading view</button>
+                <button class="subtab-btn" data-subtab="review">Review <span class="subtab-count hidden" id="review-count">0</span></button>
+                <button class="subtab-btn" data-subtab="tables">Tables</button>
+                <button class="subtab-btn" data-subtab="formats">Export</button>
+                <button class="subtab-btn" data-subtab="ask">Ask</button>
+                <button class="subtab-btn" data-subtab="chunks">AI passages</button>
               </div>
 
-              <!-- Tab A: Reading View -->
               <div class="subtab-panel is-active" id="subpanel-blocks">
                 <div id="unit-warnings-box" class="alerts-box"></div>
                 <div id="blocks-list" class="blocks-list"></div>
               </div>
 
-              <!-- Tab B: Tables -->
+              <div class="subtab-panel" id="subpanel-review">
+                <div class="review-summary" id="review-summary"></div>
+                <div class="review-toolbar">
+                  <button class="btn btn-sm btn-primary" id="review-next-btn">
+                    Review next flagged page
+                  </button>
+                  <button class="btn btn-sm" id="mark-page-reviewed-btn">
+                    <svg class="icon"><use href="#i-check"/></svg>
+                    Mark this page verified
+                  </button>
+                  <span class="review-toolbar-note" id="review-page-state"></span>
+                </div>
+                <div class="review-pages" id="review-pages"></div>
+              </div>
+
               <div class="subtab-panel" id="subpanel-tables">
                 <div class="table-slicer-bar">
-                  <span>Rows to display:</span>
+                  <span>Rows to display</span>
+                  <span class="muted">Double-click a cell to correct it</span>
                   <label>Start at row <input id="slice-from" type="number" value="0" min="0" step="100"></label>
                   <label>Row count <input id="slice-count" type="number" value="250" min="1" max="5000" step="50"></label>
                   <button class="btn btn-sm" id="slice-load-btn">Update</button>
-                  <button class="btn btn-sm" id="slice-prev-btn">&larr; Previous Rows</button>
-                  <button class="btn btn-sm" id="slice-next-btn">Next Rows &rarr;</button>
+                  <button class="btn btn-sm" id="slice-prev-btn">
+                    <svg class="icon"><use href="#i-arrow-left"/></svg>
+                    Previous
+                  </button>
+                  <button class="btn btn-sm" id="slice-next-btn">
+                    Next
+                    <svg class="icon"><use href="#i-arrow-right"/></svg>
+                  </button>
                   <span class="muted" id="slice-info"></span>
                 </div>
                 <div id="tables-container" class="tables-container"></div>
               </div>
 
-              <!-- Tab C: Formatted Export -->
               <div class="subtab-panel" id="subpanel-formats">
+                <div class="safe-share">
+                  <div class="safe-share-head">
+                    <div>
+                      <h4>Safe sharing</h4>
+                      <p>Best-effort local scan for emails, phone numbers, cards, IBANs and common IDs. Review every match; detection is not a guarantee.</p>
+                    </div>
+                    <span class="badge" id="redaction-status">Not scanned</span>
+                  </div>
+                  <div class="safe-share-actions">
+                    <button class="btn btn-sm" id="scan-redactions-btn">Scan for identifiers</button>
+                    <button class="btn btn-sm" id="redaction-select-all-btn">Select all</button>
+                    <button class="btn btn-sm btn-primary" id="save-redactions-btn" disabled>Save selected</button>
+                    <button class="btn btn-sm" id="clear-redactions-btn">Clear saved</button>
+                  </div>
+                  <div class="redaction-list" id="redaction-list">
+                    <p class="muted">Open this tab to scan the current document.</p>
+                  </div>
+                  <p class="safe-share-note">Redacted reports omit page images because image content is not redacted. ZIP archives still contain the raw originals.</p>
+                  <div class="safe-share-exports">
+                    <span class="field-inline-label">Share with redactions</span>
+                    <a class="btn btn-sm" id="dl-redacted-md" href="#" target="_blank" rel="noopener">Markdown</a>
+                    <a class="btn btn-sm" id="dl-redacted-txt" href="#" target="_blank" rel="noopener">Text</a>
+                    <a class="btn btn-sm" id="dl-redacted-report" href="#" target="_blank" rel="noopener">Report</a>
+                  </div>
+                </div>
+
                 <div class="format-pills">
                   <button class="fmt-btn is-active" data-fmt="markdown">Markdown</button>
-                  <button class="fmt-btn" data-fmt="plaintext">Plain Text</button>
+                  <button class="fmt-btn" data-fmt="plaintext">Plain text</button>
                   <button class="fmt-btn" data-fmt="html">HTML</button>
-                  <button class="fmt-btn" data-fmt="unit_json">JSON Data</button>
-                  <button class="fmt-btn" data-fmt="jsonl">JSON Lines</button>
+                  <button class="fmt-btn" data-fmt="unit_json">JSON data</button>
+                  <button class="fmt-btn" data-fmt="jsonl">JSON lines</button>
                   <label class="checkbox-inline" style="margin-left:auto">
                     <input type="checkbox" id="fmt-compact-toggle">
                     <span>Compact JSON</span>
@@ -400,18 +593,41 @@
                 <pre class="code-viewer" id="derived-code-viewer"></pre>
               </div>
 
-              <!-- Tab D: AI Text Chunks -->
+              <div class="subtab-panel" id="subpanel-ask">
+                <div class="ask-head">
+                  <div>
+                    <h3 class="card-title">Ask this document</h3>
+                    <p class="card-desc">Grounded in the extracted pages. Answers cite their sources and never leave this machine.</p>
+                  </div>
+                  <span class="badge" id="ask-model-status">Local model</span>
+                </div>
+                <div class="ask-input-row">
+                  <input id="ask-input" type="text" placeholder="What is the total amount, and on which page?" autocomplete="off">
+                  <button class="btn btn-primary" id="ask-btn">Ask</button>
+                </div>
+                <div class="ask-message" id="ask-message"></div>
+                <div class="ask-answer hidden" id="ask-answer"></div>
+                <div class="ask-sources" id="ask-sources"></div>
+                <details class="ask-prompt" id="ask-prompt-wrap">
+                  <summary>Prompt for a local model</summary>
+                  <div class="ask-prompt-actions">
+                    <button class="btn btn-sm" id="ask-copy-prompt-btn">Copy prompt</button>
+                  </div>
+                  <pre class="code-viewer" id="ask-prompt"></pre>
+                </details>
+              </div>
+
               <div class="subtab-panel" id="subpanel-chunks">
                 <p class="card-desc" style="margin-bottom:0.75rem">
-                  Splits long pages into smaller overlapping passages for search or AI question-answering. Move the sliders to resize passages instantly.
+                  Long pages are split into overlapping passages for search or question answering. Move the sliders to resize them instantly.
                 </p>
                 <div class="chunk-controls">
                   <label class="slider-group">
-                    <span>Passage length: <strong id="lbl-chunk-chars">320</strong> characters</span>
+                    <span>Passage length <strong id="lbl-chunk-chars">320</strong> characters</span>
                     <input type="range" id="rng-chunk-chars" min="32" max="2048" step="16" value="320">
                   </label>
                   <label class="slider-group">
-                    <span>Shared overlap: <strong id="lbl-chunk-overlap">40</strong> characters</span>
+                    <span>Shared overlap <strong id="lbl-chunk-overlap">40</strong> characters</span>
                     <input type="range" id="rng-chunk-overlap" min="0" max="512" step="8" value="40">
                   </label>
                   <span class="badge" id="chunk-wasm-stats">0 passages</span>
@@ -422,15 +638,14 @@
           </div>
         </section>
 
-        <!-- ==================== 3. SAVED PAGE IMAGES (FOR AI) ==================== -->
+        <!-- ==================== PAGE IMAGES ==================== -->
         <section class="tab-panel" id="panel-pages" role="tabpanel">
           <div class="card">
             <div class="card-head-row">
               <div>
-                <h2 class="card-title">Saved Page Images for AI Vision</h2>
-                <p class="card-desc">
-                  Whenever a page is blank, unreadable, or contains complex diagrams, it is saved here as a clean 150 DPI image. Click any page below to get a ready-to-use AI prompt.
-                </p>
+                <h2 class="card-title">Page images for vision</h2>
+                <p class="card-desc">Every page is extracted to text. This tab also keeps a clean 150 DPI raster of pages that are blank, scanned or diagram-heavy, so a vision model can take a closer look.</p>
+                <p class="muted" id="pages-text-summary" style="margin:0 0 0.75rem"></p>
               </div>
               <div class="inline-controls">
                 <span class="badge" id="pages-manifest-mode">Mode: Automatic</span>
@@ -446,10 +661,19 @@
               <div class="llm-payload-pane">
                 <div class="card-head-row compact">
                   <div>
-                    <h3 class="card-title">Ready-to-Use AI Vision Request</h3>
-                    <p class="card-desc">Includes the page image link and any partial text already found on the page.</p>
+                    <h3 class="card-title">Vision request</h3>
+                    <p class="card-desc">Scope: <strong id="llm-payload-scope">All pages</strong>. Includes the page image link and the extracted text.</p>
                   </div>
-                  <button class="btn btn-sm btn-primary" id="copy-llm-payload-btn">Copy AI Request</button>
+                  <div class="inline-controls">
+                    <label class="checkbox-inline" title="Include every saved page image in one request">
+                      <input type="checkbox" id="llm-payload-all" checked>
+                      <span>All pages</span>
+                    </label>
+                    <button class="btn btn-sm btn-primary" id="copy-llm-payload-btn">
+                      <svg class="icon"><use href="#i-copy"/></svg>
+                      Copy request
+                    </button>
+                  </div>
                 </div>
                 <pre class="code-viewer" id="llm-payload-viewer">Click a saved page image on the left to prepare its AI request.</pre>
               </div>
@@ -457,32 +681,30 @@
           </div>
         </section>
 
-        <!-- ==================== 4. INSTANT TRY-OUT ==================== -->
+        <!-- ==================== INSTANT TRY-OUT ==================== -->
         <section class="tab-panel" id="panel-playground" role="tabpanel">
           <div class="card" style="margin-bottom:1rem">
             <div class="card-head-row compact">
               <div>
-                <h2 class="card-title">Instant Try-Out (Runs in Your Browser)</h2>
-                <p class="card-desc">
-                  Pick a sample below or type your own content on the left to see how tables, diagrams, and Markdown are extracted instantly.
-                </p>
+                <h2 class="card-title">Source</h2>
+                <p class="card-desc">Paste a sample or your own content to see how tables, diagrams and Markdown are extracted in the browser.</p>
               </div>
               <span class="badge badge-success" id="pg-timing-badge">Instant</span>
             </div>
 
             <div class="preset-bar" id="pg-preset-bar">
-              <span class="field-inline-label">Try a sample:</span>
-              <button class="btn btn-sm is-active" data-preset="doctags">SmolDocling-256M DocTags</button>
-              <button class="btn btn-sm" data-preset="mermaid_er">Database Diagram (ER)</button>
-              <button class="btn btn-sm" data-preset="dbml">Database Tables (DBML)</button>
-              <button class="btn btn-sm" data-preset="mermaid_flow">Process Flowchart</button>
-              <button class="btn btn-sm" data-preset="pdf_layout">PDF Words → Table</button>
-              <button class="btn btn-sm" data-preset="markdown">Markdown Report &amp; Table</button>
-              <button class="btn btn-sm" data-preset="drawio">draw.io Diagram</button>
+              <span class="field-inline-label">Samples</span>
+              <button class="btn btn-sm is-active" data-preset="doctags">DocTags</button>
+              <button class="btn btn-sm" data-preset="mermaid_er">ER diagram</button>
+              <button class="btn btn-sm" data-preset="dbml">DBML tables</button>
+              <button class="btn btn-sm" data-preset="mermaid_flow">Flowchart</button>
+              <button class="btn btn-sm" data-preset="pdf_layout">PDF words → table</button>
+              <button class="btn btn-sm" data-preset="markdown">Markdown</button>
+              <button class="btn btn-sm" data-preset="drawio">draw.io</button>
               <button class="btn btn-sm" data-preset="plantuml">PlantUML</button>
-              <button class="btn btn-sm" data-preset="dot">Graphviz DOT</button>
-              <button class="btn btn-sm" data-preset="vision_json">AI Vision Graph</button>
-              <button class="btn btn-sm" data-preset="chart_xml">Excel Chart Data</button>
+              <button class="btn btn-sm" data-preset="dot">Graphviz</button>
+              <button class="btn btn-sm" data-preset="vision_json">Vision graph</button>
+              <button class="btn btn-sm" data-preset="chart_xml">Chart XML</button>
             </div>
           </div>
 
@@ -490,34 +712,34 @@
             <div class="card">
               <div class="card-head-row compact">
                 <div class="inline-controls">
-                  <label for="pg-format-select" class="field-inline-label">Input Type:</label>
+                  <label for="pg-format-select" class="field-inline-label">Input type</label>
                   <select id="pg-format-select">
-                    <option value="doctags">SmolDocling-256M DocTags (Page Boxes + OTSL Table)</option>
-                    <option value="mermaid">Mermaid Diagram (Flowchart / ER)</option>
-                    <option value="dbml">DBML Database Schema</option>
-                    <option value="pdf_layout">Positioned PDF Words → Auto Table</option>
-                    <option value="markdown">Markdown Text &amp; Tables</option>
-                    <option value="drawio">draw.io XML Diagram</option>
-                    <option value="plantuml">PlantUML Diagram</option>
-                    <option value="dot">Graphviz DOT Diagram</option>
-                    <option value="vision_json">AI Vision JSON Graph</option>
-                    <option value="chart_xml">Excel / OOXML Chart XML</option>
+                    <option value="doctags">SmolDocling DocTags (page boxes + OTSL table)</option>
+                    <option value="mermaid">Mermaid diagram (flowchart / ER)</option>
+                    <option value="dbml">DBML database schema</option>
+                    <option value="pdf_layout">Positioned PDF words → table</option>
+                    <option value="markdown">Markdown text and tables</option>
+                    <option value="drawio">draw.io XML diagram</option>
+                    <option value="plantuml">PlantUML diagram</option>
+                    <option value="dot">Graphviz DOT diagram</option>
+                    <option value="vision_json">Vision JSON graph</option>
+                    <option value="chart_xml">Excel / OOXML chart XML</option>
                   </select>
                 </div>
-                <button class="btn btn-sm btn-primary" id="pg-run-btn">Update Preview</button>
+                <button class="btn btn-sm btn-primary" id="pg-run-btn">Update preview</button>
               </div>
               <textarea id="pg-source-input" class="pg-textarea" spellcheck="false"></textarea>
             </div>
 
             <div class="card">
               <div class="card-head-row compact">
-                <h3 class="card-title">Extracted Result</h3>
+                <h3 class="card-title">Result</h3>
                 <div class="format-pills" id="pg-output-tabs">
-                  <button class="pg-out-btn is-active" data-pgout="visual">Visual Preview</button>
+                  <button class="pg-out-btn is-active" data-pgout="visual">Visual</button>
                   <button class="pg-out-btn" data-pgout="markdown">Markdown</button>
-                  <button class="pg-out-btn" data-pgout="unit_json">Structured JSON</button>
-                  <button class="pg-out-btn" data-pgout="chunks">Text Passages</button>
-                  <button class="pg-out-btn" data-pgout="jsonl">JSON Lines</button>
+                  <button class="pg-out-btn" data-pgout="unit_json">JSON</button>
+                  <button class="pg-out-btn" data-pgout="chunks">Passages</button>
+                  <button class="pg-out-btn" data-pgout="jsonl">JSON lines</button>
                 </div>
               </div>
               <div id="pg-visual-box" class="pg-visual-box"></div>
@@ -526,39 +748,69 @@
           </div>
         </section>
 
-        <!-- ==================== 5. SPEED & STATUS ==================== -->
+        <!-- ==================== STATUS ==================== -->
         <section class="tab-panel" id="panel-system" role="tabpanel">
+          <div class="card" style="margin-bottom:1rem">
+            <div class="card-head-row compact">
+              <div>
+                <h2 class="card-title">Your library</h2>
+                <p class="card-desc">Live counts from the documents in this local workspace.</p>
+              </div>
+              <span class="badge badge-primary" id="library-overview-badge">Local workspace</span>
+            </div>
+            <div class="summary-grid" id="library-overview">
+              <div class="summary-box">
+                <span class="summary-label">Documents</span>
+                <strong class="summary-value" id="overview-documents">0</strong>
+                <span class="summary-note">Retained extraction jobs</span>
+              </div>
+              <div class="summary-box">
+                <span class="summary-label">Pages and sections</span>
+                <strong class="summary-value" id="overview-pages">0</strong>
+                <span class="summary-note">Across the current view</span>
+              </div>
+              <div class="summary-box">
+                <span class="summary-label">Favorites</span>
+                <strong class="summary-value" id="overview-favorites">0</strong>
+                <span class="summary-note">Pinned for quick access</span>
+              </div>
+              <div class="summary-box">
+                <span class="summary-label">Collections and tags</span>
+                <strong class="summary-value" id="overview-collections">0</strong>
+                <span class="summary-note" id="overview-tags-note">0 tags in use</span>
+              </div>
+            </div>
+          </div>
+
           <div class="two-col-layout">
             <div class="card">
               <div class="card-head-row">
                 <div>
-                  <h2 class="card-title">Verified Speed &amp; Accuracy (20 PDFs at Once)</h2>
-                  <p class="card-desc">
-                    Tested by uploading 20 mixed PDFs (316 total pages: digital text, tables, multi-column, and scanned invoices) all at the same time.
-                  </p>
+                  <h2 class="card-title">Speed and accuracy</h2>
+                  <p class="card-desc">Measured on 20 mixed PDFs (316 pages: digital text, tables, multi-column and scanned invoices) uploaded together.</p>
                 </div>
-                <span class="badge badge-success">20 / 20 Passed</span>
+                <span class="badge badge-success">20 / 20 passed</span>
               </div>
 
               <div class="summary-grid">
                 <div class="summary-box">
-                  <span class="summary-label">Total Time (20 PDFs / 316 Pages)</span>
-                  <strong class="summary-value">17.1 seconds</strong>
-                  <span class="summary-note">With 6 parallel workers (22.5 s with default 2 workers)</span>
+                  <span class="summary-label">Total time</span>
+                  <strong class="summary-value">17.1 s</strong>
+                  <span class="summary-note">20 PDFs / 316 pages with 6 parallel workers</span>
                 </div>
                 <div class="summary-box">
-                  <span class="summary-label">Average Wait Per Document</span>
-                  <strong class="summary-value">4.9 seconds</strong>
-                  <span class="summary-note">95% of documents finished within 9.3 seconds</span>
+                  <span class="summary-label">Average wait</span>
+                  <strong class="summary-value">4.9 s</strong>
+                  <span class="summary-note">95% of documents finished within 9.3 s</span>
                 </div>
                 <div class="summary-box">
-                  <span class="summary-label">Page Text Accuracy</span>
-                  <strong class="summary-value">311 / 311 (100%)</strong>
+                  <span class="summary-label">Page text accuracy</span>
+                  <strong class="summary-value">311 / 311</strong>
                   <span class="summary-note">Every digital and scanned page matched ground truth</span>
                 </div>
                 <div class="summary-box">
-                  <span class="summary-label">Tables &amp; Scanned OCR</span>
-                  <strong class="summary-value">100% Exact</strong>
+                  <span class="summary-label">Tables and OCR</span>
+                  <strong class="summary-value">100%</strong>
                   <span class="summary-note">30/30 table cells · 0.0000 OCR character error rate</span>
                 </div>
               </div>
@@ -568,27 +820,27 @@
                   <thead>
                     <tr>
                       <th>Mode</th>
-                      <th>Parallel Workers</th>
-                      <th>Total Time (20 PDFs)</th>
-                      <th>Speed</th>
-                      <th>Memory Used</th>
+                      <th>Workers</th>
+                      <th>Total time</th>
+                      <th>Throughput</th>
+                      <th>Memory</th>
                       <th>Accuracy</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
-                      <td>Standard (Default)</td>
-                      <td>2 workers</td>
-                      <td>22.5 seconds</td>
-                      <td>14.0 pages / sec</td>
+                      <td>Standard</td>
+                      <td>2</td>
+                      <td>22.5 s</td>
+                      <td>14.0 pages / s</td>
                       <td>104 MB</td>
                       <td><span class="badge badge-success">100% (20/20)</span></td>
                     </tr>
                     <tr>
-                      <td><strong>High Concurrency</strong></td>
-                      <td><strong>6 workers</strong></td>
-                      <td><strong>17.1 seconds</strong></td>
-                      <td><strong>18.5 pages / sec</strong></td>
+                      <td><strong>High concurrency</strong></td>
+                      <td><strong>6</strong></td>
+                      <td><strong>17.1 s</strong></td>
+                      <td><strong>18.5 pages / s</strong></td>
                       <td>158 MB</td>
                       <td><span class="badge badge-success">100% (20/20)</span></td>
                     </tr>
@@ -600,14 +852,17 @@
             <div class="card">
               <div class="card-head-row">
                 <div>
-                  <h2 class="card-title">Installed Tools &amp; Supported Formats</h2>
-                  <p class="card-desc">Shows which optional local readers are installed on this machine.</p>
+                  <h2 class="card-title">Installed tools</h2>
+                  <p class="card-desc">Optional local readers available on this machine.</p>
                 </div>
-                <button class="btn btn-sm" id="refresh-caps-btn">Recheck</button>
+                <button class="btn btn-sm" id="refresh-caps-btn">
+                  <svg class="icon"><use href="#i-refresh"/></svg>
+                  Recheck
+                </button>
               </div>
               <div id="capabilities-matrix" class="capabilities-matrix"></div>
               <details class="more-options" style="margin-top:0.75rem">
-                <summary>View raw technical capability JSON</summary>
+                <summary>Raw capability JSON <svg class="icon"><use href="#i-chevron"/></svg></summary>
                 <pre class="code-viewer" id="capabilities-raw-json" style="margin-top:0.5rem"></pre>
               </details>
             </div>
@@ -616,6 +871,66 @@
       </main>
     </div>
   </div>
+
+  <!-- ==================== LIBRARY EDITOR ==================== -->
+  <div class="modal-backdrop hidden" id="library-modal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="library-modal-title">
+      <div class="modal-head">
+        <div>
+          <h2 class="card-title" id="library-modal-title">Edit document details</h2>
+          <p class="card-desc">Titles, collections and tags stay in the local job database.</p>
+        </div>
+        <button class="btn btn-sm btn-icon" id="library-modal-close" aria-label="Close">
+          <svg class="icon"><use href="#i-x"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <label class="field-group">
+          <span class="field-label">Display title</span>
+          <input id="library-name-input" type="text" maxlength="200" placeholder="Use the original filename">
+        </label>
+        <label class="field-group">
+          <span class="field-label">Collection</span>
+          <input id="library-collection-input" type="text" maxlength="100" list="library-collection-options" placeholder="e.g. Invoices">
+          <datalist id="library-collection-options"></datalist>
+        </label>
+        <label class="field-group">
+          <span class="field-label">Tags</span>
+          <input id="library-tags-input" type="text" maxlength="800" placeholder="invoice, 2026, review">
+          <span class="field-help">Comma-separated; up to 32 tags.</span>
+        </label>
+        <label class="checkbox-inline" style="margin-top:2px">
+          <input type="checkbox" id="library-favorite-input">
+          <span>Favorite this document</span>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="library-modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="library-modal-save">Save details</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== COMMAND PALETTE ==================== -->
+  <div class="palette-backdrop hidden" id="search-overlay">
+    <div class="palette" role="dialog" aria-modal="true" aria-labelledby="search-title">
+      <h2 class="visually-hidden" id="search-title">Search documents and extracted text</h2>
+      <div class="palette-input-row">
+        <svg class="icon palette-search-icon" aria-hidden="true"><use href="#i-search"/></svg>
+        <input id="search-input" type="search" placeholder="Search documents, pages and tables…" autocomplete="off" spellcheck="false" aria-controls="search-results" aria-autocomplete="list">
+        <kbd>Esc</kbd>
+      </div>
+      <div class="palette-results" id="search-results" role="listbox" aria-label="Search results"></div>
+      <div class="palette-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+        <span><kbd>↵</kbd> open</span>
+        <span><kbd>Esc</kbd> close</span>
+        <span class="palette-hint">Searches extracted text on this machine</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-region" id="toast-region" role="status" aria-live="polite" aria-atomic="false"></div>
 
   <script src="/assets/web/app.js"></script>
 </body>

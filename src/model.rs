@@ -310,6 +310,32 @@ pub struct Unit {
     pub blocks: Vec<Block>,
     pub warnings: Vec<String>,
     pub errors: Vec<Failure>,
+    /// Per-page processing timings. Populated for PDF pages; older checkpoints and non-page
+    /// units omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<UnitTiming>,
+}
+
+/// How a page's wall time was spent. Times are milliseconds; `total_ms` covers the page's
+/// extraction path before the checkpoint write. On a parallel PDF job, per-page totals are
+/// compute time and can exceed `Document::elapsed_ms` (wall time).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct UnitTiming {
+    pub total_ms: u64,
+    pub native_ms: u64,
+    pub images_ms: u64,
+    pub render_ms: u64,
+    pub ocr_ms: u64,
+    pub page_image_ms: u64,
+    /// `native`, `ocr`, `hybrid` or `none`.
+    pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocr_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_degrees: Option<u16>,
+    pub ocr_words: usize,
+    pub chars: usize,
+    pub tables: usize,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Asset {
@@ -419,6 +445,7 @@ impl Unit {
             blocks: vec![],
             warnings: vec![],
             errors: vec![],
+            timing: None,
         }
     }
     pub fn text(
@@ -743,6 +770,10 @@ pub fn unit_chunks(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Progress {
     pub units: usize,
+    /// Total units expected for this job, when known (PDF page selection or section count).
+    /// Older progress files omit it; readers treat zero as unknown.
+    #[serde(default)]
+    pub total: usize,
     pub result_status: Option<String>,
     pub warnings: Vec<String>,
     pub errors: Vec<Failure>,

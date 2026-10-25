@@ -12,6 +12,161 @@ use std::{
 };
 
 pub const ENGINE_VERSION: &str = concat!("doc-extractor/", env!("CARGO_PKG_VERSION"), "-schema1");
+
+/// Warnings that record a deliberate provenance choice for scans, not an extraction problem.
+/// They stay in the result so consumers can see why a page is OCR-only or why table geometry is
+/// a proposal, but they should not downgrade a successful extraction to `partial`.
+pub(crate) fn informational_warning(message: &str) -> bool {
+    message.starts_with("Scanned page: embedded image extraction skipped")
+        || message.starts_with("Embedded images retained; OCR coordinates refer to each asset")
+        || message.starts_with("Poppler reading order and text geometry retained")
+}
+
+fn provider_name(source: &str) -> String {
+    let lower = source.to_ascii_lowercase();
+    if lower.contains("tesseract") {
+        "tesseract".into()
+    } else if lower.contains("apple vision") {
+        "apple_vision".into()
+    } else if lower.contains("smoldocling") {
+        "smoldocling".into()
+    } else {
+        source.to_owned()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn page_timing(
+    u: &Unit,
+    _options: &Options,
+    native_text_chars: usize,
+    native_ms: u64,
+    images_ms: u64,
+    render_ms: u64,
+    ocr_ms: u64,
+    page_image_ms: u64,
+    total_ms: u64,
+) -> UnitTiming {
+    let ocr_blocks = u
+        .blocks
+        .iter()
+        .filter(|block| block.provenance.method == "ocr")
+        .collect::<Vec<_>>();
+    let method = match (native_text_chars > 0, !ocr_blocks.is_empty()) {
+        (true, true) => "hybrid",
+        (true, false) => "native",
+        (false, true) => "ocr",
+        (false, false) => "none",
+    };
+    let ocr_provider = ocr_blocks
+        .first()
+        .map(|block| provider_name(&block.provenance.source));
+    let rotation_degrees = ocr_blocks
+        .first()
+        .and_then(|block| block.attributes.get("rotation_degrees"))
+        .and_then(Value::as_u64)
+        .map(|value| value as u16);
+    let ocr_words = ocr_blocks
+        .iter()
+        .filter(|block| block.table.is_none())
+        .filter_map(|block| block.attributes.get("words").and_then(Value::as_u64))
+        .sum::<u64>() as usize;
+    let chars = u
+        .blocks
+        .iter()
+        .map(|block| match &block.table {
+            Some(table) => table
+                .cells
+                .iter()
+                .map(|cell| cell.raw.chars().count())
+                .sum(),
+            None => block.text.chars().count(),
+        })
+        .sum();
+    let tables = u
+        .blocks
+        .iter()
+        .filter(|block| block.table.is_some())
+        .count();
+    UnitTiming {
+        total_ms,
+        native_ms,
+        images_ms,
+        render_ms,
+        ocr_ms,
+        page_image_ms,
+        method: method.into(),
+        ocr_provider,
+        rotation_degrees,
+        ocr_words,
+        chars,
+        tables,
+    }
+}
+
+fn document_timing(doc: &Document) -> Value {
+    let (mut pages, mut native_pages, mut ocr_pages, mut hybrid_pages, mut empty_pages) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
+    let (
+        mut page_total_ms,
+        mut native_ms,
+        mut images_ms,
+        mut render_ms,
+        mut ocr_ms,
+        mut page_image_ms,
+    ) = (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut per_page = Vec::new();
+    for unit in &doc.units {
+        let Some(timing) = &unit.timing else {
+            continue;
+        };
+        pages += 1;
+        match timing.method.as_str() {
+            "native" => native_pages += 1,
+            "ocr" => ocr_pages += 1,
+            "hybrid" => hybrid_pages += 1,
+            _ => empty_pages += 1,
+        }
+        page_total_ms += timing.total_ms;
+        native_ms += timing.native_ms;
+        images_ms += timing.images_ms;
+        render_ms += timing.render_ms;
+        ocr_ms += timing.ocr_ms;
+        page_image_ms += timing.page_image_ms;
+        per_page.push(json!({
+            "unit": unit.id,
+            "page": unit.index + 1,
+            "name": unit.name,
+            "method": timing.method,
+            "provider": timing.ocr_provider,
+            "rotation_degrees": timing.rotation_degrees,
+            "total_ms": timing.total_ms,
+            "native_ms": timing.native_ms,
+            "images_ms": timing.images_ms,
+            "render_ms": timing.render_ms,
+            "ocr_ms": timing.ocr_ms,
+            "page_image_ms": timing.page_image_ms,
+            "ocr_words": timing.ocr_words,
+            "chars": timing.chars,
+            "tables": timing.tables,
+        }));
+    }
+    json!({
+        "pages": pages,
+        "native_pages": native_pages,
+        "ocr_pages": ocr_pages,
+        "hybrid_pages": hybrid_pages,
+        "empty_pages": empty_pages,
+        "page_total_ms": page_total_ms,
+        "native_ms": native_ms,
+        "images_ms": images_ms,
+        "render_ms": render_ms,
+        "ocr_ms": ocr_ms,
+        "page_image_ms": page_image_ms,
+        "per_page": per_page,
+    })
+}
+
 pub fn parser_fingerprint() -> String {
     hash(
         concat!(
@@ -124,6 +279,9 @@ impl ProgressBoard {
             .filter_map(|u| u.clone())
             .collect()
     }
+    fn total(&self) -> usize {
+        self.units.lock().unwrap().len()
+    }
 }
 /// Write a complete, ordered checkpoint/progress snapshot from the progress board. Safe to call
 /// concurrently with extraction: unit files and asset sidecars are append-only during a run.
@@ -159,6 +317,7 @@ fn write_progress_snapshot(
         &dir.join("progress.json"),
         &Progress {
             units: doc.units.len(),
+            total: board.total(),
             result_status: None,
             warnings,
             errors,
@@ -375,7 +534,8 @@ impl ContextData {
         if self.document.units.len() >= self.limits.units {
             bail!("limit_exceeded: units");
         }
-        if !u.errors.is_empty() || !u.warnings.is_empty() {
+        let has_notes = u.warnings.iter().any(|w| !informational_warning(w));
+        if !u.errors.is_empty() || has_notes {
             u.status = "partial".into();
         }
         let path = self.dir.join("units").join(format!("{}.json", u.id));
@@ -431,6 +591,13 @@ impl ContextData {
             &self.dir.join("progress.json"),
             &Progress {
                 units: self.document.units.len(),
+                // Non-PDF unit counts are only final once the document is assembled; until
+                // then a zero total tells the viewer to show completed work, not a percentage.
+                total: if final_result {
+                    self.document.units.len()
+                } else {
+                    0
+                },
                 result_status: if final_result {
                     Some(self.document.status.clone())
                 } else {
@@ -760,11 +927,14 @@ pub fn extract(
     };
     let needs_ocr = c.document.units.iter().any(|u| u.status == "needs_ocr");
     let partial = !c.document.errors.is_empty()
-        || !c.document.warnings.is_empty()
+        || c.document
+            .warnings
+            .iter()
+            .any(|warning| !informational_warning(warning))
         || c.document
             .units
             .iter()
-            .any(|u| !u.warnings.is_empty() || !u.errors.is_empty());
+            .any(|u| !u.errors.is_empty() || u.warnings.iter().any(|w| !informational_warning(w)));
     c.document.status = if c.document.units.is_empty() && !c.document.errors.is_empty() {
         if c.document.errors.iter().any(|e| e.code == "unsupported") {
             "unsupported"
@@ -788,6 +958,14 @@ pub fn extract(
             .push(format!("parser error: {}", f.message));
     }
     c.document.elapsed_ms = c.start.elapsed().as_millis();
+    if let Some(timing) = c
+        .document
+        .metadata
+        .get_mut("timing")
+        .and_then(Value::as_object_mut)
+    {
+        timing.insert("wall_ms".into(), json!(c.document.elapsed_ms));
+    }
     // Streamed assembly with a size cap: unit payloads are copied from units/uN.json one at a
     // time instead of serializing the whole in-memory document; fails cleanly instead of
     // tripping RLIMIT_FSIZE.
@@ -815,7 +993,11 @@ pub fn extract(
     if supports_page_images(&ext) {
         write_page_image_manifest(dir, &c.document, &c.options.page_images)?;
     }
-    atomic_json(&dir.join("timings.json"), &stage_timings())?;
+    let mut timings = stage_timings();
+    if let Some(page_timing) = c.document.metadata.get("timing") {
+        timings["pages"] = page_timing.clone();
+    }
+    atomic_json(&dir.join("timings.json"), &timings)?;
     Ok(c.document)
 }
 /// Index the page rasters referenced by unit blocks. Written as `pages/manifest.json` next to
@@ -2044,6 +2226,7 @@ fn render_page(
     page: &str,
     dimensions: &regex::Regex,
     index: usize,
+    dpi: u32,
 ) -> Result<Vec<u8>> {
     let page_info = providers::command("pdfinfo", &["-f", page, "-l", page, path])?;
     let page_info = String::from_utf8_lossy(&page_info);
@@ -2052,12 +2235,10 @@ fn render_page(
         .context("unsupported: PDF page dimensions unavailable")?;
     let w = size[1].parse::<f64>()?;
     let h = size[2].parse::<f64>()?;
-    if (w * PAGE_IMAGE_DPI as f64 / 72.).ceil() * (h * PAGE_IMAGE_DPI as f64 / 72.).ceil()
-        > c.limits.page_pixels as f64
-    {
+    if (w * dpi as f64 / 72.).ceil() * (h * dpi as f64 / 72.).ceil() > c.limits.page_pixels as f64 {
         bail!("limit_exceeded: PDF render pixels");
     }
-    let prefix = c.dir.join(format!("render-{}", index + 1));
+    let prefix = c.dir.join(format!("render-{}-{dpi}", index + 1));
     providers::command(
         "pdftoppm",
         &[
@@ -2067,7 +2248,7 @@ fn render_page(
             page,
             "-singlefile",
             "-r",
-            &PAGE_IMAGE_DPI.to_string(),
+            &dpi.to_string(),
             "-png",
             path,
             prefix.to_str().unwrap(),
@@ -2077,6 +2258,17 @@ fn render_page(
     let bytes = fs::read(&image)?;
     let _ = fs::remove_file(&image);
     Ok(bytes)
+}
+
+/// Resolution used for OCR rendering. Tesseract prefers roughly 300 dpi; small table cells,
+/// chart labels and stamps read much better above 150 dpi, at the cost of render and OCR time.
+/// `DOC_OCR_DPI` raises it for hard scans (default: the 150 dpi page-image resolution).
+fn ocr_render_dpi() -> u32 {
+    std::env::var("DOC_OCR_DPI")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .map(|dpi| dpi.clamp(96, 400))
+        .unwrap_or(PAGE_IMAGE_DPI)
 }
 
 /// One batch of pages to extract: the 100-page Poppler range plus the missing page indices.
@@ -2174,6 +2366,11 @@ fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Re
         // Page-scoped sequence numbers keep merged asset order deterministic across workers.
         c.next_asset_seq = ((i as u64) + 1) << 32;
         let mut u = Unit::new(i, "page", format!("Page {}", i + 1));
+        let page_started = Instant::now();
+        let mut native_ms = 0u64;
+        let mut render_ms = 0u64;
+        let mut ocr_ms = 0u64;
+        let mut page_image_ms = 0u64;
         if i == 0 {
             let original = fs::read(input)?;
             let id = c.asset(&original, "original.pdf", &mut u)?;
@@ -2237,6 +2434,7 @@ fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Re
             }
             crate::layout::pdf_tables(&mut u, words);
             time_stage(&STAGE_PARSE_MS, parse_started);
+            native_ms = parse_started.elapsed().as_millis() as u64;
         } else {
             u.warnings
                 .push("PDF batch text extraction omitted this page; text may be incomplete".into());
@@ -2251,16 +2449,21 @@ fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Re
         // instead of decoding a potentially huge embedded image. This keeps OCR page-scoped,
         // avoids duplicate work, and bypasses embedded images above the page pixel limit.
         let page_will_render_for_ocr = c.options.ocr && native_text_chars == 0;
+        let images_started = Instant::now();
         if batch_images_active {
             if let Some(images) = page_images.get(&(i + 1)) {
                 for image in images {
                     let bytes = fs::read(image)?;
                     let name = image.file_name().unwrap().to_str().unwrap();
+                    let figure_started = Instant::now();
                     let result = if page_will_render_for_ocr {
                         c.figure_asset(&bytes, name, &mut u)
                     } else {
                         c.figure(&bytes, name, &mut u)
                     };
+                    if c.options.ocr && !page_will_render_for_ocr {
+                        ocr_ms += figure_started.elapsed().as_millis() as u64;
+                    }
                     if let Err(e) = result {
                         u.errors.push(failure(&e, Some(u.id.clone())));
                     }
@@ -2300,11 +2503,15 @@ fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Re
                         for image in paths {
                             let bytes = fs::read(&image)?;
                             let name = image.file_name().unwrap().to_str().unwrap();
+                            let figure_started = Instant::now();
                             let result = if page_will_render_for_ocr {
                                 c.figure_asset(&bytes, name, &mut u)
                             } else {
                                 c.figure(&bytes, name, &mut u)
                             };
+                            if c.options.ocr && !page_will_render_for_ocr {
+                                ocr_ms += figure_started.elapsed().as_millis() as u64;
+                            }
                             if let Err(e) = result {
                                 u.errors.push(failure(&e, Some(u.id.clone())));
                             }
@@ -2314,6 +2521,7 @@ fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Re
                 fs::remove_dir_all(&page_dir)?;
             }
         }
+        let images_ms = images_started.elapsed().as_millis() as u64;
         let has_figures = u.blocks.iter().any(|b| b.kind == "figure");
         if !c.options.ocr && native_text_chars == 0 {
             u.status = "needs_ocr".into();
@@ -2328,37 +2536,52 @@ fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Re
         let image_before_ocr = page_image_reason(&u, native_text_chars);
         let wants_page_image = c.options.page_images == "all"
             || (c.options.page_images == "failed" && image_before_ocr.is_some());
-        if needs_ocr_render || wants_page_image {
-            match render_page(c, path, &page, dimensions, i) {
+        let ocr_dpi = ocr_render_dpi();
+        let mut ocr_bytes: Option<Vec<u8>> = None;
+        if needs_ocr_render {
+            let render_started = Instant::now();
+            let rendered = render_page(c, path, &page, dimensions, i, ocr_dpi);
+            render_ms = render_started.elapsed().as_millis() as u64;
+            match rendered {
                 Ok(bytes) => {
-                    if needs_ocr_render {
-                        if let Err(e) = c.figure(&bytes, "page-render.png", &mut u) {
-                            u.errors.push(failure(&e, Some(u.id.clone())));
-                        }
+                    let ocr_started = Instant::now();
+                    if let Err(e) = c.figure(&bytes, "page-render.png", &mut u) {
+                        u.errors.push(failure(&e, Some(u.id.clone())));
                     }
-                    let reason = if c.options.page_images == "all" {
-                        Some("requested")
-                    } else if c.options.page_images == "failed" {
-                        // OCR can add errors/warnings (empty text, unavailable language), so
-                        // re-evaluate after the OCR pass.
-                        page_image_reason(&u, native_text_chars).or(image_before_ocr)
-                    } else {
-                        None
-                    };
-                    if let Some(reason) = reason {
+                    ocr_ms += ocr_started.elapsed().as_millis() as u64;
+                    ocr_bytes = Some(bytes);
+                }
+                Err(e) => u.errors.push(failure(&e, Some(u.id.clone()))),
+            }
+        }
+        if wants_page_image {
+            let reason = if c.options.page_images == "all" {
+                Some("requested")
+            } else if c.options.page_images == "failed" {
+                // OCR can add errors/warnings (empty text, unavailable language), so
+                // re-evaluate after the OCR pass.
+                page_image_reason(&u, native_text_chars).or(image_before_ocr)
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                // The downloadable page image stays at the documented 150 dpi; the OCR raster may
+                // be rendered at a higher resolution.
+                let rendered = match ocr_bytes.clone() {
+                    Some(bytes) if ocr_dpi == PAGE_IMAGE_DPI => Some(bytes),
+                    _ => render_page(c, path, &page, dimensions, i, PAGE_IMAGE_DPI).ok(),
+                };
+                match rendered {
+                    Some(bytes) => {
+                        let page_image_started = Instant::now();
                         if let Err(e) =
                             c.page_image(&bytes, "png", i + 1, reason, Some(PAGE_IMAGE_DPI), &mut u)
                         {
                             u.warnings.push(format!("page image unavailable: {e:#}"));
                         }
+                        page_image_ms = page_image_started.elapsed().as_millis() as u64;
                     }
-                }
-                Err(e) => {
-                    if needs_ocr_render {
-                        u.errors.push(failure(&e, Some(u.id.clone())));
-                    } else {
-                        u.warnings.push(format!("page image render failed: {e:#}"));
-                    }
+                    None => u.warnings.push("page image render failed".to_owned()),
                 }
             }
         }
@@ -2370,7 +2593,44 @@ fn pdf_batch(c: &mut ContextData, input: &Path, path: &str, batch: &Batch) -> Re
             u.warnings.push("Flattened PDF diagrams expose geometry-based label candidates; connector interpretation remains unknown".into());
         }
         u.warnings.push("Poppler reading order and text geometry retained; PDF table grids are conservative geometric proposals".into());
+        let total_ms = page_started.elapsed().as_millis() as u64;
+        let timing = page_timing(
+            &u,
+            &c.options,
+            native_text_chars,
+            native_ms,
+            images_ms,
+            render_ms,
+            ocr_ms,
+            page_image_ms,
+            total_ms,
+        );
+        u.timing = Some(timing.clone());
+        let unit_id = u.id.clone();
+        let unit_name = u.name.clone();
+        let checkpoint_started = Instant::now();
         c.checkpoint(u)?;
+        let checkpoint_ms = checkpoint_started.elapsed().as_millis() as u64;
+        tracing::info!(
+            target: "doc_extractor::page",
+            unit = %unit_id,
+            page = i + 1,
+            name = %unit_name,
+            method = %timing.method,
+            total_ms = timing.total_ms,
+            checkpoint_ms,
+            native_ms = timing.native_ms,
+            images_ms = timing.images_ms,
+            render_ms = timing.render_ms,
+            ocr_ms = timing.ocr_ms,
+            page_image_ms = timing.page_image_ms,
+            ocr_words = timing.ocr_words,
+            chars = timing.chars,
+            tables = timing.tables,
+            provider = %timing.ocr_provider.as_deref().unwrap_or("-"),
+            rotation = timing.rotation_degrees.unwrap_or(0),
+            "page processed"
+        );
     }
     if let Some(dir) = &image_dir {
         let _ = fs::remove_dir_all(dir);
@@ -2601,6 +2861,28 @@ fn pdf(c: &mut ContextData, input: &Path) -> Result<()> {
         time_stage(&STAGE_MERGE_MS, started);
     }
     c.document.units = slots.into_iter().flatten().collect();
+    let summary = document_timing(&c.document);
+    let pages = summary["pages"].as_u64().unwrap_or(0);
+    let native_pages = summary["native_pages"].as_u64().unwrap_or(0);
+    let ocr_pages = summary["ocr_pages"].as_u64().unwrap_or(0);
+    let hybrid_pages = summary["hybrid_pages"].as_u64().unwrap_or(0);
+    let page_total_ms = summary["page_total_ms"].as_u64().unwrap_or(0);
+    let ocr_ms = summary["ocr_ms"].as_u64().unwrap_or(0);
+    let render_ms = summary["render_ms"].as_u64().unwrap_or(0);
+    let images_ms = summary["images_ms"].as_u64().unwrap_or(0);
+    c.document.metadata["timing"] = summary;
+    tracing::info!(
+        target: "doc_extractor::timing",
+        pages,
+        native_pages,
+        ocr_pages,
+        hybrid_pages,
+        page_total_ms,
+        ocr_ms,
+        render_ms,
+        images_ms,
+        "document page timing"
+    );
     match worker_error {
         Some(e) => Err(e),
         None => Ok(()),

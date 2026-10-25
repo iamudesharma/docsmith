@@ -14,12 +14,14 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::Engine as _;
 use hmac::{Hmac, Mac};
+use regex::Regex;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -98,7 +100,23 @@ pub struct Job {
     pub filename: String,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Units completed so far.
     pub progress: usize,
+    /// Units expected in total when known; zero for older jobs or open-ended work.
+    #[serde(default)]
+    pub total: usize,
+    /// The options this job was queued with, so the UI can show and reuse them.
+    #[serde(default)]
+    pub options: Options,
+    /// Optional user-facing title; the original `filename` is always retained.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub collection: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub favorite: bool,
     pub result_status: Option<String>,
     pub error: Option<Failure>,
     pub warnings: Vec<String>,
@@ -143,6 +161,67 @@ fn epoch() -> i64 {
         .unwrap_or_default()
         .as_secs() as i64
 }
+/// Plain searchable text for a block. Tables are flattened row by row so a query can match
+/// any cell while still pointing the result at the owning block. The cap keeps a pathological
+/// table from turning the index into a second copy of the whole result.
+fn block_search_text(block: &Block) -> String {
+    let mut text = if let Some(table) = &block.table {
+        let mut rows: BTreeMap<usize, BTreeMap<usize, String>> = BTreeMap::new();
+        for cell in &table.cells {
+            if cell.raw.is_empty() {
+                continue;
+            }
+            rows.entry(cell.row as usize)
+                .or_default()
+                .insert(cell.column as usize, cell.raw.clone());
+        }
+        if rows.is_empty() {
+            block.text.clone()
+        } else {
+            rows.values()
+                .map(|row| {
+                    row.values()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join("\t")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    } else {
+        block.text.clone()
+    };
+    text = text.trim().to_string();
+    if text.is_empty() {
+        return text;
+    }
+    if text.chars().count() > 50_000 {
+        text = text.chars().take(50_000).collect();
+    }
+    text
+}
+
+/// Window around the SQL `instr` result (1-based character offset). Whitespace is collapsed so
+/// a match in a table row or a multi-line block reads as one line in the palette.
+fn search_snippet(text: &str, position: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+    let at = position.saturating_sub(1).min(chars.len() - 1);
+    let start = at.saturating_sub(55);
+    let end = (start + 180).min(chars.len());
+    let mut out: String = chars[start..end].iter().collect();
+    out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if start > 0 {
+        out = format!("…{out}");
+    }
+    if end < chars.len() {
+        out.push('…');
+    }
+    out
+}
+
 impl App {
     pub fn open(mut config: Config) -> Result<Self> {
         if config.limits.workers == 0 || config.limits.workers > 32 {
@@ -154,10 +233,21 @@ impl App {
         db.pragma_update(None, "journal_mode", "WAL")?;
         db.pragma_update(None, "synchronous", "FULL")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, filename TEXT NOT NULL, cache_key TEXT NOT NULL, options TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, error TEXT); CREATE INDEX IF NOT EXISTS job_queue ON jobs(state,created_at); CREATE INDEX IF NOT EXISTS job_cache ON jobs(tenant,cache_key,state);")?;
-        // Additive migration: databases created before webhooks lack this column.
+        // Additive migrations: older databases lack these optional columns.
         let _ = db.execute("ALTER TABLE jobs ADD COLUMN callback_url TEXT", []);
+        let _ = db.execute("ALTER TABLE jobs ADD COLUMN display_name TEXT", []);
+        let _ = db.execute("ALTER TABLE jobs ADD COLUMN collection TEXT", []);
+        let _ = db.execute("ALTER TABLE jobs ADD COLUMN tags TEXT", []);
+        let _ = db.execute(
+            "ALTER TABLE jobs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         db.execute_batch("CREATE TABLE IF NOT EXISTS webhook_deliveries(id TEXT PRIMARY KEY, job_id TEXT NOT NULL, url TEXT NOT NULL, event TEXT NOT NULL, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, delivered_at INTEGER, last_error TEXT); CREATE INDEX IF NOT EXISTS webhook_pending ON webhook_deliveries(delivered_at,next_at); CREATE INDEX IF NOT EXISTS webhook_job ON webhook_deliveries(job_id);")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS sink_runs(job_id TEXT PRIMARY KEY, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, completed_at INTEGER, last_error TEXT); CREATE INDEX IF NOT EXISTS sink_pending ON sink_runs(completed_at,next_at);")?;
+        // Full-text-ish search over completed results. One row per block (plus one per unit
+        // name) keeps matches addressable in the reader. `search_state` records jobs that have
+        // been indexed so a query only backfills new or pre-existing jobs once.
+        db.execute_batch("CREATE TABLE IF NOT EXISTS search_units(job_id TEXT NOT NULL, unit_id TEXT NOT NULL, unit_name TEXT NOT NULL, unit_index INTEGER NOT NULL, block_id TEXT, kind TEXT NOT NULL, text TEXT NOT NULL); CREATE INDEX IF NOT EXISTS search_job ON search_units(job_id); CREATE TABLE IF NOT EXISTS search_state(job_id TEXT PRIMARY KEY, indexed_at INTEGER NOT NULL, blocks INTEGER NOT NULL);")?;
         // Reap orphan process groups before redispatching their durable input.
         let mut statement =
             db.prepare("SELECT id FROM jobs WHERE state IN ('running','deleting')")?;
@@ -189,6 +279,8 @@ impl App {
                 if dir.exists() {
                     std::fs::remove_dir_all(&dir)?;
                 }
+                db.execute("DELETE FROM search_units WHERE job_id=?1", [&id])?;
+                db.execute("DELETE FROM search_state WHERE job_id=?1", [&id])?;
                 db.execute("DELETE FROM jobs WHERE id=?1", [&id])?;
             }
         }
@@ -246,10 +338,12 @@ impl App {
     pub fn job(&self, id: &str) -> Result<Job> {
         let db = self.db.lock().unwrap();
         let mut job = db.query_row(
-            "SELECT id,state,filename,created_at,updated_at,error FROM jobs WHERE id=?1",
+            "SELECT id,state,filename,created_at,updated_at,error,options,display_name,collection,tags,favorite FROM jobs WHERE id=?1",
             [id],
             |r| {
                 let e: Option<String> = r.get(5)?;
+                let options: String = r.get(6)?;
+                let tags: Option<String> = r.get(9)?;
                 Ok(Job {
                     id: r.get(0)?,
                     state: r.get(1)?,
@@ -257,6 +351,14 @@ impl App {
                     created_at: r.get(3)?,
                     updated_at: r.get(4)?,
                     progress: 0,
+                    total: 0,
+                    options: serde_json::from_str(&options).unwrap_or_default(),
+                    display_name: r.get(7)?,
+                    collection: r.get(8)?,
+                    tags: tags
+                        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+                        .unwrap_or_default(),
+                    favorite: r.get::<_, i64>(10)? != 0,
                     result_status: None,
                     error: e.and_then(|s| serde_json::from_str(&s).ok()),
                     warnings: vec![],
@@ -268,6 +370,15 @@ impl App {
         if let Ok(bytes) = std::fs::read(self.dir(id).join("progress.json")) {
             if let Ok(progress) = serde_json::from_slice::<Progress>(&bytes) {
                 job.progress = progress.units;
+                job.total = if progress.total > 0 {
+                    progress.total
+                } else if progress.result_status.is_some() {
+                    // Completed progress files written before `total` existed: the unit count
+                    // is the final count.
+                    progress.units
+                } else {
+                    0
+                };
                 job.result_status = progress.result_status;
                 job.warnings = progress.warnings;
                 job.unit_failures = progress.errors;
@@ -275,6 +386,114 @@ impl App {
         }
         Ok(job)
     }
+    /// Build the block-level search rows for one completed job. The canonical result stays
+    /// untouched; this is only an index used by the viewer's command palette.
+    fn index_job_for_search(&self, id: &str) -> Result<usize> {
+        let path = self.dir(id).join("result.json");
+        // A multi-hundred-megabyte spreadsheet result must not be parsed a second time in
+        // memory just to answer search. Filename search still works for those jobs.
+        const SEARCH_INDEX_MAX_BYTES: u64 = 64 * 1024 * 1024;
+        if std::fs::metadata(&path)?.len() > SEARCH_INDEX_MAX_BYTES {
+            tracing::info!("search: skipping oversized result for {id}");
+            let db = self.db.lock().unwrap();
+            db.execute(
+                "INSERT OR REPLACE INTO search_state(job_id,indexed_at,blocks) VALUES(?1,?2,0)",
+                params![id, epoch()],
+            )?;
+            return Ok(0);
+        }
+        let bytes = std::fs::read(&path)?;
+        let mut document: Document = serde_json::from_slice(&bytes)?;
+        apply_review(&mut document, &read_review(&self.dir(id)));
+        let mut rows: Vec<(String, String, usize, Option<String>, String, String)> = Vec::new();
+        for unit in &document.units {
+            let name = unit.name.trim();
+            if !name.is_empty() {
+                rows.push((
+                    unit.id.clone(),
+                    unit.name.clone(),
+                    unit.index,
+                    None,
+                    "unit".into(),
+                    name.to_string(),
+                ));
+            }
+            for block in &unit.blocks {
+                let text = block_search_text(block);
+                if text.is_empty() {
+                    continue;
+                }
+                rows.push((
+                    unit.id.clone(),
+                    unit.name.clone(),
+                    unit.index,
+                    Some(block.id.clone()),
+                    block.kind.clone(),
+                    text,
+                ));
+            }
+        }
+        let db = self.db.lock().unwrap();
+        let tx = db.unchecked_transaction()?;
+        tx.execute("DELETE FROM search_units WHERE job_id=?1", [id])?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO search_units(job_id,unit_id,unit_name,unit_index,block_id,kind,text) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            )?;
+            for (unit_id, unit_name, unit_index, block_id, kind, text) in &rows {
+                insert.execute(params![
+                    id,
+                    unit_id,
+                    unit_name,
+                    *unit_index as i64,
+                    block_id,
+                    kind,
+                    text
+                ])?;
+            }
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO search_state(job_id,indexed_at,blocks) VALUES(?1,?2,?3)",
+            params![id, epoch(), rows.len() as i64],
+        )?;
+        tx.commit()?;
+        Ok(rows.len())
+    }
+
+    /// Backfill indexes for completed jobs created before search existed, or jobs whose
+    /// completion index failed. Bounded so one search cannot scan an unbounded archive.
+    fn index_pending_for_search(&self, tenant: &str, limit: usize) -> usize {
+        let ids: Vec<String> = {
+            let db = self.db.lock().unwrap();
+            let Ok(mut statement) = db.prepare(
+                "SELECT id FROM jobs WHERE tenant=?1 AND state='completed' AND id NOT IN (SELECT job_id FROM search_state) ORDER BY updated_at DESC LIMIT ?2",
+            ) else {
+                return 0;
+            };
+            statement
+                .query_map(params![tenant, limit as i64], |r| r.get::<_, String>(0))
+                .and_then(|rows| rows.collect::<std::result::Result<Vec<_>, _>>())
+                .unwrap_or_default()
+        };
+        let mut indexed = 0;
+        for id in ids {
+            match self.index_job_for_search(&id) {
+                Ok(_) => indexed += 1,
+                Err(e) => {
+                    tracing::warn!("search index failed for {id}: {e:#}");
+                    // Record the attempt even on failure. A malformed/old result should not
+                    // make every later query retry the same expensive parse.
+                    let db = self.db.lock().unwrap();
+                    let _ = db.execute(
+                        "INSERT OR REPLACE INTO search_state(job_id,indexed_at,blocks) VALUES(?1,?2,0)",
+                        params![id, epoch()],
+                    );
+                }
+            }
+        }
+        indexed
+    }
+
     /// Remove terminal jobs past the configured retention window. Active workers are never
     /// touched; cancel/delete still own their own lifetime handling.
     fn sweep_retention(&self) -> Result<usize> {
@@ -301,6 +520,8 @@ impl App {
             if dir.exists() {
                 std::fs::remove_dir_all(&dir)?;
             }
+            db.execute("DELETE FROM search_units WHERE job_id=?1", [&id])?;
+            db.execute("DELETE FROM search_state WHERE job_id=?1", [&id])?;
             db.execute("DELETE FROM jobs WHERE id=?1", [&id])?;
             removed += 1;
         }
@@ -698,6 +919,14 @@ impl App {
                 if let Err(e) = self.set_state(&id, "completed", None) {
                     tracing::error!("{e}");
                 }
+                log_job_timings(&self.dir(&id));
+                let app = self.clone();
+                let index_id = id.clone();
+                if let Ok(Err(e)) =
+                    tokio::task::spawn_blocking(move || app.index_job_for_search(&index_id)).await
+                {
+                    tracing::warn!("search index failed for {id}: {e:#}");
+                }
             }
             Err(e) => {
                 let _ = self.set_state(&id, "failed", Some(extract::failure(&e, None)));
@@ -727,6 +956,75 @@ impl App {
         supervise_worker(&dir, &self.config.limits, child).await
     }
 }
+/// Emit the per-page timing trail to the server log after a job completes. The same data is in
+/// the job's `timings.json` and each unit's `timing` object.
+fn log_job_timings(dir: &std::path::Path) {
+    let Ok(bytes) = std::fs::read(dir.join("timings.json")) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return;
+    };
+    let Some(pages) = value.get("pages") else {
+        return;
+    };
+    let job = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("-");
+    let number = |key: &str| {
+        pages
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    tracing::info!(
+        target: "doc_extractor::job",
+        job,
+        pages = number("pages"),
+        native_pages = number("native_pages"),
+        ocr_pages = number("ocr_pages"),
+        hybrid_pages = number("hybrid_pages"),
+        page_total_ms = number("page_total_ms"),
+        ocr_ms = number("ocr_ms"),
+        render_ms = number("render_ms"),
+        wall_ms = number("wall_ms"),
+        "job timing"
+    );
+    let Some(per_page) = pages.get("per_page").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    for page in per_page {
+        let text = |key: &str| {
+            page.get(key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("-")
+        };
+        let number = |key: &str| {
+            page.get(key)
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+        };
+        tracing::info!(
+            target: "doc_extractor::page",
+            job,
+            unit = text("unit"),
+            page = number("page"),
+            method = text("method"),
+            provider = text("provider"),
+            total_ms = number("total_ms"),
+            native_ms = number("native_ms"),
+            images_ms = number("images_ms"),
+            render_ms = number("render_ms"),
+            ocr_ms = number("ocr_ms"),
+            page_image_ms = number("page_image_ms"),
+            chars = number("chars"),
+            tables = number("tables"),
+            "page timing"
+        );
+    }
+}
+
 fn kill_group(pid: u32) {
     #[cfg(unix)]
     if pid > 0 {
@@ -1170,9 +1468,379 @@ async fn status(
     app.authorize(&id, &headers)?;
     Ok(Json(app.job(&id)?))
 }
+/// Persist reviewer edits and page verification in a sidecar. The canonical extraction is
+/// immutable; `review.json` is an overlay used by the reader and reviewed exports.
+async fn update_review(
+    State(app): State<App>,
+    ApiPath(id): ApiPath<String>,
+    headers: HeaderMap,
+    Query(query): Query<UpdateQuery>,
+    Json(update): Json<ReviewUpdate>,
+) -> ApiResult<Response> {
+    app.authorize(&id, &headers)?;
+    if query.library.unwrap_or(false) {
+        let job = app.job(&id)?;
+        let display_name = update
+            .display_name
+            .as_deref()
+            .map(|value| value.trim().to_owned())
+            .map(|value| if value.is_empty() { None } else { Some(value) })
+            .unwrap_or(job.display_name);
+        if display_name.as_ref().is_some_and(|name| name.len() > 200) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_library",
+                "Display name is too long",
+            ));
+        }
+        let collection = update
+            .collection
+            .as_deref()
+            .map(|value| value.trim().to_owned())
+            .map(|value| if value.is_empty() { None } else { Some(value) })
+            .unwrap_or(job.collection);
+        if collection.as_ref().is_some_and(|name| name.len() > 100) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_library",
+                "Collection name is too long",
+            ));
+        }
+        let mut tags = update.tags.unwrap_or(job.tags);
+        tags = tags
+            .into_iter()
+            .map(|tag| tag.trim().to_owned())
+            .filter(|tag| !tag.is_empty())
+            .collect();
+        tags.sort();
+        tags.dedup();
+        if tags.len() > 32 || tags.iter().any(|tag| tag.len() > 40) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_library",
+                "Use at most 32 tags of 40 characters or less",
+            ));
+        }
+        let favorite = update.favorite.unwrap_or(job.favorite);
+        app.db.lock().unwrap().execute(
+            "UPDATE jobs SET display_name=?2,collection=?3,tags=?4,favorite=?5,updated_at=?6 WHERE id=?1",
+            params![
+                id,
+                display_name,
+                collection,
+                serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into()),
+                if favorite { 1i64 } else { 0i64 },
+                epoch()
+            ],
+        )?;
+        return Ok(Json(app.job(&id)?).into_response());
+    }
+    if query.redaction.unwrap_or(false) {
+        if app.job(&id)?.state != "completed" {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "not_ready",
+                "Redaction is available after extraction completes",
+            ));
+        }
+        let redactions = if update.clear_redactions.unwrap_or(false) {
+            Vec::new()
+        } else {
+            update.redactions.unwrap_or_default()
+        };
+        if redactions.len() > 500 {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_redaction",
+                "At most 500 redactions can be stored",
+            ));
+        }
+        for spec in &redactions {
+            let prefix = format!("{}-b", spec.unit_id);
+            if !valid_part(&spec.unit_id, 'u')
+                || !spec.block_id.starts_with(&prefix)
+                || spec.block_id.len() > 96
+                || !spec
+                    .block_id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+                || spec.value.is_empty()
+                || spec.value.len() > 500
+                || spec.category.len() > 40
+                || spec.row.is_some() != spec.column.is_some()
+            {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_redaction",
+                    "Invalid redaction target",
+                ));
+            }
+        }
+        let value = json!({
+            "schema_version": "redaction1",
+            "updated_at": epoch(),
+            "redactions": redactions,
+        });
+        atomic_json(&app.dir(&id).join("redaction.json"), &value)?;
+        return Ok(Json(value).into_response());
+    }
+    if app.job(&id)?.state != "completed" {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "not_ready",
+            "Review is available after extraction completes",
+        ));
+    }
+    let unit_id = update
+        .unit_id
+        .clone()
+        .filter(|unit| valid_part(unit, 'u'))
+        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "invalid_review", "Unknown unit"))?;
+    if let Some(block) = &update.block_id {
+        let prefix = format!("{unit_id}-b");
+        if !block.starts_with(&prefix)
+            || block.len() > 96
+            || !block.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_review",
+                "Unknown block",
+            ));
+        }
+        if update.text.is_none() && !update.revert {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_review",
+                "Block updates need text or revert=true",
+            ));
+        }
+    } else if update.text.is_some() || update.revert {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_review",
+            "block_id is required for text corrections",
+        ));
+    }
+    if update.cell_row.is_some() != update.cell_column.is_some() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_review",
+            "cell_row and cell_column must be supplied together",
+        ));
+    }
+    if update.cell_row.is_some() && update.block_id.is_none() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_review",
+            "block_id is required for cell corrections",
+        ));
+    }
+    if update
+        .text
+        .as_ref()
+        .or(update.original.as_ref())
+        .is_some_and(|text| text.len() > 200_000)
+    {
+        return Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "limit_exceeded",
+            "Corrected text is too large",
+        ));
+    }
+    if update.note.as_ref().is_some_and(|note| note.len() > 4_000) {
+        return Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "limit_exceeded",
+            "Review note is too large",
+        ));
+    }
+    if let Some(status) = &update.status {
+        if !["reviewed", "needs_review", "clear"].contains(&status.as_str()) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_review",
+                "Expected status reviewed, needs_review or clear",
+            ));
+        }
+    }
+    if update.text.is_none() && !update.revert && update.status.is_none() && update.note.is_none() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_review",
+            "No review changes supplied",
+        ));
+    }
+    let dir = app.dir(&id);
+    let path = dir.join("review.json");
+    if tokio::fs::metadata(&path)
+        .await
+        .map(|meta| meta.len() > 4 * 1024 * 1024)
+        .unwrap_or(false)
+    {
+        return Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "limit_exceeded",
+            "Review sidecar is too large",
+        ));
+    }
+    let mut review = read_review(&dir);
+    if !review.get("units").is_some_and(Value::is_object) {
+        review["units"] = json!({});
+    }
+    let units = review["units"].as_object_mut().unwrap();
+    let unit = units.entry(unit_id.clone()).or_insert_with(|| json!({}));
+    if !unit.is_object() {
+        *unit = json!({});
+    }
+    if let Some(block_id) = &update.block_id {
+        if let (Some(row), Some(column)) = (update.cell_row, update.cell_column) {
+            if !unit.get("cells").is_some_and(Value::is_object) {
+                unit["cells"] = json!({});
+            }
+            if !unit["cells"].get(block_id).is_some_and(Value::is_object) {
+                unit["cells"][block_id.as_str()] = json!({});
+            }
+            let key = format!("{row},{column}");
+            if update.revert {
+                if let Some(cells) = unit["cells"]
+                    .get_mut(block_id)
+                    .and_then(Value::as_object_mut)
+                {
+                    cells.remove(&key);
+                }
+            } else if let Some(text) = &update.text {
+                let mut entry = json!({"text":text,"updated_at":epoch()});
+                if let Some(original) = &update.original {
+                    entry["original"] = json!(original);
+                }
+                unit["cells"][block_id.as_str()][key.as_str()] = entry;
+            }
+        } else if update.revert {
+            if let Some(blocks) = unit.get_mut("blocks").and_then(Value::as_object_mut) {
+                blocks.remove(block_id);
+            }
+        } else if let Some(text) = &update.text {
+            if !unit.get("blocks").is_some_and(Value::is_object) {
+                unit["blocks"] = json!({});
+            }
+            let mut entry = json!({"text":text,"updated_at":epoch()});
+            if let Some(original) = &update.original {
+                entry["original"] = json!(original);
+            }
+            unit["blocks"][block_id.as_str()] = entry;
+        }
+        // A correction invalidates an earlier verification unless the same request
+        // explicitly sets the status afterwards.
+        if unit.get("status").and_then(Value::as_str) == Some("reviewed") && update.status.is_none()
+        {
+            unit["status"] = json!("needs_review");
+        }
+    }
+    if let Some(status) = &update.status {
+        if status == "clear" {
+            if let Some(object) = unit.as_object_mut() {
+                object.remove("status");
+            }
+        } else {
+            unit["status"] = json!(status);
+        }
+    }
+    if let Some(note) = &update.note {
+        unit["note"] = json!(note);
+    }
+    unit["updated_at"] = json!(epoch());
+    review["updated_at"] = json!(epoch());
+    atomic_json(&path, &review)?;
+    let worker = app.clone();
+    let index_id = id.clone();
+    tokio::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || worker.index_job_for_search(&index_id)).await;
+    });
+    Ok(Json(review).into_response())
+}
 #[derive(Deserialize)]
 struct Export {
     format: Option<String>,
+    /// Apply the reviewed-text overlay when generating markdown/text/html.
+    review: Option<bool>,
+    /// Apply saved redactions to human-facing exports.
+    redact: Option<bool>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RedactionSpec {
+    unit_id: String,
+    block_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    row: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    column: Option<u32>,
+    category: String,
+    value: String,
+}
+#[derive(Debug, Serialize)]
+struct RedactionMatch {
+    unit_id: String,
+    unit_name: String,
+    block_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    row: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<u32>,
+    category: String,
+    value: String,
+    preview: String,
+    context: String,
+}
+#[derive(Deserialize)]
+struct AskRequest {
+    question: String,
+    #[serde(default)]
+    max_sources: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct ReviewUpdate {
+    #[serde(default)]
+    unit_id: Option<String>,
+    #[serde(default)]
+    block_id: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    /// Raw text before the correction, kept so the UI can revert without re-reading the unit.
+    #[serde(default)]
+    original: Option<String>,
+    /// When present with `cell_row`, the correction targets one table cell instead of a
+    /// whole block.
+    #[serde(default)]
+    cell_row: Option<u32>,
+    #[serde(default)]
+    cell_column: Option<u32>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    revert: bool,
+    // Library metadata updates (`?library=true`).
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    collection: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    favorite: Option<bool>,
+    // Redaction updates (`?redaction=true`).
+    #[serde(default)]
+    redactions: Option<Vec<RedactionSpec>>,
+    #[serde(default)]
+    clear_redactions: Option<bool>,
+}
+#[derive(Deserialize)]
+struct UpdateQuery {
+    library: Option<bool>,
+    redaction: Option<bool>,
 }
 /// `result_format` recorded at upload time; used when the request has no `?format=`.
 async fn job_result_format(app: &App, id: &str) -> Option<String> {
@@ -1186,6 +1854,822 @@ async fn job_result_format(app: &App, id: &str) -> Option<String> {
         .as_str()
         .map(str::to_owned)
 }
+fn empty_review() -> Value {
+    json!({"schema_version":"review1","updated_at":0,"units":{}})
+}
+
+fn read_review(dir: &std::path::Path) -> Value {
+    std::fs::read(dir.join("review.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(empty_review)
+}
+
+fn review_has_corrections(review: &Value) -> bool {
+    review
+        .get("units")
+        .and_then(Value::as_object)
+        .is_some_and(|units| {
+            units.values().any(|unit| {
+                unit.get("blocks")
+                    .and_then(Value::as_object)
+                    .is_some_and(|blocks| !blocks.is_empty())
+                    || unit
+                        .get("cells")
+                        .and_then(Value::as_object)
+                        .is_some_and(|cells| !cells.is_empty())
+            })
+        })
+}
+
+/// Apply reviewer text corrections to a copy of the canonical document. The canonical
+/// `result.json` is never modified; this overlay is used only for human-facing exports.
+fn apply_review(document: &mut Document, review: &Value) {
+    let Some(units) = review.get("units").and_then(Value::as_object) else {
+        return;
+    };
+    for unit in &mut document.units {
+        let Some(reviewed) = units.get(&unit.id) else {
+            continue;
+        };
+        if let Some(blocks) = reviewed.get("blocks").and_then(Value::as_object) {
+            for block in &mut unit.blocks {
+                if let Some(text) = blocks
+                    .get(&block.id)
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(Value::as_str)
+                {
+                    block.text = text.to_owned();
+                }
+            }
+        }
+        let Some(cells) = reviewed.get("cells").and_then(Value::as_object) else {
+            continue;
+        };
+        for block in &mut unit.blocks {
+            let Some(table) = &mut block.table else {
+                continue;
+            };
+            let Some(overrides) = cells.get(&block.id).and_then(Value::as_object) else {
+                continue;
+            };
+            for cell in &mut table.cells {
+                let key = format!("{},{}", cell.row, cell.column);
+                if let Some(text) = overrides
+                    .get(&key)
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(Value::as_str)
+                {
+                    cell.raw = text.to_owned();
+                    cell.value = json!(text);
+                }
+            }
+        }
+    }
+}
+
+fn reviewed_html(document: &Document) -> String {
+    let mut out = String::new();
+    out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">");
+    out.push_str(&format!(
+        "<title>{}</title>\n<style>body{{font:14px/1.5 -apple-system,system-ui,sans-serif;margin:2rem auto;max-width:70rem;padding:0 1rem}}table{{border-collapse:collapse;margin:.6rem 0}}td,th{{border:1px solid #bbb;padding:.2rem .45rem;vertical-align:top;max-width:28rem;overflow-wrap:anywhere}}tbody tr:nth-child(even){{background:rgba(127,127,127,.09)}}pre,p{{overflow-wrap:anywhere}}</style>\n</head>\n<body>\n<h1>{}</h1>\n<p>Status: {} · reviewed text</p>\n",
+        crate::model::html_escape(&document.filename),
+        crate::model::html_escape(&document.filename),
+        crate::model::html_escape(&document.status)
+    ));
+    for unit in &document.units {
+        crate::model::unit_html(unit, &mut out);
+    }
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
+fn pii_patterns() -> &'static [(&'static str, Regex)] {
+    static PATTERNS: std::sync::OnceLock<Vec<(&'static str, Regex)>> = std::sync::OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        vec![
+            (
+                "email",
+                Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}").unwrap(),
+            ),
+            ("ssn", Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap()),
+            ("card", Regex::new(r"\b\d(?:[ -]?\d){12,18}\b").unwrap()),
+            (
+                "aadhaar",
+                Regex::new(r"\b\d{4}[\s-]\d{4}[\s-]\d{4}\b").unwrap(),
+            ),
+            ("pan", Regex::new(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b").unwrap()),
+            (
+                "gstin",
+                Regex::new(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]\b").unwrap(),
+            ),
+            (
+                "iban",
+                Regex::new(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b").unwrap(),
+            ),
+            ("phone", Regex::new(r"\+?\d[\d ().-]{6,18}\d").unwrap()),
+        ]
+    })
+}
+
+fn luhn_valid(value: &str) -> bool {
+    let digits: Vec<u32> = value
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .filter_map(|c| c.to_digit(10))
+        .collect();
+    if digits.len() < 13 || digits.len() > 19 {
+        return false;
+    }
+    let mut sum = 0u32;
+    let parity = digits.len() % 2;
+    for (index, digit) in digits.iter().enumerate() {
+        let mut value = *digit;
+        if index % 2 == parity {
+            value *= 2;
+            if value > 9 {
+                value -= 9;
+            }
+        }
+        sum += value;
+    }
+    sum % 10 == 0
+}
+
+fn mask_pii(category: &str, value: &str) -> String {
+    match category {
+        "email" => {
+            let (local, domain) = value.split_once('@').unwrap_or((value, ""));
+            format!("{}***@{domain}", local.chars().next().unwrap_or('*'))
+        }
+        "card" => {
+            let digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
+            let tail: String = digits
+                .chars()
+                .rev()
+                .take(4)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            format!("**** **** **** {tail}")
+        }
+        "phone" => {
+            let digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
+            let tail: String = digits
+                .chars()
+                .rev()
+                .take(2)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            format!("*** *** {tail}")
+        }
+        "ssn" => {
+            let tail: String = value
+                .chars()
+                .rev()
+                .take(4)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            format!("***-**-{tail}")
+        }
+        _ => {
+            let chars: Vec<char> = value.chars().collect();
+            let head: String = chars.iter().take(2).collect();
+            let tail: String = chars
+                .iter()
+                .rev()
+                .take(2)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            format!("{head}••••{tail}")
+        }
+    }
+}
+
+fn pii_spans(text: &str) -> Vec<(usize, usize, String, String)> {
+    let mut candidates: Vec<(usize, usize, &str, u8)> = Vec::new();
+    for (priority, (category, pattern)) in pii_patterns().iter().enumerate() {
+        for found in pattern.find_iter(text) {
+            let value = found.as_str();
+            if *category == "card" && !luhn_valid(value) {
+                continue;
+            }
+            if *category == "phone" {
+                let digits = value.chars().filter(|c| c.is_ascii_digit()).count();
+                if !(8..=15).contains(&digits) {
+                    continue;
+                }
+            }
+            candidates.push((found.start(), found.end(), category, priority as u8));
+        }
+    }
+    candidates.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(a.3.cmp(&b.3))
+            .then((b.1 - b.0).cmp(&(a.1 - a.0)))
+    });
+    let mut accepted: Vec<(usize, usize, String, String)> = Vec::new();
+    let mut last_end = 0usize;
+    for (start, end, category, _) in candidates {
+        if start < last_end {
+            continue;
+        }
+        accepted.push((start, end, category.to_owned(), text[start..end].to_owned()));
+        last_end = end;
+    }
+    accepted
+}
+
+fn detect_redactions(document: &Document) -> Vec<RedactionMatch> {
+    let mut matches = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut scan =
+        |unit: &Unit, block_id: &str, row: Option<u32>, column: Option<u32>, text: &str| {
+            let spans = pii_spans(text);
+            for (start, end, category, value) in &spans {
+                let key = (
+                    unit.id.clone(),
+                    block_id.to_owned(),
+                    row,
+                    column,
+                    category.clone(),
+                    value.clone(),
+                );
+                if !seen.insert(key) {
+                    continue;
+                }
+                // Context must not leak the *other* identifiers on the same line: replace
+                // every detected span before rendering the snippet.
+                let mut prefix = text[..*start].to_owned();
+                for (span_start, _, other_category, other_value) in &spans {
+                    if span_start < start {
+                        prefix =
+                            prefix.replace(other_value, &mask_pii(other_category, other_value));
+                    }
+                }
+                let mut suffix = text[*end..].to_owned();
+                for (span_start, _, other_category, other_value) in &spans {
+                    if span_start >= end {
+                        suffix =
+                            suffix.replace(other_value, &mask_pii(other_category, other_value));
+                    }
+                }
+                let prefix: String = prefix
+                    .chars()
+                    .rev()
+                    .take(35)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                let suffix: String = suffix.chars().take(35).collect();
+                let context = format!("{prefix}{}{suffix}", mask_pii(category, value))
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                matches.push(RedactionMatch {
+                    unit_id: unit.id.clone(),
+                    unit_name: unit.name.clone(),
+                    block_id: block_id.to_owned(),
+                    row,
+                    column,
+                    category: category.clone(),
+                    value: value.clone(),
+                    preview: mask_pii(category, value),
+                    context,
+                });
+                if matches.len() >= 2000 {
+                    return;
+                }
+            }
+        };
+    for unit in &document.units {
+        for block in &unit.blocks {
+            if let Some(table) = &block.table {
+                for cell in &table.cells {
+                    if !cell.raw.is_empty() {
+                        scan(
+                            unit,
+                            &block.id,
+                            Some(cell.row),
+                            Some(cell.column),
+                            &cell.raw,
+                        );
+                    }
+                }
+            } else if !block.text.is_empty() {
+                scan(unit, &block.id, None, None, &block.text);
+            }
+        }
+    }
+    matches
+}
+
+fn empty_redactions() -> Value {
+    json!({"schema_version":"redaction1","updated_at":0,"redactions":[]})
+}
+
+fn read_redactions(dir: &std::path::Path) -> Value {
+    std::fs::read(dir.join("redaction.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(empty_redactions)
+}
+
+fn redaction_specs(value: &Value) -> Vec<RedactionSpec> {
+    value
+        .get("redactions")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| serde_json::from_value::<RedactionSpec>(item.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn apply_redactions(document: &mut Document, specs: &[RedactionSpec]) {
+    for spec in specs {
+        let Some(unit) = document
+            .units
+            .iter_mut()
+            .find(|unit| unit.id == spec.unit_id)
+        else {
+            continue;
+        };
+        let Some(block) = unit
+            .blocks
+            .iter_mut()
+            .find(|block| block.id == spec.block_id)
+        else {
+            continue;
+        };
+        if let (Some(row), Some(column)) = (spec.row, spec.column) {
+            if let Some(table) = &mut block.table {
+                if let Some(cell) = table
+                    .cells
+                    .iter_mut()
+                    .find(|cell| cell.row == row && cell.column == column)
+                {
+                    if !spec.value.is_empty() {
+                        cell.raw = cell.raw.replace(&spec.value, "[REDACTED]");
+                        cell.value = json!(cell.raw);
+                    }
+                }
+            }
+        } else if !spec.value.is_empty() {
+            block.text = block.text.replace(&spec.value, "[REDACTED]");
+        }
+    }
+}
+
+async fn review_export(
+    dir: &std::path::Path,
+    format: &str,
+    review: &Value,
+    redactions: &[RedactionSpec],
+) -> ApiResult<Response> {
+    let bytes = tokio::fs::read(dir.join("result.json")).await?;
+    let mut document: Document = serde_json::from_slice(&bytes).map_err(anyhow::Error::from)?;
+    apply_review(&mut document, review);
+    apply_redactions(&mut document, redactions);
+    let (body, mime) = match format {
+        "markdown" | "md" => (
+            crate::model::markdown(&document),
+            "text/markdown; charset=utf-8",
+        ),
+        "text" | "txt" => (
+            crate::model::plaintext(&document),
+            "text/plain; charset=utf-8",
+        ),
+        "html" => (reviewed_html(&document), "text/html; charset=utf-8"),
+        _ => {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_format",
+                "Reviewed export supports markdown, text or html",
+            ))
+        }
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, mime.to_owned()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+/// Self-contained, printable evidence report. Page images are embedded as data URIs so the
+/// file can be opened or archived without the service or a sidecar asset directory.
+async fn report_export(
+    dir: &std::path::Path,
+    review: &Value,
+    redactions: &[RedactionSpec],
+) -> ApiResult<Response> {
+    let bytes = tokio::fs::read(dir.join("result.json")).await?;
+    let mut document: Document = serde_json::from_slice(&bytes).map_err(anyhow::Error::from)?;
+    apply_review(&mut document, review);
+    apply_redactions(&mut document, redactions);
+    let redacted = !redactions.is_empty();
+    const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+    let mut embedded = 0u64;
+    let mut out = String::new();
+    out.push_str("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">");
+    out.push_str("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
+    out.push_str(&format!(
+        "<title>{} — extraction report</title><style>",
+        crate::model::html_escape(&document.filename)
+    ));
+    out.push_str(":root{--ink:#102229;--muted:#61757d;--line:#d7e2e3;--accent:#0d6a72;--warm:#8a5a1e}*{box-sizing:border-box}body{margin:0;background:#eef4f4;color:var(--ink);font:14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}.report{max-width:960px;margin:0 auto;padding:36px 20px 70px}h1,h2,h3{font-family:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;font-weight:500;letter-spacing:-.02em}h1{font-size:38px;margin:0 0 6px}.meta{color:var(--muted);font-size:12px;margin-bottom:22px}.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:18px 0 26px}.stat{padding:11px 13px;background:#fff;border:1px solid var(--line);border-radius:10px}.stat strong{display:block;font-size:20px}.stat span{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em}.toc{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:24px}.toc a{padding:4px 8px;color:var(--accent);font-size:11px;text-decoration:none;background:#fff;border:1px solid var(--line);border-radius:999px}.page{padding:18px 20px;margin-bottom:16px;background:#fff;border:1px solid var(--line);border-radius:14px;break-inside:avoid}.page>h2{font-size:22px;margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}.badges{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;font-size:10px}.badge{padding:3px 7px;border:1px solid var(--line);border-radius:999px;color:var(--muted)}.badge.ok{color:#177a5b;background:#e2f3eb}.badge.warn{color:var(--warm);background:#fbf0dd}.page img{display:block;max-width:100%;max-height:720px;margin:0 auto 14px;border:1px solid var(--line);border-radius:8px}.unit{font-size:13px}.unit h2{display:none}.unit table{border-collapse:collapse;width:100%;margin:8px 0;font-size:11px}.unit td,.unit th{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}.unit p{white-space:pre-wrap;overflow-wrap:anywhere}.warning{padding:7px 9px;margin:6px 0;color:#6b4a1f;background:#fbf0dd;border-left:3px solid var(--warm);border-radius:6px;font-size:11px}.footer{margin-top:24px;color:var(--muted);font-size:10px;text-align:center}@media print{body{background:#fff}.report{max-width:none;padding:0}.page{border:0;padding:0;margin:0 0 24px;break-after:page}.toc{display:none}.summary{grid-template-columns:repeat(4,1fr)}}@media(max-width:640px){.summary{grid-template-columns:repeat(2,1fr)}h1{font-size:30px}}");
+    out.push_str("</style></head><body><main class=\"report\">");
+    out.push_str(&format!(
+        "<h1>{}</h1><div class=\"meta\">Extraction report · {} · {} · {} unit(s)</div>",
+        crate::model::html_escape(&document.filename),
+        crate::model::html_escape(&document.status),
+        document.schema_version,
+        document.units.len()
+    ));
+    if redacted {
+        out.push_str("<div class=\"meta\" style=\"color:#8a5a1e;margin-top:-12px\">Redacted report: page images are omitted because image content cannot be redacted here.</div>");
+    }
+    let corrected = review_has_corrections(review);
+    let reviewed_units = review
+        .get("units")
+        .and_then(Value::as_object)
+        .map(|units| {
+            units
+                .values()
+                .filter(|unit| unit.get("status").and_then(Value::as_str) == Some("reviewed"))
+                .count()
+        })
+        .unwrap_or(0);
+    let table_count: usize = document
+        .units
+        .iter()
+        .flat_map(|unit| unit.blocks.iter())
+        .filter(|block| block.table.is_some())
+        .count();
+    out.push_str(&format!(
+        "<div class=\"summary\"><div class=\"stat\"><strong>{}</strong><span>Pages</span></div><div class=\"stat\"><strong>{}</strong><span>Tables</span></div><div class=\"stat\"><strong>{}</strong><span>Verified</span></div><div class=\"stat\"><strong>{}</strong><span>Review edits</span></div></div>",
+        document.units.len(),
+        table_count,
+        reviewed_units,
+        if corrected { "Yes" } else { "No" }
+    ));
+    if document.units.len() > 1 {
+        out.push_str("<nav class=\"toc\">");
+        for unit in &document.units {
+            out.push_str(&format!(
+                "<a href=\"#{}\">{}</a>",
+                crate::model::html_escape(&unit.id),
+                crate::model::html_escape(&unit.name)
+            ));
+        }
+        out.push_str("</nav>");
+    }
+    for unit in &document.units {
+        out.push_str("<section class=\"page\">");
+        let image_id = unit
+            .blocks
+            .iter()
+            .find_map(|block| {
+                block
+                    .attributes
+                    .get("page_image")
+                    .and_then(|meta| meta.get("asset_id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .or_else(|| {
+                unit.blocks.iter().find_map(|block| {
+                    if block.kind == "figure" {
+                        block.asset_id.clone()
+                    } else {
+                        None
+                    }
+                })
+            });
+        if !redacted {
+            if let Some(asset_id) = image_id {
+                if let Some(asset) = document
+                    .assets
+                    .iter()
+                    .find(|asset| asset.id == asset_id && asset.mime.starts_with("image/"))
+                {
+                    if embedded + asset.bytes <= MAX_IMAGE_BYTES {
+                        if let Ok(data) = tokio::fs::read(dir.join("assets").join(&asset.id)).await
+                        {
+                            embedded += data.len() as u64;
+                            out.push_str(&format!(
+                                "<img src=\"data:{};base64,{}\" alt=\"{}\">",
+                                asset.mime,
+                                base64::engine::general_purpose::STANDARD.encode(data),
+                                crate::model::html_escape(&unit.name)
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        let review_state = review.get("units").and_then(|units| units.get(&unit.id));
+        let status = review_state
+            .and_then(|state| state.get("status"))
+            .and_then(Value::as_str);
+        let edits = review_state
+            .map(|state| {
+                state
+                    .get("blocks")
+                    .and_then(Value::as_object)
+                    .map(|blocks| blocks.len())
+                    .unwrap_or(0)
+                    + state
+                        .get("cells")
+                        .and_then(Value::as_object)
+                        .map(|cells| {
+                            cells
+                                .values()
+                                .filter_map(Value::as_object)
+                                .map(|cells| cells.len())
+                                .sum::<usize>()
+                        })
+                        .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        out.push_str("<div class=\"badges\">");
+        if let Some(timing) = &unit.timing {
+            out.push_str(&format!(
+                "<span class=\"badge\">{} · {} ms</span>",
+                crate::model::html_escape(&timing.method),
+                timing.total_ms
+            ));
+        }
+        if status == Some("reviewed") {
+            out.push_str("<span class=\"badge ok\">Verified</span>");
+        }
+        if edits > 0 {
+            out.push_str(&format!(
+                "<span class=\"badge warn\">{edits} edit(s)</span>"
+            ));
+        }
+        out.push_str("</div>");
+        crate::model::unit_html(unit, &mut out);
+        for warning in &unit.warnings {
+            if warning.starts_with("Scanned page:") || warning.starts_with("Poppler reading order")
+            {
+                continue;
+            }
+            out.push_str(&format!(
+                "<div class=\"warning\">{}</div>",
+                crate::model::html_escape(warning)
+            ));
+        }
+        out.push_str("</section>");
+    }
+    out.push_str(&format!(
+        "<div class=\"footer\">Generated by doc-extractor · {} · self-contained report</div></main></body></html>",
+        crate::model::html_escape(&document.id)
+    ));
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8".to_owned()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+        ],
+        out,
+    )
+        .into_response())
+}
+
+struct AskChunk {
+    unit_id: String,
+    unit_name: String,
+    block_id: String,
+    page: usize,
+    order: usize,
+    text: String,
+    score: usize,
+}
+
+fn ask_chunks(document: &Document, question: &str, max_sources: usize) -> Vec<AskChunk> {
+    let lower_question = question.to_lowercase();
+    let stop = [
+        "the", "and", "for", "with", "from", "that", "this", "what", "which", "where", "when",
+        "how", "why", "does", "did", "are", "was", "were", "can", "could", "would", "should",
+        "about", "into", "than", "then", "there", "their", "have", "has", "had", "you", "your",
+        "document", "page",
+    ];
+    let terms: Vec<String> = lower_question
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|term| term.len() >= 3 && !stop.contains(term))
+        .map(str::to_owned)
+        .collect();
+    let broad = terms.len() <= 1
+        || [
+            "summary",
+            "summarize",
+            "overview",
+            "main points",
+            "key points",
+        ]
+        .iter()
+        .any(|word| lower_question.contains(word));
+    let mut chunks = Vec::new();
+    let mut order = 0usize;
+    for unit in &document.units {
+        for block in &unit.blocks {
+            let mut text = if let Some(table) = &block.table {
+                let cells: std::collections::HashMap<_, _> = table
+                    .cells
+                    .iter()
+                    .map(|cell| ((cell.row, cell.column), cell.raw.as_str()))
+                    .collect();
+                let mut out = String::new();
+                for row in 0..table.rows.min(30) {
+                    for column in 0..table.columns {
+                        if column > 0 {
+                            out.push('\t');
+                        }
+                        out.push_str(
+                            cells
+                                .get(&(row as u32, column as u32))
+                                .copied()
+                                .unwrap_or(""),
+                        );
+                    }
+                    out.push('\n');
+                    if out.len() > 2400 {
+                        break;
+                    }
+                }
+                out
+            } else {
+                block.text.clone()
+            };
+            if text.trim().is_empty() {
+                continue;
+            }
+            if text.chars().count() > 2400 {
+                text = text.chars().take(2400).collect();
+            }
+            let text_lower = text.to_lowercase();
+            let mut score = 0usize;
+            for term in &terms {
+                score += text_lower.matches(term).count().min(6);
+                if unit.name.to_lowercase().contains(term) {
+                    score += 2;
+                }
+            }
+            chunks.push(AskChunk {
+                unit_id: unit.id.clone(),
+                unit_name: unit.name.clone(),
+                block_id: block.id.clone(),
+                page: unit.index + 1,
+                order,
+                text,
+                score,
+            });
+            order += 1;
+        }
+    }
+    if chunks.is_empty() {
+        return chunks;
+    }
+    let max_sources = max_sources.clamp(3, 20);
+    if broad && chunks.len() > max_sources {
+        let step = (chunks.len() / max_sources).max(1);
+        let mut sampled: Vec<AskChunk> = chunks
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| index % step == 0)
+            .map(|(_, chunk)| chunk)
+            .take(max_sources)
+            .collect();
+        if sampled.is_empty() {
+            return Vec::new();
+        }
+        sampled.sort_by_key(|chunk| chunk.order);
+        return sampled;
+    }
+    chunks.sort_by(|a, b| b.score.cmp(&a.score).then(a.order.cmp(&b.order)));
+    chunks.truncate(max_sources);
+    chunks.sort_by_key(|chunk| chunk.order);
+    chunks
+}
+
+async fn ask_result(
+    State(app): State<App>,
+    ApiPath(id): ApiPath<String>,
+    headers: HeaderMap,
+    Json(request): Json<AskRequest>,
+) -> ApiResult<Response> {
+    app.authorize(&id, &headers)?;
+    if app.job(&id)?.state != "completed" {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "not_ready",
+            "Questions are available after extraction completes",
+        ));
+    }
+    let question = request.question.trim();
+    if question.len() < 2 || question.chars().count() > 2000 {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid_question",
+            "Ask a question between 2 and 2000 characters",
+        ));
+    }
+    let dir = app.dir(&id);
+    let bytes = tokio::fs::read(dir.join("result.json")).await?;
+    let mut document: Document = serde_json::from_slice(&bytes).map_err(anyhow::Error::from)?;
+    apply_review(&mut document, &read_review(&dir));
+    let chunks = ask_chunks(
+        &document,
+        question,
+        request.max_sources.unwrap_or(10).clamp(3, 20),
+    );
+    if chunks.is_empty() {
+        return Ok(Json(json!({
+            "configured": providers::llm_configured(),
+            "question": question,
+            "answer": null,
+            "sources": [],
+            "prompt": "",
+            "message": "This document has no extracted text to answer from.",
+        }))
+        .into_response());
+    }
+    let mut sources = Vec::new();
+    let mut prompt = format!(
+        "Question about one local document: {question}\n\nUse only these sources. Cite each claim as [S1], [S2], and so on.\n\n"
+    );
+    let mut context_chars = 0usize;
+    for (index, chunk) in chunks.iter().enumerate() {
+        let id = format!("S{}", index + 1);
+        prompt.push_str(&format!(
+            "[{id}] {} · page {} · {}\n{}\n\n",
+            chunk.unit_name, chunk.page, chunk.block_id, chunk.text
+        ));
+        context_chars += chunk.text.len();
+        let preview: String = chunk
+            .text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(240)
+            .collect();
+        sources.push(json!({
+            "id": id,
+            "unit_id": chunk.unit_id,
+            "unit_name": chunk.unit_name,
+            "block_id": chunk.block_id,
+            "page": chunk.page,
+            "preview": preview,
+        }));
+    }
+    let configured = providers::llm_configured();
+    let (answer, model, error_message) = if configured {
+        let prompt_for_model = prompt.clone();
+        match tokio::task::spawn_blocking(move || providers::llm_answer(&prompt_for_model)).await {
+            Ok(Ok((answer, model))) => (Some(answer), Some(model), None),
+            Ok(Err(e)) => (None, None, Some(format!("{e:#}"))),
+            Err(e) => (None, None, Some(e.to_string())),
+        }
+    } else {
+        (None, None, None)
+    };
+    let answered = answer.is_some();
+    Ok(Json(json!({
+        "configured": configured,
+        "question": question,
+        "answer": answer,
+        "model": model,
+        "error": error_message,
+        "sources": sources,
+        "prompt": prompt,
+        "context_chars": context_chars,
+        "message": if !configured {
+            "No local text model is configured. Copy the prompt into a local model, or set DOC_LLM_URL."
+        } else if !answered {
+            "The local model could not answer. You can copy the prompt into the model directly."
+        } else {
+            "Answer generated locally from the extracted pages."
+        }
+    }))
+    .into_response())
+}
+
 async fn result(
     State(app): State<App>,
     ApiPath(id): ApiPath<String>,
@@ -1193,6 +2677,51 @@ async fn result(
     Query(export): Query<Export>,
 ) -> ApiResult<Response> {
     app.authorize(&id, &headers)?;
+    let default_format = job_result_format(&app, &id).await;
+    let format = export
+        .format
+        .as_deref()
+        .or(default_format.as_deref())
+        .unwrap_or("json");
+    // The staged upload is kept for retries and as the user's original copy. It is available
+    // even while a job is queued or failed, which is exactly when "retry" needs it.
+    if format == "review" {
+        let path = app.dir(&id).join("review.json");
+        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return stream_file(path, "application/json").await;
+        }
+        return Ok(Json(empty_review()).into_response());
+    }
+    if format == "original" {
+        let job = app.job(&id)?;
+        let path = app.dir(&id).join("input");
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Err(error(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "Original upload is no longer stored for this job",
+            ));
+        }
+        let mut response = stream_file(path, mime_for_filename(&job.filename)).await?;
+        let ascii_name: String = job
+            .filename
+            .chars()
+            .map(|c| {
+                if c.is_ascii() && c != '"' && c != '\\' && c != '\r' && c != '\n' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let disposition = format!("attachment; filename=\"{ascii_name}\"");
+        response.headers_mut().insert(
+            header::CONTENT_DISPOSITION,
+            axum::http::HeaderValue::from_str(&disposition)
+                .unwrap_or_else(|_| axum::http::HeaderValue::from_static("attachment")),
+        );
+        return Ok(response);
+    }
     if app.job(&id)?.state != "completed" {
         return Err(error(
             StatusCode::CONFLICT,
@@ -1200,27 +2729,59 @@ async fn result(
             "Result is not complete; use unit endpoint for checkpoints",
         ));
     }
-    let default_format = job_result_format(&app, &id).await;
-    let format = export
-        .format
-        .as_deref()
-        .or(default_format.as_deref())
-        .unwrap_or("json");
-    let (file, mime) = match format {
-        "json" => ("result.json", "application/json"),
-        "markdown" | "md" => ("result.md", "text/markdown; charset=utf-8"),
-        "text" | "txt" => ("result.txt", "text/plain; charset=utf-8"),
-        "jsonl" | "ndjson" => ("result.jsonl", "application/x-ndjson; charset=utf-8"),
-        "html" => ("result.html", "text/html; charset=utf-8"),
-        "chunks" => ("result.chunks.jsonl", "application/x-ndjson; charset=utf-8"),
-        _ => {
-            return Err(error(
+    if format == "redactions" {
+        let dir = app.dir(&id);
+        let bytes = tokio::fs::read(dir.join("result.json")).await?;
+        let mut document: Document = serde_json::from_slice(&bytes).map_err(anyhow::Error::from)?;
+        apply_review(&mut document, &read_review(&dir));
+        let matches = detect_redactions(&document);
+        let saved = read_redactions(&dir);
+        let mut counts = serde_json::Map::new();
+        for item in &matches {
+            let count = counts
+                .entry(item.category.clone())
+                .or_insert_with(|| json!(0))
+                .as_u64()
+                .unwrap_or(0);
+            counts.insert(item.category.clone(), json!(count + 1));
+        }
+        return Ok(Json(json!({
+            "matches": matches,
+            "saved": saved.get("redactions").cloned().unwrap_or_else(|| json!([])),
+            "counts": counts,
+            "limitations": "Pattern matching is best-effort. Review every match and inspect the final export before sharing."
+        }))
+        .into_response());
+    }
+    let review = read_review(&app.dir(&id));
+    let redactions = if export.redact.unwrap_or(false) {
+        redaction_specs(&read_redactions(&app.dir(&id)))
+    } else {
+        Vec::new()
+    };
+    if format == "report" {
+        return report_export(&app.dir(&id), &review, &redactions).await;
+    }
+    if ["markdown", "md", "text", "txt", "html"].contains(&format)
+        && ((export.review.unwrap_or(false) && review_has_corrections(&review))
+            || !redactions.is_empty())
+    {
+        return review_export(&app.dir(&id), format, &review, &redactions).await;
+    }
+    let (file, mime) =
+        match format {
+            "json" => ("result.json", "application/json"),
+            "markdown" | "md" => ("result.md", "text/markdown; charset=utf-8"),
+            "text" | "txt" => ("result.txt", "text/plain; charset=utf-8"),
+            "jsonl" | "ndjson" => ("result.jsonl", "application/x-ndjson; charset=utf-8"),
+            "html" => ("result.html", "text/html; charset=utf-8"),
+            "chunks" => ("result.chunks.jsonl", "application/x-ndjson; charset=utf-8"),
+            _ => return Err(error(
                 StatusCode::BAD_REQUEST,
                 "invalid_format",
-                "Expected json, markdown, text or jsonl",
-            ))
-        }
-    };
+                "Expected json, markdown, text, jsonl, html, chunks, report, review or original",
+            )),
+        };
     let path = app.dir(&id).join(file);
     if tokio::fs::try_exists(&path).await.unwrap_or(false) {
         stream_file(path, mime).await
@@ -1490,10 +3051,118 @@ fn valid_part(part: &str, prefix: char) -> bool {
         && part.len() <= 64
         && part.chars().all(|c| c.is_ascii_alphanumeric())
 }
+/// Render a single PDF page on demand (and cache it) so digital documents can show the
+/// original page even when `page_images` was not requested for the whole job.
+async fn render_unit_page(app: &App, id: &str, unit: &str, dpi: u32) -> ApiResult<Response> {
+    let job = app.job(id)?;
+    if !job.filename.to_ascii_lowercase().ends_with(".pdf") {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "unsupported_preview",
+            "On-demand page previews are only available for PDF jobs",
+        ));
+    }
+    if !providers::available("pdftoppm") {
+        return Err(error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "preview_unavailable",
+            "pdftoppm is not installed",
+        ));
+    }
+    let dir = app.dir(id);
+    let unit_path = dir.join("units").join(format!("{unit}.json"));
+    let bytes = tokio::fs::read(&unit_path).await.map_err(|_| {
+        error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Unit checkpoint not found",
+        )
+    })?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(anyhow::Error::from)?;
+    let page = value
+        .get("index")
+        .and_then(Value::as_u64)
+        .map(|index| index + 1)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "not_found", "Unit has no page index"))?
+        as u32;
+    let preview_dir = dir.join("preview");
+    let final_path = preview_dir.join(format!("{unit}-{dpi}.png"));
+    if tokio::fs::try_exists(&final_path).await.unwrap_or(false) {
+        return stream_file(final_path, "image/png").await;
+    }
+    let input = dir.join("input");
+    if !tokio::fs::try_exists(&input).await.unwrap_or(false) {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Original PDF is no longer stored",
+        ));
+    }
+    let max_pixels = app.config.limits.page_pixels;
+    let temp_prefix = preview_dir.join(format!(".{unit}-{dpi}-{}", uuid::Uuid::new_v4()));
+    let render_prefix = temp_prefix.clone();
+    let target = final_path.clone();
+    let page_arg = page.to_string();
+    let dpi_arg = dpi.to_string();
+    let outcome = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+        std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
+        let output = std::process::Command::new("pdftoppm")
+            .args([
+                "-f",
+                &page_arg,
+                "-l",
+                &page_arg,
+                "-r",
+                &dpi_arg,
+                "-png",
+                "-singlefile",
+            ])
+            .arg(&input)
+            .arg(&render_prefix)
+            .output()
+            .map_err(|e| e.to_string())?;
+        let rendered = temp_prefix.with_extension("png");
+        if !output.status.success() {
+            let _ = std::fs::remove_file(&rendered);
+            return Err(String::from_utf8_lossy(&output.stderr)
+                .trim()
+                .chars()
+                .take(300)
+                .collect());
+        }
+        let (width, height) = image::image_dimensions(&rendered).map_err(|e| e.to_string())?;
+        if u64::from(width).saturating_mul(u64::from(height)) > max_pixels {
+            let _ = std::fs::remove_file(&rendered);
+            return Err(format!(
+                "limit_exceeded: rendered preview is {width}x{height} pixels"
+            ));
+        }
+        std::fs::rename(&rendered, &target).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(anyhow::Error::from)?;
+    match outcome {
+        Ok(()) => stream_file(final_path, "image/png").await,
+        Err(message) if message.starts_with("limit_exceeded") => Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "limit_exceeded",
+            &message,
+        )),
+        Err(message) => Err(error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "preview_failed",
+            &message,
+        )),
+    }
+}
+
 #[derive(Deserialize)]
 struct UnitQuery {
     from: Option<usize>,
     count: Option<usize>,
+    /// Render one PDF page on demand and cache it under `preview/`.
+    render: Option<bool>,
+    dpi: Option<u32>,
 }
 async fn unit(
     State(app): State<App>,
@@ -1504,6 +3173,10 @@ async fn unit(
     app.authorize(&id, &headers)?;
     if !valid_part(&unit, 'u') {
         return Err(error(StatusCode::NOT_FOUND, "not_found", "Unit not found"));
+    }
+    if query.render.unwrap_or(false) {
+        let dpi = query.dpi.unwrap_or(150).clamp(72, 300);
+        return render_unit_page(&app, &id, &unit, dpi).await;
     }
     let path = app.dir(&id).join("units").join(format!("{unit}.json"));
     if query.from.is_none() && query.count.is_none() {
@@ -1648,6 +3321,8 @@ struct ListQuery {
     state: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+    /// Optional search query over filenames, unit names and block text of completed jobs.
+    q: Option<String>,
 }
 async fn list(
     State(app): State<App>,
@@ -1657,30 +3332,106 @@ async fn list(
     let tenant = app.tenant(&headers)?;
     let limit = query.limit.unwrap_or(50).min(200) as i64;
     let offset = query.offset.unwrap_or(0) as i64;
-    let (ids, total) = {
-        let db = app.db.lock().unwrap();
-        let total: i64 = db.query_row(
-            "SELECT count(*) FROM jobs WHERE tenant=?1 AND (?2 IS NULL OR state=?2)",
-            params![tenant, query.state],
-            |r| r.get(0),
-        )?;
-        let mut statement = db.prepare(
-            "SELECT id FROM jobs WHERE tenant=?1 AND (?2 IS NULL OR state=?2) ORDER BY created_at DESC LIMIT ?3 OFFSET ?4",
-        )?;
-        let ids = statement
-            .query_map(params![tenant, query.state, limit, offset], |r| {
-                r.get::<_, String>(0)
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        (ids, total)
+    let q = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| text.chars().take(200).collect::<String>());
+    if q.is_some() {
+        // Old archives predate the index. Index a bounded batch before answering so the first
+        // search is still useful without making every query walk every result.json.
+        let app = app.clone();
+        let tenant = tenant.clone();
+        let _ =
+            tokio::task::spawn_blocking(move || app.index_pending_for_search(&tenant, 40)).await;
+    }
+    let (ids, total, matches) = if let Some(q) = &q {
+        let (ids, total) = {
+            let db = app.db.lock().unwrap();
+            let total: i64 = db.query_row(
+                "SELECT count(*) FROM jobs j WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND (instr(lower(j.filename),lower(?3))>0 OR instr(lower(COALESCE(j.display_name,'')),lower(?3))>0 OR EXISTS(SELECT 1 FROM search_units s WHERE s.job_id=j.id AND instr(lower(s.text),lower(?3))>0))",
+                params![tenant, query.state, q],
+                |r| r.get(0),
+            )?;
+            let mut statement = db.prepare(
+                "SELECT j.id FROM jobs j WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND (instr(lower(j.filename),lower(?3))>0 OR instr(lower(COALESCE(j.display_name,'')),lower(?3))>0 OR EXISTS(SELECT 1 FROM search_units s WHERE s.job_id=j.id AND instr(lower(s.text),lower(?3))>0)) ORDER BY j.created_at DESC LIMIT ?4 OFFSET ?5",
+            )?;
+            let ids = statement
+                .query_map(params![tenant, query.state, q, limit, offset], |r| {
+                    r.get::<_, String>(0)
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            (ids, total)
+        };
+        let mut matches = Vec::new();
+        {
+            let db = app.db.lock().unwrap();
+            let mut statement = db.prepare(
+                "SELECT s.job_id,j.filename,j.display_name,s.unit_id,s.unit_name,s.unit_index,s.block_id,s.kind,instr(lower(s.text),lower(?3)),s.text FROM search_units s JOIN jobs j ON j.id=s.job_id WHERE j.tenant=?1 AND (?2 IS NULL OR j.state=?2) AND instr(lower(s.text),lower(?3))>0 ORDER BY j.created_at DESC,s.unit_index ASC,s.block_id ASC LIMIT 120",
+            )?;
+            let mut rows = statement.query(params![tenant, query.state, q])?;
+            let mut seen: HashSet<(String, String, Option<String>)> = HashSet::new();
+            while let Some(row) = rows.next()? {
+                let job_id: String = row.get(0)?;
+                let filename: String = row.get(1)?;
+                let display_name: Option<String> = row.get(2)?;
+                let unit_id: String = row.get(3)?;
+                let unit_name: String = row.get(4)?;
+                let unit_index: i64 = row.get(5)?;
+                let block_id: Option<String> = row.get(6)?;
+                let kind: String = row.get(7)?;
+                let position: i64 = row.get(8)?;
+                let text: String = row.get(9)?;
+                if !seen.insert((job_id.clone(), unit_id.clone(), block_id.clone())) {
+                    continue;
+                }
+                matches.push(json!({
+                    "job_id": job_id,
+                    "filename": filename,
+                    "display_name": display_name,
+                    "unit_id": unit_id,
+                    "unit_name": unit_name,
+                    "page": unit_index + 1,
+                    "block_id": block_id,
+                    "kind": kind,
+                    "snippet": search_snippet(&text, position.max(1) as usize),
+                }));
+            }
+        }
+        (ids, total, matches)
+    } else {
+        let (ids, total) = {
+            let db = app.db.lock().unwrap();
+            let total: i64 = db.query_row(
+                "SELECT count(*) FROM jobs WHERE tenant=?1 AND (?2 IS NULL OR state=?2)",
+                params![tenant, query.state],
+                |r| r.get(0),
+            )?;
+            let mut statement = db.prepare(
+                "SELECT id FROM jobs WHERE tenant=?1 AND (?2 IS NULL OR state=?2) ORDER BY created_at DESC LIMIT ?3 OFFSET ?4",
+            )?;
+            let ids = statement
+                .query_map(params![tenant, query.state, limit, offset], |r| {
+                    r.get::<_, String>(0)
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            (ids, total)
+        };
+        (ids, total, Vec::new())
     };
     let jobs = ids
         .iter()
         .filter_map(|id| app.job(id).ok())
         .collect::<Vec<_>>();
-    Ok(Json(
-        json!({"jobs": jobs, "total": total, "limit": limit, "offset": offset}),
-    ))
+    Ok(Json(json!({
+        "jobs": jobs,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "q": q,
+        "matches": matches,
+    })))
 }
 async fn stats(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     let tenant = app.tenant(&headers)?;
@@ -1854,6 +3605,9 @@ async fn events(
 #[derive(Deserialize)]
 struct ArchiveQuery {
     units: Option<bool>,
+    /// Comma-separated job ids for a multi-document export packet. The path id remains the
+    /// authorization anchor and must belong to the caller.
+    jobs: Option<String>,
 }
 async fn view() -> Html<&'static str> {
     Html(WEB_INDEX)
@@ -1865,6 +3619,56 @@ async fn archive(
     Query(query): Query<ArchiveQuery>,
 ) -> ApiResult<Response> {
     app.authorize(&id, &headers)?;
+    let include_units = query.units.unwrap_or(false);
+    if let Some(raw) = query
+        .jobs
+        .as_deref()
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+    {
+        let mut ids: Vec<String> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(str::to_owned)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        if ids.len() > 50 {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_bundle",
+                "A bundle can contain at most 50 jobs",
+            ));
+        }
+        let mut jobs = Vec::with_capacity(ids.len());
+        for job_id in ids {
+            app.authorize(&job_id, &headers)?;
+            let job = app.job(&job_id)?;
+            if job.state != "completed" {
+                return Err(error(
+                    StatusCode::CONFLICT,
+                    "not_ready",
+                    "Every bundled job must have completed",
+                ));
+            }
+            jobs.push(job);
+        }
+        let data_dir = app.config.data_dir.clone();
+        let count = jobs.len();
+        let path =
+            tokio::task::spawn_blocking(move || build_bundle(&data_dir, &jobs, include_units))
+                .await
+                .map_err(anyhow::Error::from)??;
+        let mut response = stream_file(path, "application/zip").await?;
+        response.headers_mut().insert(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"library-{count}-documents.zip\"")
+                .parse()
+                .expect("static header"),
+        );
+        return Ok(response);
+    }
     if app.job(&id)?.state != "completed" {
         return Err(error(
             StatusCode::CONFLICT,
@@ -1873,7 +3677,6 @@ async fn archive(
         ));
     }
     let dir = app.dir(&id);
-    let include_units = query.units.unwrap_or(false);
     let path = tokio::task::spawn_blocking(move || build_archive(&dir, include_units))
         .await
         .map_err(anyhow::Error::from)??;
@@ -1886,20 +3689,16 @@ async fn archive(
     );
     Ok(response)
 }
-/// Zip the result artifacts (and optionally unit checkpoints) into a temp file inside the
-/// job directory; the file streams back and is replaced on the next archive request.
-fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> {
-    use std::io::{BufWriter, Write};
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("archive.zip.tmp-") {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
-    let path = dir.join(format!("archive.zip.tmp-{}", uuid::Uuid::new_v4()));
-    let mut zip = zip::ZipWriter::new(BufWriter::new(std::fs::File::create(&path)?));
+type ArchiveZip = zip::ZipWriter<std::io::BufWriter<std::fs::File>>;
+
+/// Add one job's artifacts to an open zip under `prefix` (empty for a single-job archive).
+fn add_archive_entries(
+    zip: &mut ArchiveZip,
+    dir: &std::path::Path,
+    prefix: &str,
+    include_units: bool,
+) -> Result<()> {
+    use std::io::Write;
     let options = zip::write::SimpleFileOptions::default();
     for name in [
         "result.json",
@@ -1911,14 +3710,62 @@ fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> 
         "timings.json",
         "progress.json",
         "assets.json",
+        "review.json",
+        "redaction.json",
     ] {
         let source = dir.join(name);
         if source.is_file() {
-            zip.start_file(name, options)?;
-            std::io::copy(&mut std::fs::File::open(&source)?, &mut zip)?;
+            zip.start_file(format!("{prefix}{name}"), options)?;
+            std::io::copy(&mut std::fs::File::open(&source)?, zip)?;
         }
     }
-    for (folder, prefix) in [("assets", "assets"), ("pages", "pages"), ("units", "units")] {
+    // Keep the original upload in the archive under a readable name. The staged `input` file
+    // has no extension, so recover the filename from request.json.
+    if let Ok(bytes) = std::fs::read(dir.join("request.json")) {
+        if let Ok(request) = serde_json::from_slice::<Value>(&bytes) {
+            if let Some(name) = request.get("filename").and_then(Value::as_str) {
+                let safe = std::path::Path::new(name)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("original");
+                let input = dir.join("input");
+                if input.is_file() {
+                    zip.start_file(format!("{prefix}original/{safe}"), options)?;
+                    std::io::copy(&mut std::fs::File::open(&input)?, zip)?;
+                }
+            }
+        }
+    }
+    let review = read_review(dir);
+    if review_has_corrections(&review) {
+        if let Ok(bytes) = std::fs::read(dir.join("result.json")) {
+            if let Ok(mut document) = serde_json::from_slice::<Document>(&bytes) {
+                apply_review(&mut document, &review);
+                zip.start_file(format!("{prefix}reviewed/result.md"), options)?;
+                zip.write_all(crate::model::markdown(&document).as_bytes())?;
+                zip.start_file(format!("{prefix}reviewed/result.txt"), options)?;
+                zip.write_all(crate::model::plaintext(&document).as_bytes())?;
+                zip.start_file(format!("{prefix}reviewed/result.html"), options)?;
+                zip.write_all(reviewed_html(&document).as_bytes())?;
+            }
+        }
+    }
+    let redactions = redaction_specs(&read_redactions(dir));
+    if !redactions.is_empty() {
+        if let Ok(bytes) = std::fs::read(dir.join("result.json")) {
+            if let Ok(mut document) = serde_json::from_slice::<Document>(&bytes) {
+                apply_review(&mut document, &review);
+                apply_redactions(&mut document, &redactions);
+                zip.start_file(format!("{prefix}redacted/result.md"), options)?;
+                zip.write_all(crate::model::markdown(&document).as_bytes())?;
+                zip.start_file(format!("{prefix}redacted/result.txt"), options)?;
+                zip.write_all(crate::model::plaintext(&document).as_bytes())?;
+                zip.start_file(format!("{prefix}redacted/result.html"), options)?;
+                zip.write_all(reviewed_html(&document).as_bytes())?;
+            }
+        }
+    }
+    for (folder, sub) in [("assets", "assets"), ("pages", "pages"), ("units", "units")] {
         if folder == "units" && !include_units {
             continue;
         }
@@ -1933,9 +3780,64 @@ fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> 
             .collect::<Vec<_>>();
         names.sort();
         for name in names {
-            zip.start_file(format!("{prefix}/{name}"), options)?;
-            std::io::copy(&mut std::fs::File::open(source.join(&name))?, &mut zip)?;
+            zip.start_file(format!("{prefix}{sub}/{name}"), options)?;
+            std::io::copy(&mut std::fs::File::open(source.join(&name))?, zip)?;
         }
+    }
+    Ok(())
+}
+
+/// Zip the result artifacts (and optionally unit checkpoints) into a temp file inside the
+/// job directory; the file streams back and is replaced on the next archive request.
+fn build_archive(dir: &std::path::Path, include_units: bool) -> Result<PathBuf> {
+    use std::io::{BufWriter, Write};
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("archive.zip.tmp-") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let path = dir.join(format!("archive.zip.tmp-{}", uuid::Uuid::new_v4()));
+    let mut zip = zip::ZipWriter::new(BufWriter::new(std::fs::File::create(&path)?));
+    add_archive_entries(&mut zip, dir, "", include_units)?;
+    let mut writer = zip.finish()?;
+    writer.flush()?;
+    Ok(path)
+}
+
+/// Bundle several completed jobs into one zip with a manifest and per-job folders.
+fn build_bundle(data_dir: &std::path::Path, jobs: &[Job], include_units: bool) -> Result<PathBuf> {
+    use std::io::{BufWriter, Write};
+    if let Ok(entries) = std::fs::read_dir(data_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("bundle.zip.tmp-") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let path = data_dir.join(format!("bundle.zip.tmp-{}", uuid::Uuid::new_v4()));
+    let mut zip = zip::ZipWriter::new(BufWriter::new(std::fs::File::create(&path)?));
+    let options = zip::write::SimpleFileOptions::default();
+    zip.start_file("manifest.json", options)?;
+    zip.write_all(
+        serde_json::to_string_pretty(&json!({
+            "schema_version": "bundle1",
+            "created_at": epoch(),
+            "count": jobs.len(),
+            "jobs": jobs,
+        }))?
+        .as_bytes(),
+    )?;
+    for job in jobs {
+        add_archive_entries(
+            &mut zip,
+            &data_dir.join("jobs").join(&job.id),
+            &format!("jobs/{}/", job.id),
+            include_units,
+        )?;
     }
     let mut writer = zip.finish()?;
     writer.flush()?;
@@ -1968,14 +3870,16 @@ async fn delete(
     if app.dir(&id).exists() {
         tokio::fs::remove_dir_all(app.dir(&id)).await?;
     }
-    app.db
-        .lock()
-        .unwrap()
-        .execute("DELETE FROM jobs WHERE id=?1", [&id])?;
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("DELETE FROM search_units WHERE job_id=?1", [&id])?;
+        db.execute("DELETE FROM search_state WHERE job_id=?1", [&id])?;
+        db.execute("DELETE FROM jobs WHERE id=?1", [&id])?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 pub fn capabilities() -> Value {
-    json!({"engine":ENGINE_VERSION,"xberg":{"configured":std::env::var("DOC_XBERG").is_ok(),"required_version":"1.3.8","mapping":"partial"},"native_formats":["txt","md","json","xml","html","csv","tsv","xlsx","xls","xlsm","xlsb","ods","docx","pptx","odt","odp","epub","eml","rtf","drawio","svg","mermaid","dot","plantuml","dbml","doctags","vsdx"],"pdf":{"available":providers::available("pdfinfo")&&providers::available("pdftotext")&&providers::available("pdfimages"),"backend":"poppler","tables":"unvalidated","page_geometry":true,"page_images":{"available":providers::available("pdftoppm"),"dpi":150},"vector_source_preserved":true},"ocr":{"tesseract":providers::available("tesseract"),"languages":providers::languages(),"apple_vision":cfg!(target_os="macos")&&std::env::var("DOC_APPLE_VISION").is_ok(),"smoldocling":std::env::var("DOC_SMOLDOCLING_URL").is_ok()||std::env::var("DOC_VLM_URL").is_ok(),"paddle_onnx":false},"vision":{"configured":std::env::var("DOC_VLM_URL").is_ok(),"model":std::env::var("DOC_VLM_MODEL").ok(),"automatic_downloads":false},"offline_default":true,"limitations":["Logical Word/ODT sections are not physical pages","Legacy DOC/PPT/VSD are unsupported","Visio/SmartArt source preserved; semantics unsupported","Text diagram parsers implement documented subsets","Spreadsheet formulas are not recalculated"]})
+    json!({"engine":ENGINE_VERSION,"xberg":{"configured":std::env::var("DOC_XBERG").is_ok(),"required_version":"1.3.8","mapping":"partial"},"native_formats":["txt","md","json","xml","html","csv","tsv","xlsx","xls","xlsm","xlsb","ods","docx","pptx","odt","odp","epub","eml","rtf","drawio","svg","mermaid","dot","plantuml","dbml","doctags","vsdx"],"pdf":{"available":providers::available("pdfinfo")&&providers::available("pdftotext")&&providers::available("pdfimages"),"backend":"poppler","tables":"unvalidated","page_geometry":true,"page_images":{"available":providers::available("pdftoppm"),"dpi":150},"vector_source_preserved":true},"ocr":{"tesseract":providers::available("tesseract"),"languages":providers::languages(),"apple_vision":cfg!(target_os="macos")&&std::env::var("DOC_APPLE_VISION").is_ok(),"smoldocling":std::env::var("DOC_SMOLDOCLING_URL").is_ok()||std::env::var("DOC_VLM_URL").is_ok(),"paddle_onnx":false},"vision":{"configured":std::env::var("DOC_VLM_URL").is_ok(),"model":std::env::var("DOC_VLM_MODEL").ok(),"automatic_downloads":false},"llm":{"configured":providers::llm_configured(),"model":std::env::var("DOC_LLM_MODEL").or_else(|_| std::env::var("DOC_VLM_MODEL")).ok(),"endpoint":"local-only"},"offline_default":true,"limitations":["Logical Word/ODT sections are not physical pages","Legacy DOC/PPT/VSD are unsupported","Visio/SmartArt source preserved; semantics unsupported","Text diagram parsers implement documented subsets","Spreadsheet formulas are not recalculated"]})
 }
 pub fn openapi() -> Value {
     let doc_schema = serde_json::to_value(schemars::schema_for!(Document)).unwrap();
@@ -1988,7 +3892,34 @@ pub fn openapi() -> Value {
             "get",
             "List jobs for the caller",
             "200",
-            json!({"type":"object","required":["jobs","total"],"properties":{"jobs":{"type":"array","items":job_schema.clone()},"total":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}}),
+            json!({
+                "type": "object",
+                "required": ["jobs", "total"],
+                "properties": {
+                    "jobs": {"type": "array", "items": job_schema.clone()},
+                    "total": {"type": "integer"},
+                    "limit": {"type": "integer"},
+                    "offset": {"type": "integer"},
+                    "q": {"type": ["string", "null"]},
+                    "matches": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "job_id": {"type": "string"},
+                                "filename": {"type": "string"},
+                                "display_name": {"type": ["string", "null"]},
+                                "unit_id": {"type": "string"},
+                                "unit_name": {"type": "string"},
+                                "page": {"type": "integer"},
+                                "block_id": {"type": ["string", "null"]},
+                                "kind": {"type": "string"},
+                                "snippet": {"type": "string"}
+                            }
+                        }
+                    }
+                }
+            }),
         ),
         (
             "/v1/extractions",
@@ -2033,6 +3964,13 @@ pub fn openapi() -> Value {
             doc_schema,
         ),
         (
+            "/v1/extractions/{id}/result",
+            "post",
+            "Ask a grounded question over extracted pages (optional local model)",
+            "200",
+            json!({"type":"object","properties":{"configured":{"type":"boolean"},"question":{"type":"string"},"answer":{"type":["string","null"]},"model":{"type":["string","null"]},"error":{"type":["string","null"]},"prompt":{"type":"string"},"context_chars":{"type":"integer"},"sources":{"type":"array","items":{"type":"object"}}}}),
+        ),
+        (
             "/v1/extractions/{id}/units/{unit_id}",
             "get",
             "Completed unit checkpoint",
@@ -2059,6 +3997,13 @@ pub fn openapi() -> Value {
             "Cancel then delete retained data",
             "204",
             json!({}),
+        ),
+        (
+            "/v1/extractions/{id}",
+            "patch",
+            "Save a reviewer correction or page verification",
+            "200",
+            json!({"type":"object","description":"The updated review sidecar"}),
         ),
         (
             "/v1/capabilities",
@@ -2089,17 +4034,27 @@ pub fn openapi() -> Value {
             }
         }
         if path.ends_with("/result") {
-            params.push(json!({"name":"format","in":"query","description":"Export format; defaults to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl","html","chunks"]}}));
+            params.push(json!({"name":"format","in":"query","description":"Export format; `original` returns the uploaded file, `review` returns the correction sidecar, other values default to the job's result_format option","schema":{"type":"string","enum":["json","markdown","text","jsonl","html","chunks","report","review","redactions","original"]}}));
+            params.push(json!({"name":"review","in":"query","description":"Apply reviewer text corrections to markdown, text or HTML","schema":{"type":"boolean"}}));
+            params.push(json!({"name":"redact","in":"query","description":"Apply saved redactions to markdown, text, HTML or the report","schema":{"type":"boolean"}}));
         }
         if path.ends_with("/units/{unit_id}") {
             params.push(json!({"name":"from","in":"query","description":"First table row of the slice (used with count)","schema":{"type":"integer","minimum":0}}));
             params.push(json!({"name":"count","in":"query","description":"Maximum table rows in the slice (default 500, max 10000)","schema":{"type":"integer","minimum":1,"maximum":10000}}));
+            params.push(json!({"name":"render","in":"query","description":"Render this PDF page to a cached PNG preview","schema":{"type":"boolean"}}));
+            params.push(json!({"name":"dpi","in":"query","description":"Preview render resolution (default 150, 72..300)","schema":{"type":"integer","minimum":72,"maximum":300}}));
         }
         if path.ends_with("/archive") {
             params.push(json!({"name":"units","in":"query","description":"Include unit checkpoints in the archive","schema":{"type":"boolean"}}));
+            params.push(json!({"name":"jobs","in":"query","description":"Comma-separated completed job ids for a multi-document bundle with manifest.json","schema":{"type":"string"}}));
+        }
+        if path == "/v1/extractions/{id}" && method == "patch" {
+            params.push(json!({"name":"library","in":"query","description":"Update display name, collection, tags and favorite instead of review data","schema":{"type":"boolean"}}));
+            params.push(json!({"name":"redaction","in":"query","description":"Replace saved redaction spans instead of review data","schema":{"type":"boolean"}}));
         }
         if path == "/v1/extractions" && method == "get" {
             params.push(json!({"name":"state","in":"query","schema":{"type":"string","enum":["queued","running","completed","failed","cancelled"]}}));
+            params.push(json!({"name":"q","in":"query","description":"Search filenames, unit names and extracted text; completed results are indexed on first use","schema":{"type":"string","maxLength":200}}));
             params.push(json!({"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":200}}));
             params.push(
                 json!({"name":"offset","in":"query","schema":{"type":"integer","minimum":0}}),
@@ -2150,6 +4105,12 @@ pub fn openapi() -> Value {
         if path == "/v1/extractions" && method == "post" {
             operation["requestBody"] = json!({"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary","description":"Repeat the field to submit up to 32 files in one request; each becomes a job and the response then contains a jobs array"},"options":{"type":"string","description":"JSON encoded Options (empty uses defaults)","example":"{\"ocr\":false,\"vision\":false}"},"callback_url":{"type":"string","description":"Optional http(s) URL notified when the job reaches a terminal state (signed when webhook_secret is set)","example":"https://example.com/hooks/docsmith"}}}}}});
         }
+        if path == "/v1/extractions/{id}" && method == "patch" {
+            operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"unit_id":{"type":"string","example":"u1"},"block_id":{"type":"string","example":"u1-b2"},"text":{"type":"string","description":"Corrected block or cell text"},"original":{"type":"string","description":"Raw text before the correction, used by the UI to revert"},"cell_row":{"type":"integer","description":"Zero-based table row when correcting one cell"},"cell_column":{"type":"integer","description":"Zero-based table column when correcting one cell"},"status":{"type":"string","enum":["reviewed","needs_review","clear"]},"note":{"type":"string"},"revert":{"type":"boolean","description":"Remove the block or cell correction"},"display_name":{"type":"string","description":"Library title; empty clears it (with ?library=true)"},"collection":{"type":"string","description":"Collection name; empty clears it"},"tags":{"type":"array","items":{"type":"string"},"description":"Replacement tag list"},"favorite":{"type":"boolean"},"redactions":{"type":"array","description":"Saved redaction targets (with ?redaction=true)","items":{"type":"object","properties":{"unit_id":{"type":"string"},"block_id":{"type":"string"},"row":{"type":"integer"},"column":{"type":"integer"},"category":{"type":"string"},"value":{"type":"string"}}}},"clear_redactions":{"type":"boolean"}}}}}});
+        }
+        if path.ends_with("/result") && method == "post" {
+            operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"type":"object","required":["question"],"properties":{"question":{"type":"string","maxLength":2000},"max_sources":{"type":"integer","minimum":3,"maximum":20}}}}}});
+        }
         paths.entry(path).or_insert(json!({}))[method] = operation;
     }
     let mut spec = json!({"openapi":"3.1.0","info":{"title":"Document Extractor","version":env!("CARGO_PKG_VERSION")},"paths":paths,"components":{"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"}},"schemas":{"Options":options_schema,"Failure":serde_json::to_value(schemars::schema_for!(Failure)).unwrap()}}});
@@ -2187,8 +4148,11 @@ pub fn router(app: App) -> Router {
         .route("/v1/extractions", get(list).post(upload))
         .route("/v1/stats", get(stats))
         .route("/metrics", get(metrics))
-        .route("/v1/extractions/{id}", get(status).delete(delete))
-        .route("/v1/extractions/{id}/result", get(result))
+        .route(
+            "/v1/extractions/{id}",
+            get(status).delete(delete).patch(update_review),
+        )
+        .route("/v1/extractions/{id}/result", get(result).post(ask_result))
         .route("/v1/extractions/{id}/units/{unit_id}", get(unit))
         .route("/v1/extractions/{id}/assets/{asset_id}", get(asset))
         .route("/v1/extractions/{id}/cancel", post(cancel))
@@ -2537,6 +4501,34 @@ fn multipart_error(e: axum::extract::multipart::MultipartError, code: &str) -> A
         },
         &e.to_string(),
     )
+}
+
+fn mime_for_filename(name: &str) -> &'static str {
+    match name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "tif" | "tiff" => "image/tiff",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "txt" | "log" | "csv" | "tsv" => "text/plain; charset=utf-8",
+        "md" | "markdown" => "text/markdown; charset=utf-8",
+        "html" | "htm" => "text/html; charset=utf-8",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn stream_file(path: PathBuf, mime: &str) -> ApiResult<Response> {

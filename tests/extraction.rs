@@ -666,6 +666,35 @@ fn pdftoppm_available() -> bool {
     // Poppler's pdftoppm exits 1 on `--version` but 0 on `-v`.
     doc_extractor::providers::command("pdftoppm", &["-v"]).is_ok()
 }
+/// The comprehensive fixture mixes Devanagari and Latin text. Homebrew's tesseract ships
+/// only `eng`/`osd`, so CI must skip rather than assert on a page that was never OCR'd.
+fn ocr_hindi_fixture_ready() -> bool {
+    if !doc_extractor::providers::available("tesseract") || !pdftoppm_available() {
+        return false;
+    }
+    let installed = doc_extractor::providers::languages();
+    ["eng", "hin"]
+        .iter()
+        .all(|language| installed.iter().any(|value| value == language))
+}
+/// Tesseract 5.3 (Ubuntu 24.04) misreads the printed pi glyph in this fixture as a
+/// Devanagari cluster. Keep the exact assertion on engines that are known to recover it.
+fn tesseract_recovers_pi() -> bool {
+    let Ok(bytes) = doc_extractor::providers::command("tesseract", &["--version"]) else {
+        return false;
+    };
+    let version = String::from_utf8_lossy(&bytes);
+    let Some(rest) = version.split("tesseract ").nth(1) else {
+        return false;
+    };
+    let Some(version) = rest.split_whitespace().next() else {
+        return false;
+    };
+    let mut parts = version.split('.');
+    let major = parts.next().and_then(|v| v.parse::<u32>().ok());
+    let minor = parts.next().and_then(|v| v.parse::<u32>().ok());
+    matches!((major, minor), (Some(major), Some(minor)) if (major, minor) >= (5, 5))
+}
 
 #[test]
 fn page_images_all_render_and_index_every_pdf_page() {
@@ -1082,6 +1111,15 @@ fn pdf_parallel_and_sequential_batches_match() {
                 .unwrap();
         value["elapsed_ms"] = serde_json::json!(0);
         value["id"] = serde_json::json!("test");
+        // Wall and per-page timings depend on scheduling; compare the deterministic result.
+        value["metadata"]["timing"] = serde_json::Value::Null;
+        if let Some(units) = value["units"].as_array_mut() {
+            for unit in units {
+                if let Some(object) = unit.as_object_mut() {
+                    object.remove("timing");
+                }
+            }
+        }
         (value, d)
     };
     let (sequential, doc_a) = run(1, "seq");
@@ -1614,6 +1652,164 @@ fn tesseract_words_are_grouped_into_readable_lines() {
         }),
         "each OCR block should record its word count"
     );
+}
+
+#[test]
+fn scanned_table_pages_promote_printed_grids_to_structured_tables() {
+    if !ocr_hindi_fixture_ready() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = extract::extract(
+        std::path::Path::new("fixtures/final-comprehensive.pdf"),
+        "final-comprehensive.pdf",
+        dir.path(),
+        Options {
+            ocr: true,
+            languages: "eng+hin".into(),
+            pages: Some("1".into()),
+            ..Options::default()
+        },
+        Limits {
+            ocr_threads: 1,
+            ..Default::default()
+        },
+        "ocr-table",
+    )
+    .unwrap();
+    let unit = &d.units[0];
+    let timing = unit.timing.as_ref().expect("page timing");
+    assert_eq!(timing.method, "ocr");
+    assert!(timing.ocr_ms > 0);
+    let table = unit
+        .blocks
+        .iter()
+        .find_map(|block| block.table.as_ref())
+        .expect("printed grid must be promoted to a table");
+    assert!(
+        table.rows >= 8 && table.columns >= 5,
+        "marks table grid: {table:?}"
+    );
+    let cells = table
+        .cells
+        .iter()
+        .map(|cell| cell.raw.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        cells.iter().any(|raw| raw.contains("100")),
+        "expected maximum marks column: {cells:?}"
+    );
+    assert!(
+        cells.iter().any(|raw| raw.contains("B2")),
+        "expected grade column: {cells:?}"
+    );
+    // Merged header and merged total row keep their span.
+    assert!(
+        table.cells.iter().any(|cell| cell.column_span > 1),
+        "merged cells keep their span: {cells:?}"
+    );
+    assert!(
+        unit.blocks
+            .iter()
+            .any(|block| block.provenance.method == "inferred" && block.table.is_some()),
+        "table proposals stay inferred"
+    );
+}
+
+#[test]
+fn pdf_units_report_per_page_timing() {
+    let d = fixture("digital.pdf", Options::default());
+    assert!(!d.units.is_empty());
+    for unit in &d.units {
+        let timing = unit.timing.as_ref().expect("page timing");
+        assert!(timing.total_ms >= timing.native_ms);
+        assert!(timing.chars > 0);
+        assert!(matches!(
+            timing.method.as_str(),
+            "native" | "ocr" | "hybrid" | "none"
+        ));
+    }
+    let summary = &d.metadata["timing"];
+    assert_eq!(summary["pages"], d.units.len());
+    assert!(summary["native_pages"].as_u64().unwrap_or(0) >= 1);
+    assert_eq!(
+        summary["per_page"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        d.units.len()
+    );
+}
+
+#[test]
+fn refinement_recovers_formulas_stamps_and_cardinality() {
+    if !ocr_hindi_fixture_ready() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = extract::extract(
+        std::path::Path::new("fixtures/final-comprehensive.pdf"),
+        "final-comprehensive.pdf",
+        dir.path(),
+        Options {
+            ocr: true,
+            languages: "eng+hin".into(),
+            ocr_auto_rotate: true,
+            pages: Some("3,5,6".into()),
+            ..Options::default()
+        },
+        Limits {
+            ocr_threads: 1,
+            ..Default::default()
+        },
+        "ocr-refine",
+    )
+    .unwrap();
+    let text = d
+        .units
+        .iter()
+        .flat_map(|unit| unit.blocks.iter())
+        .map(|block| block.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Printed math glyphs are recovered from shapes, not from a symbol-capable text model.
+    assert!(text.contains("E = mc²"), "superscript formula: {text}");
+    if tesseract_recovers_pi() {
+        assert!(
+            text.contains("क्षेत्रफल = πr²"),
+            "pi glyph and superscript: {text}"
+        );
+    } else {
+        assert!(
+            text.contains("क्षेत्रफल ="),
+            "area formula line survives the refinement pass: {text}"
+        );
+    }
+    assert!(text.contains("H2O + CO2"), "chemical glyphs: {text}");
+    assert!(
+        text.contains("1/2 + 1/3 = 5/6"),
+        "line-level formula re-read: {text}"
+    );
+    assert!(
+        text.contains("1..*"),
+        "diagram cardinality from a binarized crop: {text}"
+    );
+    // Seal text is recovered from text bands inside the ring (or by the primary pass on a
+    // lucky segmentation); either way it must be OCR evidence, not native content.
+    let stamp = d
+        .units
+        .iter()
+        .flat_map(|unit| unit.blocks.iter())
+        .find(|block| block.text.to_uppercase().contains("INSPECTED"))
+        .expect("seal text recovered");
+    assert_eq!(stamp.provenance.method, "ocr");
+    // Refined text stays OCR evidence, never native content.
+    assert!(d
+        .units
+        .iter()
+        .flat_map(|unit| unit.blocks.iter())
+        .filter(|block| block.attributes.get("ocr_refined").is_some())
+        .all(|block| block.provenance.method == "ocr"));
 }
 
 #[test]

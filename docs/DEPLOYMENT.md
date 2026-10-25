@@ -38,6 +38,12 @@ SmolDocling-256M is a document-specialist OCR model: it returns DocTags with nor
 - Select it per request with `{"ocr": true, "ocr_provider": "smoldocling"}`. Set `DOC_SMOLDOCLING_URL` (defaults to `DOC_VLM_URL`) and optionally `DOC_SMOLDOCLING_MODEL`.
 - If the service is not running, extraction falls back to Tesseract when installed and records a warning; the page is not lost.
 
+### Timing trail
+
+Every PDF page carries `units[].timing` (total, native parse, image extraction, render, OCR and page-image write in milliseconds; `method` is `native`, `ocr`, `hybrid` or `none`; `ocr_provider`, `rotation_degrees`, `ocr_words`, `chars`, `tables`). The document result also has `metadata.timing` with per-page rows, aggregate counters and `wall_ms`; the same summary is written to `timings.json` next to the global stage counters. Logs use the `doc_extractor::page` target per page and `doc_extractor::job` at completion, so a service log shows which pages used OCR and how long each stage took. The default filter is `doc_extractor=info`; set `RUST_LOG` to override it (for example `RUST_LOG=doc_extractor=debug`). `doc-extractor extract` prints a per-page timing table to stderr; `DOC_LOG_JSON=1` switches all logs to JSON lines.
+
+Scanned pages are rendered for OCR at 150 dpi by default. `DOC_OCR_DPI` raises the OCR render resolution (96–400) without changing the 150 dpi page images stored under `pages/`; it helps when the source raster genuinely carries more detail. It does not add detail to a 150 dpi scan: on the six-page Hindi/English fixture, rendering that raster at 200 dpi costs roughly +35% time and does not improve the refined result, so the default stays at 150. The second-pass refinement (formula glyph shapes, seals, cardinalities) is validated at the default resolution.
+
 The actual test host is **MacBookAir10,1, M1, 8 GB**, not the brief's M1 Pro 16 GB. See measured RSS and swap snapshots in benchmark-results.json. GGUF size, worker RSS and model-server RSS are distinct; Metal allocations and compressed memory need whole-system monitoring. Do not increase concurrency from this small synthetic experiment.
 
 ## Configuration and authentication

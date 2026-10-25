@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Real HTTP/SQLite/isolated-worker acceptance checks, no production Python service."""
-import pathlib,tempfile,subprocess,json,time,urllib.request,urllib.error,os,signal,socket,sys,http.server,threading,hmac,hashlib
+import pathlib,tempfile,subprocess,json,time,urllib.request,urllib.error,os,signal,socket,sys,http.server,threading,hmac,hashlib,shutil
 ROOT=pathlib.Path(__file__).resolve().parents[1];BIN=ROOT/'target/debug/doc-extractor'
 results=[]
 with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
@@ -21,6 +21,19 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   def log_message(self,*_a):pass
  hook=http.server.HTTPServer(('127.0.0.1',0),_Hook);hook_port=hook.server_address[1]
  threading.Thread(target=hook.serve_forever,daemon=True).start()
+ # Local OpenAI-compatible chat server proves the grounded-ask path without a real model.
+ llm_calls=[]
+ class _LLM(http.server.BaseHTTPRequestHandler):
+  def do_POST(self):
+   body=self.rfile.read(int(self.headers.get('content-length',0)))
+   llm_calls.append(body)
+   payload=json.dumps({'choices':[{'message':{'content':'The best answer is in the first source. [S1]'}}]}).encode()
+   self.send_response(200);self.send_header('content-type','application/json');self.send_header('content-length',str(len(payload)));self.end_headers();self.wfile.write(payload)
+  def log_message(self,*_a):pass
+ llm=http.server.HTTPServer(('127.0.0.1',0),_LLM);llm_port=llm.server_address[1]
+ threading.Thread(target=llm.serve_forever,daemon=True).start()
+ env['DOC_LLM_URL']=f'http://127.0.0.1:{llm_port}'
+ env['DOC_LLM_MODEL']='e2e-local'
  def start():
   p=subprocess.Popen([str(BIN),'serve','--config',str(tmp/'config.json')],env=env,stdout=subprocess.DEVNULL,stderr=open(tmp/'server.log','a'))
   for _ in range(100):
@@ -133,6 +146,76 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   listing=json.loads(request('/v1/extractions?limit=5')[1])
   check('job listing',listing['total']>=1 and any(x['id']==jsonljob for x in listing['jobs']))
   check('job listing state filter',all(x['state']=='completed' for x in json.loads(request('/v1/extractions?state=completed&limit=200')[1])['jobs']))
+  listed=next(x for x in listing['jobs'] if x['id']==jsonljob)
+  check('job exposes its options and total pages',listed['options']['result_format']=='jsonl' and listed['total']==listed['progress'] and listed['total']>0)
+  search=json.loads(request('/v1/extractions?q=0012&limit=20')[1])
+  check('search finds extracted table text',search['total']>=1 and any(m['job_id']==jsonljob and m['kind']=='table' and m['snippet'] for m in search['matches']))
+  original=request(f'/v1/extractions/{jsonljob}/result?format=original')[1]
+  check('original upload is downloadable',original==(ROOT/'fixtures'/'quoted.csv').read_bytes())
+  # Reviewer corrections are a sidecar overlay: canonical JSON stays raw, reviewed exports
+  # carry the edits, and a revert removes the overlay.
+  _,j=upload('document.md');reviewjob=j['id'];wait(reviewjob)
+  review_doc=json.loads(request(f'/v1/extractions/{reviewjob}/result')[1])
+  text_block=next(b for b in review_doc['units'][0]['blocks'] if b.get('text') and not b.get('table'))
+  review_path=tmp/'data/jobs'/reviewjob/'review.json'
+  patch=json.dumps({'unit_id':'u1','block_id':text_block['id'],'text':'REVIEW MARKER','original':text_block['text']}).encode()
+  code,_=request(f'/v1/extractions/{reviewjob}','PATCH',patch,headers={'Content-Type':'application/json'})
+  check('review patch saves a block correction',code==200 and json.loads(review_path.read_text())['units']['u1']['blocks'][text_block['id']]['text']=='REVIEW MARKER')
+  check('reviewed markdown export applies corrections',b'REVIEW MARKER' in request(f'/v1/extractions/{reviewjob}/result?format=markdown&review=true')[1])
+  reviewed_search=None
+  for _ in range(20):
+   reviewed_search=json.loads(request('/v1/extractions?q=REVIEW%20MARKER&limit=20')[1])
+   if any(m['job_id']==reviewjob for m in reviewed_search['matches']):break
+   time.sleep(.1)
+  check('search reindexes reviewed text',any(m['job_id']==reviewjob for m in reviewed_search['matches']))
+  check('canonical JSON keeps original text',b'REVIEW MARKER' not in request(f'/v1/extractions/{reviewjob}/result?format=json')[1])
+  check('review sidecar is fetchable',json.loads(request(f'/v1/extractions/{reviewjob}/result?format=review')[1])['units']['u1']['blocks'][text_block['id']]['text']=='REVIEW MARKER')
+  check('archive includes reviewed exports',b'reviewed/result.md' in request(f'/v1/extractions/{reviewjob}/archive')[1])
+  report=request(f'/v1/extractions/{reviewjob}/result?format=report')[1]
+  check('portable report is self-contained and reviewed',report.startswith(b'<!doctype html>') and b'REVIEW MARKER' in report and b'Extraction report' in report)
+  code,libbody=request(f'/v1/extractions/{reviewjob}?library=true','PATCH',json.dumps({'display_name':'Quarterly review','collection':'Reports','tags':['finance','2026'],'favorite':True}).encode(),headers={'Content-Type':'application/json'})
+  libjob=json.loads(libbody)
+  check('library metadata persists',code==200 and libjob['display_name']=='Quarterly review' and libjob['collection']=='Reports' and libjob['tags']==['2026','finance'] and libjob['favorite'] is True)
+  liblisting=json.loads(request('/v1/extractions?limit=200')[1])
+  check('library metadata appears in listings',any(j['id']==reviewjob and j['collection']=='Reports' for j in liblisting['jobs']))
+  libsearch=json.loads(request('/v1/extractions?q=Quarterly&limit=20')[1])
+  check('search matches the display title',any(j['id']==reviewjob for j in libsearch['jobs']))
+  _,j=upload('scan.png',{'page_images':'all'});imagejob=j['id'];wait(imagejob)
+  image_report=request(f'/v1/extractions/{imagejob}/result?format=report')[1]
+  check('report embeds page images',b'data:image/png;base64,' in image_report)
+  bundle=request(f'/v1/extractions/{jsonljob}/archive?jobs={jsonljob},{reviewjob}')[1]
+  check('multi-document bundle includes manifest and jobs',bundle[:2]==b'PK' and b'manifest.json' in bundle and f'jobs/{reviewjob}/result.json'.encode() in bundle)
+  pii_text=b'Contact ada@example.com or +1 (415) 555-2671. Card 4111 1111 1111 1111. SSN 123-45-6789.'
+  _,j=upload('pii.txt',content=pii_text,options={'ocr':False});piijob=j['id'];wait(piijob)
+  scan=json.loads(request(f'/v1/extractions/{piijob}/result?format=redactions')[1])
+  categories={m['category'] for m in scan['matches']}
+  check('PII scan finds common identifiers',{'email','phone','card','ssn'} <= categories and scan['saved']==[])
+  chosen=[m for m in scan['matches'] if m['category'] in ('email','card','ssn')]
+  specs=[{'unit_id':m['unit_id'],'block_id':m['block_id'],'row':m.get('row'),'column':m.get('column'),'category':m['category'],'value':m['value']} for m in chosen]
+  code,body=request(f'/v1/extractions/{piijob}?redaction=true','PATCH',json.dumps({'redactions':specs}).encode(),headers={'Content-Type':'application/json'})
+  check('redactions persist',code==200 and len(json.loads(body)['redactions'])==len(specs))
+  redacted=request(f'/v1/extractions/{piijob}/result?format=markdown&redact=true')[1]
+  check('redacted exports mask selected values',b'[REDACTED]' in redacted and b'ada@example.com' not in redacted and b'4111 1111 1111 1111' not in redacted and b'123-45-6789' not in redacted)
+  check('canonical JSON keeps original PII',b'ada@example.com' in request(f'/v1/extractions/{piijob}/result?format=json')[1])
+  redacted_report=request(f'/v1/extractions/{piijob}/result?format=report&redact=true')[1]
+  check('redacted report masks values',b'ada@example.com' not in redacted_report and b'[REDACTED]' in redacted_report)
+  check('archive includes redacted exports',b'redacted/result.md' in request(f'/v1/extractions/{piijob}/archive')[1])
+  check('redaction clear works',request(f'/v1/extractions/{piijob}?redaction=true','PATCH',json.dumps({'clear_redactions':True}).encode(),headers={'Content-Type':'application/json'})[0]==200 and b'ada@example.com' in request(f'/v1/extractions/{piijob}/result?format=markdown&redact=true')[1])
+  code,askbody=request(f'/v1/extractions/{reviewjob}/result?format=ask','POST',json.dumps({'question':'What does the summary say?'}).encode(),headers={'Content-Type':'application/json'})
+  ask=json.loads(askbody)
+  check('grounded ask returns prompt and sources',code==200 and ask['sources'] and '[S1]' in ask['prompt'] and ask['question']=='What does the summary say?')
+  check('grounded ask uses the local chat model',ask['configured'] is True and ask['model']=='e2e-local' and '[S1]' in (ask['answer'] or '') and bool(llm_calls))
+  check('grounded ask rejects empty questions',request(f'/v1/extractions/{reviewjob}/result?format=ask','POST',json.dumps({'question':''}).encode(),headers={'Content-Type':'application/json'})[0]==400)
+  code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','status':'reviewed'}).encode(),headers={'Content-Type':'application/json'})
+  check('review page verification persists',code==200 and json.loads(review_path.read_text())['units']['u1']['status']=='reviewed')
+  code,_=request(f'/v1/extractions/{reviewjob}','PATCH',json.dumps({'unit_id':'u1','block_id':text_block['id'],'revert':True}).encode(),headers={'Content-Type':'application/json'})
+  check('review revert removes the correction',code==200 and b'REVIEW MARKER' not in request(f'/v1/extractions/{reviewjob}/result?format=markdown&review=true')[1])
+  jsonljob_doc=json.loads(request(f'/v1/extractions/{jsonljob}/result?format=json')[1])
+  table_block=next(b for b in jsonljob_doc['units'][0]['blocks'] if b.get('table'))
+  cell=table_block['table']['cells'][0]
+  code,_=request(f'/v1/extractions/{jsonljob}','PATCH',json.dumps({'unit_id':'u1','block_id':table_block['id'],'cell_row':cell['row'],'cell_column':cell['column'],'text':'CELLFIX','original':cell['raw']}).encode(),headers={'Content-Type':'application/json'})
+  check('review patch saves a table cell correction',code==200 and b'CELLFIX' in request(f'/v1/extractions/{jsonljob}/result?format=markdown&review=true')[1])
+  request(f'/v1/extractions/{jsonljob}','PATCH',json.dumps({'unit_id':'u1','block_id':table_block['id'],'cell_row':cell['row'],'cell_column':cell['column'],'revert':True}).encode(),headers={'Content-Type':'application/json'})
   st=json.loads(request('/v1/stats')[1])
   check('stats endpoint',st['jobs'].get('completed',0)>=1 and st['workers']['slots']==1 and st['disk_bytes']>0)
   sliced=json.loads(request(f'/v1/extractions/{jsonljob}/units/u1?from=1&count=1')[1])
@@ -140,9 +223,9 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   events=request(f'/v1/extractions/{jsonljob}/events')[1]
   check('sse job events',b'data:' in events and b'"completed"' in events)
   arch=request(f'/v1/extractions/{jsonljob}/archive')[1]
-  check('archive zip',arch[:2]==b'PK')
+  check('archive zip',arch[:2]==b'PK' and b'original/quoted.csv' in arch)
   view_code,view_page=request(f'/view/{jsonljob}')
-  check('viewer page',view_code==200 and b'doc-extractor viewer' in view_page)
+  check('viewer page',view_code==200 and b'Doc Extractor' in view_page and b'search-overlay' in view_page and b'selected-files' in view_page)
   wasm_code,wasm_bytes=request('/wasm/doc_extractor.wasm')
   js_code,js_bytes=request('/assets/web/app.js')
   css_code,css_bytes=request('/assets/web/app.css')
@@ -160,6 +243,12 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   ranged_doc=json.loads(request(f'/v1/extractions/{ranged}/result')[1])
   check('page range selects requested pages',len(ranged_doc['units'])==1 and ranged_doc['units'][0]['name']=='Page 2' and ranged_doc['metadata']['pages_total']==2)
   check('invalid page range rejected',upload('digital.pdf',{'pages':'5-2'})[0]==400)
+  if shutil.which('pdftoppm'):
+   ranged_unit=ranged_doc['units'][0]['id']
+   code,preview=request(f'/v1/extractions/{ranged}/units/{ranged_unit}?render=true&dpi=120')
+   check('on-demand PDF page preview renders and caches',code==200 and preview[:8]==b'\x89PNG\r\n\x1a\n')
+  else:
+   results.append('on-demand PDF page preview skipped (pdftoppm absent)')
   _,j=upload('quoted.csv',{'chunk_chars':30});chunkjob=j['id'];wait(chunkjob)
   chunk_records=[json.loads(line) for line in request(f'/v1/extractions/{chunkjob}/result?format=chunks')[1].splitlines()]
   check('chunk export windows plain text',len(chunk_records)>=2 and all(r['chars']<=30 and r['text'] for r in chunk_records))

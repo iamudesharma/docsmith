@@ -1,21 +1,25 @@
 {
   "pdf": "hindi-english-complex.pdf",
-  "status": "partial",
+  "status": "complete",
   "pages": 3,
   "expected_pages": 3,
-  "elapsed_ms": 25358,
+  "elapsed_ms": 19778,
   "units": [
     {
       "page": 1,
       "name": "Page 1",
-      "ocr_chars": 881,
+      "ocr_chars": 887,
       "truth_chars": 715,
-      "cer": 0.0993,
-      "wer": 0.3232,
+      "cer": 0.1287,
+      "wer": 0.4016,
+      "char_recall": 0.9119,
+      "char_precision": 0.9504,
+      "word_recall": 0.6393,
+      "word_precision": 0.619,
       "devanagari_chars": 255,
-      "latin_chars": 359,
-      "blocks": 25,
-      "table_blocks": 0,
+      "latin_chars": 368,
+      "blocks": 19,
+      "table_blocks": 1,
       "errors": [],
       "warnings": [
         "Scanned page: embedded image extraction skipped; the rendered page is used for OCR",
@@ -84,19 +88,23 @@
           "found": true
         }
       ],
-      "text": "॥ सत्यमेव जयते ॥ माध्यमिक शिक्षा परिषद, उत्तर प्रदेश Board of High School and Intermediate Education प्रमाणपत्र-सह-अंकतालिका | CERTIFICATE-CUM-MARKS SHEET नाम / Name: उदेश शर्मा (Udesh Sharma) पिता का नाम / Father's Name: श्रीकांत शर्मा (Shrikant Sharma) माता का नाम / Mother's Name: इंद्रावती gt (Indrawati Devi) अनुक्रमांक | Roll No.: 7534469 जन्म तिथि / Date of Birth: 17 November 2000 विद्यालय / School: ST MARY'S C GORAKHPUR विषय / Subject अधिकतम / Max olka pau कुल Total | Avi) Grade हिंदी / Hindi 0 40 28 co B2 अंग्रेज़ी English 0 so 29 79 81 गणित / Mathematics wo | 52 29 81 A2 विज्ञान / Science 100 Ee 28 les | At सामाजिक विज्ञान / Social Science jo Eee 28 les At चित्रकला / Drawing 10 53 29 82 A2 परिणाम / Result: PASSED यह प्रमाणपत्र केवल शैक्षणिक परीक्षण के लिए है। / This certificate is for educational testing only. VERIFIED सत्यापित 7534469 - 2497006 - TEST DOCUMENT"
+      "text": "॥ सत्यमेव जयते ॥ माध्यमिक शिक्षा परिषद, उत्तर प्रदेश Board of High School and Intermediate Education प्रमाणपत्र-सह-अंकतालिका | CERTIFICATE-CUM-MARKS SHEET नाम / Name: उदेश शर्मा (Udesh Sharma) पिता का नाम / Father's Name: श्रीकांत शर्मा (Shrikant Sharma) माता का नाम / Mother's Name: इंद्रावती gt (Indrawati Devi) अनुक्रमांक | Roll No.: 7534469 जन्म तिथि / Date of Birth: 17 November 2000 विद्यालय / School: ST MARY'S C GORAKHPUR विषय / Subject अधिकतम / Max olka pau कुल Total Avi) Grade हिंदी / Hindi 0 40 28 co B2 अंग्रेज़ी English 0 so 29 79 81 गणित / Mathematics wo 52 29 81 A2 विज्ञान / Science 100 Ee 28 les At सामाजिक Science विज्ञान / Social jo Eee 28 les At चित्रकला / Drawing 10 53 29 82 A2 परिणाम / Result: PASSED यह प्रमाणपत्र केवल शैक्षणिक परीक्षण के लिए है। / This certificate is for educational testing only. F/ VERIFIED VERIFIED सत्यापित 7534469 - 2497006 - TEST DOCUMENT"
     },
     {
       "page": 2,
       "name": "Page 2",
-      "ocr_chars": 1409,
+      "ocr_chars": 1401,
       "truth_chars": 1120,
-      "cer": 0.0027,
-      "wer": 0.1477,
-      "devanagari_chars": 537,
+      "cer": 0.0018,
+      "wer": 0.1459,
+      "char_recall": 0.9991,
+      "char_precision": 0.9982,
+      "word_recall": 0.8811,
+      "word_precision": 0.8579,
+      "devanagari_chars": 536,
       "latin_chars": 520,
-      "blocks": 27,
-      "table_blocks": 0,
+      "blocks": 23,
+      "table_blocks": 1,
       "errors": [],
       "warnings": [
         "Scanned page: embedded image extraction skipped; the rendered page is used for OCR",
@@ -145,19 +153,23 @@
           "found": true
         }
       ],
-      "text": "जिला शिक्षा कार्यालय, गोरखपुर District Education Office, Gorakhpur विद्यालय निरीक्षण रिपोर्ट / SCHOOL INSPECTION REPORT दिनांक / Date: 12 August 2026 दिनांक 12 अगस्त 2026 को विद्यालय का निरीक्षण किया गया। कक्षा 10 के विद्यार्थियों की उपस्थिति 92 प्रतिशत पाई गई। विज्ञान प्रयोगशाला में उपकरण पर्याप्त हैं, परंतु कंप्यूटर कक्ष में केवल आठ कार्यशील मशीनें थीं। पुस्तकालय में 2,450 पुस्तकें हैं और पेयजल की व्यवस्था संतोषजनक है। The school was inspected on 12 August 2026. Attendance in Grade 10 was 92 percent. Science laboratory equipment is adequate, but the computer laboratory has only eight working machines. The library holds 2,450 books and drinking water is satisfactory. मुख्य अवलोकन / Key Findings * पुस्तकालय में 2,450 पुस्तकें हैं। ॥ Library holds 2,450 books. *« पेयजल की व्यवस्था संतोषजनक है। / Drinking water is satisfactory. © शौचालयों की सफाई में सुधार आवश्यक है। / Toilets need cleaning improvements. © कंप्यूटर कक्ष में आठ मशीनें कार्यशील हैं। / Eight computers are working. क्र.सं. । No. मद / Item स्थिति / Status अंक | Score 1 Infrastructure / अधोसंरचना Good / अच्छा 8/10 2 | Library / पुस्तकालय Satisfactory / संतोषजनक 7/10 b | Laboratory / प्रयोगशाला Good / अच्छा 9/10 4 Computer Lab / कंप्यूटर कक्ष Needs Improvement / सुधार आवश्यक 5/10 निरीक्षण अधिकारी / Inspecting Officer डॉ. अनीता वर्मा (Dr. Anita Verma) हस्ताक्षर / Signature APPROVED स्वीकृत रिपोर्ट संख्या Report No.: DEO/2026/0812"
+      "text": "जिला शिक्षा कार्यालय, गोरखपुर District Education Office, Gorakhpur विद्यालय निरीक्षण रिपोर्ट / SCHOOL INSPECTION REPORT दिनांक / Date: 12 August 2026 दिनांक 12 अगस्त 2026 को विद्यालय का निरीक्षण किया गया। कक्षा 10 के विद्यार्थियों की उपस्थिति 92 प्रतिशत पाई गई। विज्ञान प्रयोगशाला में उपकरण पर्याप्त हैं, परंतु कंप्यूटर कक्ष में केवल आठ कार्यशील मशीनें थीं। पुस्तकालय में 2,450 पुस्तकें हैं और पेयजल की व्यवस्था संतोषजनक है। The school was inspected on 12 August 2026. Attendance in Grade 10 was 92 percent. Science laboratory equipment is adequate, but the computer laboratory has only eight working machines. The library holds 2,450 books and drinking water is satisfactory. मुख्य अवलोकन / Key Findings * पुस्तकालय में 2,450 पुस्तकें हैं। ॥ Library holds 2,450 books. *« पेयजल की व्यवस्था संतोषजनक है। / Drinking water is satisfactory. © शौचालयों की सफाई में सुधार आवश्यक है। / Toilets need cleaning improvements. © कंप्यूटर कक्ष में आठ मशीनें कार्यशील हैं। / Eight computers are working. क्र.सं. No. मद / Item स्थिति / Status अंक Score 1 Infrastructure / अधोसंरचना Good / अच्छा 8/10 2 Library / पुस्तकालय Satisfactory / संतोषजनक 7/10 b Laboratory / प्रयोगशाला Good / अच्छा 9/10 4 Computer Lab / कंप्यूटर कक्ष Needs Improvement / सुधार आवश्यक 5/10 निरीक्षण अधिकारी / Inspecting Officer डॉ. अनीता वर्मा (Dr. Anita Verma) हस्ताक्षर / Signature APPROVED स्वीकृत रिपोर्ट संख्या Report No.: DEO/2026/0812"
     },
     {
       "page": 3,
       "name": "Page 3",
-      "ocr_chars": 670,
+      "ocr_chars": 678,
       "truth_chars": 548,
-      "cer": 0.0365,
-      "wer": 0.1111,
-      "devanagari_chars": 215,
-      "latin_chars": 316,
+      "cer": 0.2536,
+      "wer": 0.2366,
+      "char_recall": 0.9526,
+      "char_precision": 0.9685,
+      "word_recall": 0.8387,
+      "word_precision": 0.8125,
+      "devanagari_chars": 216,
+      "latin_chars": 321,
       "blocks": 14,
-      "table_blocks": 0,
+      "table_blocks": 1,
       "errors": [],
       "warnings": [
         "Scanned page: embedded image extraction skipped; the rendered page is used for OCR",
@@ -175,11 +187,11 @@
         },
         {
           "marker": "Hindi + English",
-          "found": true
+          "found": false
         },
         {
           "marker": "90 degrees",
-          "found": true
+          "found": false
         },
         {
           "marker": "Recovered",
@@ -194,19 +206,23 @@
           "found": false
         }
       ],
-      "text": "m अनुपालन प्रमाण / COMPLIANCE CERTIFICATE यह प्रमाणित किया जाता है कि यह दस्तावेज़ OCR परीक्षण के लिए तैयार है। इसमें हिंदी और अंग्रेज़ी दोनों भाषाओं का पाठ, एक तालिका और आधिकारिक मुद्रा है। This is to certify that the document is ready for OCR testing. It contains Hindi and English text, a table and an official stamp. The page was scanned sideways to exercise automatic rotation. Parameter / मापदंड Value / मान Status / स्थिति Language / भाषा Hindi + English Verified / सत्यापित Pages / पृष्ठ 3 Complete / qf Rotation / घूर्णन 90 degrees Recovered / पुनर्प्राप्त प्रमाणित करने वाला अधिकारी / Certifying Officer रजिस्ट्रार / Registrar है) TEST ONLY - NO LEGAL VALIDITY"
+      "text": "अनुपालन प्रमाण / COMPLIANCE CERTIFICATE यह प्रमाणित किया जाता है कि यह दस्तावेज़ OCR परीक्षण के लिए तैयार है। इसमें हिंदी और अंग्रेज़ी दोनों भाषाओं का पाठ, एक तालिका और आधिकारिक मुद्रा है। This is to certify that the document is ready for OCR testing. It contains Hindi and English text, a table and an official stamp. The page was scanned sideways to exercise automatic rotation. Parameter / मापदंड degrees 90 English Hindi + Value / मान gutta Recovered / पूर्ण Complete / सत्यापित Verified / Status / स्थिति Language / भाषा Pages / पृष्ठ Rotation / घूर्णन प्रमाणित करने वाला अधिकारी / Certifying Officer रजिस्ट्रार / Registrar TEST ONLY - NO LEGAL VALIDITY iz t= है हैण्ण है ह"
     }
   ],
   "overall": {
-    "cer": 0.0394,
-    "wer": 0.195,
+    "cer": 0.0978,
+    "wer": 0.245,
+    "char_recall": 0.9643,
+    "char_precision": 0.9795,
+    "word_recall": 0.7975,
+    "word_precision": 0.7743,
     "devanagari_ocr": 1007,
     "devanagari_truth": 1047,
-    "latin_ocr": 1195,
+    "latin_ocr": 1209,
     "latin_truth": 1180,
-    "markers_found": 29,
+    "markers_found": 27,
     "markers_total": 32,
-    "table_blocks": 0,
+    "table_blocks": 3,
     "table_tokens_found": 8,
     "table_tokens_total": 12,
     "document_errors": 0,
@@ -214,11 +230,10 @@
     "warnings": []
   },
   "findings": [
-    "Scanned tables are not promoted to structured `Table` blocks; cells remain linearized OCR text.",
     "Only 8/12 expected table tokens were found; small grid text is the weakest region.",
-    "Missing critical fields: 83, A1, TESTED"
+    "Missing critical fields: 83, A1, Hindi + English, 90 degrees, TESTED"
   ],
-  "elapsed_wall_s": 25.65,
+  "elapsed_wall_s": 20.1,
   "options": {
     "ocr": true,
     "languages": "eng+hin",
@@ -227,5 +242,7 @@
     "chunk_chars": 1000,
     "chunk_overlap": 80,
     "result_format": "text"
-  }
+  },
+  "truth": "/Volumes/AppleExpanded/Code/doc_ocr_rust/fixtures/hindi-english-complex.ground-truth.txt",
+  "ocr_dpi": 150
 }

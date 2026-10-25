@@ -16,7 +16,7 @@ pdfium-render 0.9.3 was researched from its official source documentation. PDFiu
 
 ## OCR and model choices
 
-Tesseract is the portable baseline. TSV is enabled through an explicit variable rather than depending on a `configs/tsv` file, allowing isolated traineddata directories. Right-angle candidates are evaluated with relative OCR scores, sparse text retried when needed, and geometry mapped back to the original. Scores are not calibrated probabilities. English and Hindi traineddata were separately provisioned for experiments.
+Tesseract is the portable baseline. TSV is enabled through an explicit variable rather than depending on a `configs/tsv` file, allowing isolated traineddata directories. Tesseract OSD selects orientation (right-angle candidates are scored only as a fallback), sparse text is retried when needed, and geometry is mapped back to the original. Scores are not calibrated probabilities. English and Hindi traineddata were separately provisioned for experiments.
 
 Apple Vision reports supported languages at runtime. The actual runtime includes `hi-IN`; no assumption of universal Hindi support is made. GPU requests intermittently failed with e5rt execution errors. The helper uses CPU recognition and a decoded CGImage; the 12 October rerun failed every image with the same e5rt error even with CPU-only compute devices selected, so the platform adapter exists and lists languages but its local reliability gate has not passed. This is a platform adapter with an Apple SDK/native Swift helper, not a Python production service.
 

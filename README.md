@@ -24,6 +24,11 @@ DOC_XBERG=/path/to/xberg target/debug/doc-extractor extract fixtures/digital.pdf
 
 # HTTP service:
 target/debug/doc-extractor serve --bind 127.0.0.1:8787 --data-dir data/service
+# Workbench: dark mode, ⌘K search, deep-linkable pages, live progress/cancel/retry, library
+# tags/collections, continuous reading, table CSV, review/corrections, on-demand PDF previews,
+# a self-contained HTML report, multi-document bundles, safe-share redaction and grounded
+# local Q&A with page citations.
+open http://127.0.0.1:8787/
 # Interactive API console (Swagger UI; assets are compiled into the binary, no CDN):
 open http://127.0.0.1:8787/docs
 curl -F file=@fixtures/document.docx -F 'options={"ocr":false,"vision":false}' http://127.0.0.1:8787/v1/extractions
@@ -37,8 +42,30 @@ curl -F file=@fixtures/digital.pdf -F file=@fixtures/quoted.csv http://127.0.0.1
 # Deploy: docker compose up --build   |   deploy/doc-extractor.service (systemd, see docs/DEPLOYMENT.md)
 # Preview rows without downloading a large result (streams the derived export):
 python3 scripts/preview.py JOB_ID                 # also: --unit u1, --markdown, --download out.json
-# Job listing, stats, live events, zip archive and signed webhooks:
+# Job listing, filename/text search, stats, live events, zip archive and signed webhooks:
 curl http://127.0.0.1:8787/v1/extractions?state=completed
+curl 'http://127.0.0.1:8787/v1/extractions?q=invoice%20total'   # block-level matches
+curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=original
+curl http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=review
+# Correct one block or table cell, then export with the review overlay:
+curl -X PATCH http://127.0.0.1:8787/v1/extractions/JOB_ID \
+  -H 'content-type: application/json' \
+  -d '{"unit_id":"u1","block_id":"u1-b2","text":"corrected text"}'
+curl 'http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=markdown&review=true'
+# Library title, collection, tags and favorite:
+curl -X PATCH 'http://127.0.0.1:8787/v1/extractions/JOB_ID?library=true' \
+  -H 'content-type: application/json' \
+  -d '{"display_name":"October board pack","collection":"Board","tags":["finance"],"favorite":true}'
+# Self-contained printable report with embedded page images:
+curl -o report.html 'http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=report'
+# Multi-document export bundle (manifest.json + jobs/<id>/ artifacts):
+curl -o library.zip 'http://127.0.0.1:8787/v1/extractions/JOB_A/archive?jobs=JOB_A,JOB_B'
+# Reviewable PII scan and redacted safe-share exports:
+curl 'http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=redactions'
+curl -X PATCH 'http://127.0.0.1:8787/v1/extractions/JOB_ID?redaction=true' \
+  -H 'content-type: application/json' \
+  -d '{"redactions":[{"unit_id":"u1","block_id":"u1-b1","category":"email","value":"a@example.com"}]}'
+curl 'http://127.0.0.1:8787/v1/extractions/JOB_ID/result?format=report&redact=true'
 curl http://127.0.0.1:8787/v1/stats
 curl -N http://127.0.0.1:8787/v1/extractions/JOB_ID/events
 curl -O -J http://127.0.0.1:8787/v1/extractions/JOB_ID/archive
@@ -56,17 +83,18 @@ python3 scripts/install-ocr-languages.sh eng hin
 python3 scripts/ocr_accuracy.py
 ```
 
-The result directory contains `result.json`, `result.md`, `units/` and content-addressed `assets/`. With `page_images` enabled it also contains `pages/` (one raster per kept unit) and `pages/manifest.json`, so a later vision/LLM pass can consume the images without parsing the full result; `failed` keeps units whose text is empty, sparse or errored, while `all` keeps every PDF page. Keep JSON for provenance and fidelity; Markdown is a convenience export. Word uses logical sections; spreadsheets use sheets; presentations use source-ordered slides; PDF uses actual pages. PDFs are extracted in 100-page batches with per-page checkpoints (batches run in parallel by default; restart reuses completed pages); CSV/TSV inputs are split into bounded chunk units and support a compact cell form (`--compact-tables`). See [deployment](docs/DEPLOYMENT.md) for large-input sizing.
+The result directory contains `result.json`, `result.md`, `units/` and content-addressed `assets/`. With `page_images` enabled it also contains `pages/` (one raster per kept unit) and `pages/manifest.json`, so a later vision/LLM pass can consume the images without parsing the full result; `failed` keeps units whose text is empty, sparse or errored, while `all` keeps every PDF page. Reviewer edits and page verification are stored separately in `review.json`, so the canonical result remains unchanged. Keep JSON for provenance and fidelity; Markdown is a convenience export. Word uses logical sections; spreadsheets use sheets; presentations use source-ordered slides; PDF uses actual pages. PDFs are extracted in 100-page batches with per-page checkpoints (batches run in parallel by default; restart reuses completed pages); CSV/TSV inputs are split into bounded chunk units and support a compact cell form (`--compact-tables`). See [deployment](docs/DEPLOYMENT.md) for large-input sizing.
 
-See [validation evidence](docs/VALIDATION.md), [accuracy report](docs/ACCURACY.md), [concurrent 20-PDF performance report](docs/CONCURRENCY.md), [Hindi + English OCR stress report](docs/hindi-english-ocr.md), [cookbook](docs/COOKBOOK.md), [Python client](clients/python/README.md), [capabilities](docs/CAPABILITIES.md), [architecture](docs/ARCHITECTURE.md), [pipeline and concurrency](docs/PIPELINE.md), [research and dependency decisions](docs/RESEARCH.md), [phase acceptance](docs/PHASES.md), and [deployment](docs/DEPLOYMENT.md). These separate implemented behavior from unrun real-world acceptance gates.
+See [validation evidence](docs/VALIDATION.md), [accuracy report](docs/ACCURACY.md), [concurrent 20-PDF performance report](docs/CONCURRENCY.md), [Hindi + English OCR stress report](docs/hindi-english-ocr.md), [final comprehensive OCR report](docs/final-comprehensive-ocr.md), [cookbook](docs/COOKBOOK.md), [Python client](clients/python/README.md), [capabilities](docs/CAPABILITIES.md), [architecture](docs/ARCHITECTURE.md), [pipeline and concurrency](docs/PIPELINE.md), [research and dependency decisions](docs/RESEARCH.md), [phase acceptance](docs/PHASES.md), and [deployment](docs/DEPLOYMENT.md). These separate implemented behavior from unrun real-world acceptance gates.
 
 ## Providers
 
 - PDF: `pdfinfo`, `pdftotext`, `pdfimages`, `pdftoppm` (Poppler).
-- OCR: `tesseract`, with requested traineddata provisioned locally. `TESSDATA_PREFIX` can point to your local language directory. OCR is disabled by default. For English + Hindi, run `scripts/install-ocr-languages.sh eng hin` and request `"languages":"eng+hin"`.
+- OCR: `tesseract`, with requested traineddata provisioned locally. `TESSDATA_PREFIX` can point to your local language directory. OCR is disabled by default. For English + Hindi, run `scripts/install-ocr-languages.sh eng hin osd` and request `"languages":"eng+hin"`. Scanned pages with printed grid rules are promoted to structured `Table` blocks (rows, columns and merged spans). A bounded second pass re-reads low-confidence words and formula lines, recovers printed `²`/`π` glyphs from shape, reads seal text from stamp rings and recovers diagram cardinalities such as `1..*`; `DOC_OCR_DPI` raises the OCR render resolution (96–400) for genuinely higher-resolution scans.
 - Apple Vision: run `scripts/build-apple-vision.sh`, set `DOC_APPLE_VISION` to the emitted executable, and use `{"ocr":true,"ocr_provider":"apple_vision","languages":"en-US"}`. Query `target/helpers/apple-vision --languages` before selecting other languages. A CPU path avoids observed local GPU runtime failures.
 - Xberg: provision the evaluated 1.3.8 CLI plus its bundled libraries, set `DOC_XBERG`, and use `{"parser":"xberg"}` (or `--parser xberg`). The adapter is verified end-to-end and forces `NO_COLOR=1` because the CLI colorizes piped output. The direct adapter retains more spreadsheet formula/merge fidelity on the current fixtures.
 - Vision: provision llama.cpp, SmolVLM2 Q4 weights and matching Q8 projector; run `scripts/run-vision.sh`, set `DOC_VLM_URL=http://127.0.0.1:8799`, `DOC_VLM_MODEL=SmolVLM2`, and opt in with `{"vision":true}`. Add `interpret_diagrams:true` to request unverified graph proposals. Nothing is downloaded during extraction. Vision caching requires `DOC_VLM_REVISION` to identify immutable weights/projector/configuration. For lightweight page OCR, `scripts/run-smoldocling.sh` starts SmolDocling-256M (MLX or GGUF) and `{"ocr_provider":"smoldocling"}` parses its DocTags/OTSL tables in pure Rust; if the server is absent, Tesseract is used with a warning.
+- Local Q&A: point `DOC_LLM_URL` at an OpenAI-compatible chat server on loopback (for example Ollama or llama.cpp) and optionally set `DOC_LLM_MODEL`; if `DOC_LLM_URL` is unset, the vision endpoint is reused. `POST /v1/extractions/{id}/result?format=ask` selects up to 20 relevant page/block sources, builds a grounded prompt, and returns an answer with `[S1]` citations. Without a model it still returns the ready-to-copy prompt and sources. No cloud endpoint is accepted and nothing is downloaded.
 
 ## Checks
 
