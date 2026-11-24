@@ -8,6 +8,9 @@ pub struct Options {
     pub parser: String,
     pub ocr: bool,
     pub ocr_auto_rotate: bool,
+    /// OCR backend: `ocria` (default; OCRia-nano-1 through the optional LiteParse `lit` CLI,
+    /// preferred when installed and falling back to Tesseract otherwise), `tesseract`,
+    /// `apple_vision` (macOS helper) or `smoldocling` (local VLM endpoint).
     pub ocr_provider: String,
     pub languages: String,
     pub vision: bool,
@@ -42,7 +45,7 @@ impl Default for Options {
             parser: "direct".into(),
             ocr: false,
             ocr_auto_rotate: true,
-            ocr_provider: "tesseract".into(),
+            ocr_provider: "ocria".into(),
             languages: "eng".into(),
             vision: false,
             interpret_diagrams: false,
@@ -67,7 +70,11 @@ pub struct Limits {
     pub page_pixels: u64,
     pub output_bytes: u64,
     pub timeout_seconds: u64,
+    /// Supervisor limit on the total resident memory of one worker's process tree.
     pub memory_bytes: u64,
+    /// Linux per-process virtual address-space limit. Defaults to `memory_bytes`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address_space_bytes: Option<u64>,
     pub workers: usize,
     pub queued_jobs: usize,
     /// Parallel 100-page batch workers inside a PDF extraction (1 = sequential).
@@ -94,6 +101,7 @@ impl Default for Limits {
             output_bytes: 512 * 1024 * 1024,
             timeout_seconds: 1800,
             memory_bytes: 2 * 1024 * 1024 * 1024,
+            address_space_bytes: None,
             workers: 2,
             queued_jobs: 100,
             pdf_workers: 4,

@@ -284,6 +284,20 @@ pub fn ocr_blocks(path: &Path, opts: &Options, limits: &Limits) -> Result<OcrOut
                     ));
                 }
             }
+        } else if ["ocria", "ocria_nano", "liteparse"].contains(&opts.ocr_provider.as_str()) {
+            // OCRia-nano-1 is the default. Fall back to Tesseract when LiteParse or its
+            // models are unavailable.
+            match ocria_ocr(&prepared.path, prep_width, prep_height, opts) {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    if !available("tesseract") {
+                        return Err(error);
+                    }
+                    provider_warning = Some(format!(
+                        "OCRia-nano-1 unavailable ({error:#}); OCR used Tesseract instead"
+                    ));
+                }
+            }
         } else if opts.ocr_provider != "tesseract" {
             bail!("unsupported OCR provider");
         }
@@ -674,6 +688,269 @@ fn smoldocling_ocr(path: &Path, width: u32, height: u32) -> Result<OcrOutput> {
         .unwrap_or("");
     let (blocks, warnings) = crate::doctags::parse_blocks(content, width, height, "ocr")?;
     Ok(OcrOutput { blocks, warnings })
+}
+/// One line of OCRia-nano-1 output, in the OCR image's pixel space.
+struct OcriaLine {
+    text: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    confidence: f64,
+}
+/// OCRia-nano-1 ships as ONNX weights that LiteParse (Apache-2.0) drives: a line detector, a
+/// script router, four recognisers and LayoutNet. There is no standalone inference script, so the
+/// provider runs the documented `lit parse` entry point and maps its page-space line boxes back to
+/// image pixels. `DOC_OCRIA` overrides the executable; by default `lit` must be on `PATH` with
+/// `lit models pull ocria-nano` already run.
+fn ocria_executable() -> String {
+    std::env::var("DOC_OCRIA").unwrap_or_else(|_| "lit".into())
+}
+/// LiteParse picks the reader from the file extension, but extraction stores assets under
+/// content-addressed names without one, so give it a copy with the real extension.
+fn ocria_input(path: &Path) -> Result<(std::path::PathBuf, bool)> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if [
+        "png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp", "gif", "pdf", "pnm", "tga",
+    ]
+    .contains(&extension.as_str())
+    {
+        return Ok((path.to_path_buf(), false));
+    }
+    let bytes = std::fs::read(path)?;
+    let format = image::guess_format(&bytes).context("corrupt or unsupported image")?;
+    let extension = format.extensions_str().first().copied().unwrap_or("png");
+    let temporary = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(".ocr-{}.{extension}", uuid::Uuid::new_v4()));
+    std::fs::write(&temporary, &bytes)?;
+    Ok((temporary, true))
+}
+fn ocria_lines(
+    path: &Path,
+    executable: &str,
+    pixel_width: u32,
+    pixel_height: u32,
+) -> Result<Vec<OcriaLine>> {
+    let path = path.to_str().context("invalid OCR path")?;
+    let bytes = command(executable, &["parse", "-q", "--format", "json", path])?;
+    let payload: Value =
+        serde_json::from_slice(&bytes).context("provider_error: LiteParse did not return JSON")?;
+    let page = payload["pages"]
+        .as_array()
+        .and_then(|pages| pages.first())
+        .context("provider_error: LiteParse returned no pages")?;
+    let page_width = page["width"].as_f64().unwrap_or(pixel_width as f64);
+    let page_height = page["height"].as_f64().unwrap_or(pixel_height as f64);
+    let scale_x = if page_width > 0.0 {
+        pixel_width as f64 / page_width
+    } else {
+        1.0
+    };
+    let scale_y = if page_height > 0.0 {
+        pixel_height as f64 / page_height
+    } else {
+        1.0
+    };
+    let mut lines = Vec::new();
+    for item in page["text_items"].as_array().into_iter().flatten() {
+        let text = item["text"].as_str().unwrap_or("").trim();
+        if text.is_empty() {
+            continue;
+        }
+        let number = |key: &str| item[key].as_f64().unwrap_or(0.0);
+        lines.push(OcriaLine {
+            text: text.to_owned(),
+            x: number("x") * scale_x,
+            y: number("y") * scale_y,
+            width: (number("width") * scale_x).max(1.0),
+            height: (number("height") * scale_y).max(1.0),
+            confidence: item["confidence"].as_f64().unwrap_or(0.0),
+        });
+    }
+    if lines.is_empty() {
+        // Layout may project a page as plain text only; keep that text as one unplaced block.
+        let text = page["text"].as_str().unwrap_or("").trim();
+        if !text.is_empty() {
+            lines.push(OcriaLine {
+                text: text.to_owned(),
+                x: 0.0,
+                y: 0.0,
+                width: pixel_width as f64,
+                height: pixel_height as f64,
+                confidence: 0.0,
+            });
+        }
+    }
+    Ok(lines)
+}
+/// Plausibility score for choosing between right-angle readings: the router reads upside-down
+/// lines, but a whole page rotated by 90 degrees comes back empty, so the provider probes the
+/// other three orientations and keeps the one that yields the most confident text.
+fn ocria_score(lines: &[OcriaLine]) -> f64 {
+    lines
+        .iter()
+        .map(|line| line.text.chars().count() as f64 * line.confidence.max(0.05))
+        .sum()
+}
+fn ocria_ocr(path: &Path, width: u32, height: u32, opts: &Options) -> Result<OcrOutput> {
+    ocria_ocr_with(&ocria_executable(), path, width, height, opts)
+}
+fn ocria_ocr_with(
+    executable: &str,
+    path: &Path,
+    width: u32,
+    height: u32,
+    opts: &Options,
+) -> Result<OcrOutput> {
+    let (input, copied) = ocria_input(path)?;
+    let _input_guard = TempFile(if copied { Some(input.clone()) } else { None });
+    let path = input.as_path();
+    let mut best = ocria_lines(path, executable, width, height)?;
+    let mut rotation = 0u16;
+    let mut rotated: Option<std::path::PathBuf> = None;
+    let mut score = ocria_score(&best);
+    let readable = |lines: &[OcriaLine]| {
+        lines
+            .iter()
+            .map(|line| line.text.chars().count())
+            .sum::<usize>()
+    };
+    if opts.ocr_auto_rotate && readable(&best) < 4 {
+        let image = image::ImageReader::open(path)?
+            .with_guessed_format()?
+            .decode()
+            .context("corrupt or unsupported image")?;
+        for candidate in [90u16, 180, 270] {
+            let turned = match candidate {
+                90 => image.rotate90(),
+                180 => image.rotate180(),
+                _ => image.rotate270(),
+            };
+            let temporary = path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(format!(".ocr-{}-{candidate}.png", uuid::Uuid::new_v4()));
+            turned.save(&temporary)?;
+            let (candidate_width, candidate_height) = if candidate == 180 {
+                (width, height)
+            } else {
+                (height, width)
+            };
+            let lines = match ocria_lines(&temporary, executable, candidate_width, candidate_height)
+            {
+                Ok(lines) => lines,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&temporary);
+                    return Err(error);
+                }
+            };
+            let value = ocria_score(&lines);
+            if value > score {
+                if let Some(previous) = rotated.take() {
+                    let _ = std::fs::remove_file(previous);
+                }
+                score = value;
+                best = lines;
+                rotation = candidate;
+                rotated = Some(temporary);
+            } else {
+                let _ = std::fs::remove_file(&temporary);
+            }
+        }
+    }
+    let _guard = TempFile(rotated);
+    let mut out = OcrOutput {
+        blocks: vec![],
+        warnings: vec![],
+    };
+    if best.is_empty() {
+        out.warnings
+            .push("OCR returned no text; scan coverage is incomplete".into());
+        return Ok(out);
+    }
+    for (index, line) in best.iter().enumerate() {
+        let (x, y, w, h) = match rotation {
+            90 => (
+                line.y,
+                height as f64 - line.x - line.width,
+                line.height,
+                line.width,
+            ),
+            180 => (
+                width as f64 - line.x - line.width,
+                height as f64 - line.y - line.height,
+                line.width,
+                line.height,
+            ),
+            270 => (
+                width as f64 - line.y - line.height,
+                line.x,
+                line.height,
+                line.width,
+            ),
+            _ => (line.x, line.y, line.width, line.height),
+        };
+        out.blocks.push(Block {
+            id: String::new(),
+            kind: "text".into(),
+            text: line.text.clone(),
+            provenance: Provenance {
+                unit_id: String::new(),
+                method: "ocr".into(),
+                source: "OCRia-nano-1 (LiteParse)".into(),
+                bounds: Some(Bounds {
+                    x,
+                    y,
+                    width: w.max(1.0),
+                    height: h.max(1.0),
+                    coordinate_space: "image_pixels".into(),
+                }),
+                cell_range: None,
+                evidence: vec![],
+            },
+            table: None,
+            asset_id: None,
+            diagram: None,
+            attributes: json!({
+                "ocr_score_uncalibrated": line.confidence,
+                "rotation_degrees": rotation,
+                "image_width": width,
+                "image_height": height,
+                "line": index + 1,
+                "words": line.text.split_whitespace().count(),
+                "model": "ocria-nano-1",
+            }),
+        });
+    }
+    Ok(out)
+}
+/// Installed state of the optional OCRia-nano-1 provider, for `/v1/capabilities`.
+pub fn ocria_status() -> Value {
+    let executable = ocria_executable();
+    let binary = available(&executable);
+    let models = if binary {
+        command(&executable, &["models", "list"]).ok().map(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .lines()
+                .any(|line| line.contains("ocria-nano"))
+        })
+    } else {
+        None
+    };
+    json!({
+        "available": binary && models != Some(false),
+        "executable": executable,
+        "version": version(&executable),
+        "models_pulled": models,
+        "model": "ocria-nano-1",
+        "license": "OCRia-nano-1 model licence (research/ personal/ small-business free; commercial licence for larger or competing use)",
+    })
 }
 /// Optional local text model used for grounded document Q&A. It reuses the VLM endpoint
 /// unless `DOC_LLM_URL` points at a dedicated OpenAI-compatible chat server.
@@ -1906,7 +2183,7 @@ pub fn identity() -> Value {
     let executable = |key: &str| {
         std::env::var(key).ok().map(|path|{let meta=std::fs::metadata(&path).ok();json!({"path":path,"bytes":meta.as_ref().map(|m|m.len()),"modified":meta.and_then(|m|m.modified().ok()).and_then(|t|t.duration_since(std::time::UNIX_EPOCH).ok()).map(|t|t.as_nanos().to_string())})})
     };
-    json!({"poppler":version("pdftotext"),"tesseract":version("tesseract"),"tessdata_prefix":std::env::var("TESSDATA_PREFIX").ok(),"languages":languages(),"apple_vision":executable("DOC_APPLE_VISION"),"xberg":executable("DOC_XBERG"),"vlm_model":std::env::var("DOC_VLM_MODEL").ok(),"vlm_revision":std::env::var("DOC_VLM_REVISION").ok()})
+    json!({"poppler":version("pdftotext"),"tesseract":version("tesseract"),"tessdata_prefix":std::env::var("TESSDATA_PREFIX").ok(),"languages":languages(),"apple_vision":executable("DOC_APPLE_VISION"),"xberg":executable("DOC_XBERG"),"liteparse":version(&ocria_executable()),"ocria":executable("DOC_OCRIA"),"vlm_model":std::env::var("DOC_VLM_MODEL").ok(),"vlm_revision":std::env::var("DOC_VLM_REVISION").ok()})
 }
 #[cfg(test)]
 mod tests {
@@ -1935,6 +2212,58 @@ mod tests {
         };
         drop(replacement);
         drop(second);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The provider must translate LiteParse page points into image pixels; a wrong scale puts
+    /// every OCR box in the wrong place even when the text is right.
+    #[cfg(unix)]
+    #[test]
+    fn ocria_maps_page_points_to_image_pixels() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ocria-stub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let stub = dir.join("lit");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\nprintf '%s' '{\"pages\":[{\"page\":1,\"width\":300,\"height\":150,\
+             \"text\":\"Invoice TOTAL 12345\",\"text_items\":[\
+             {\"text\":\"Invoice TOTAL 12345\",\"x\":50,\"y\":25,\"width\":100,\"height\":20,\
+             \"confidence\":0.9}]}]}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let image = image::RgbImage::from_pixel(600, 300, image::Rgb([255, 255, 255]));
+        let path = dir.join("page.png");
+        image.save(&path).unwrap();
+        let out = ocria_ocr_with(
+            stub.to_str().unwrap(),
+            &path,
+            600,
+            300,
+            &Options {
+                ocr: true,
+                ocr_auto_rotate: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(out.blocks.len(), 1);
+        let block = &out.blocks[0];
+        assert_eq!(block.text, "Invoice TOTAL 12345");
+        assert_eq!(block.provenance.method, "ocr");
+        assert_eq!(block.provenance.source, "OCRia-nano-1 (LiteParse)");
+        let bounds = block.provenance.bounds.as_ref().unwrap();
+        assert!((bounds.x - 100.0).abs() < 0.01, "{bounds:?}");
+        assert!((bounds.y - 50.0).abs() < 0.01, "{bounds:?}");
+        assert!((bounds.width - 200.0).abs() < 0.01, "{bounds:?}");
+        assert!((bounds.height - 40.0).abs() < 0.01, "{bounds:?}");
+        assert_eq!(bounds.coordinate_space, "image_pixels");
+        assert_eq!(
+            crate::extract::provider_name(&block.provenance.source),
+            "ocria"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

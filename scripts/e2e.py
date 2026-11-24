@@ -110,7 +110,7 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
   check('body limit returns 413',upload('quoted.csv',content=b'x'*180000)[0]==413)
   _,j=upload('document.docx');assetjob=j['id'];wait(assetjob);d=json.loads(request(f'/v1/extractions/{assetjob}/result')[1]);asset=d['assets'][0]['id'];check('asset endpoint',request(f'/v1/extractions/{assetjob}/assets/{asset}')[0]==200)
   check('traversal rejected',request(f'/v1/extractions/{assetjob}/assets/a..')[0]==404)
-  _,j=upload('scan.png',{'ocr':True});slow=j['id'];wait(slow,'running')
+  _,j=upload('scan.png',{'ocr':True,'ocr_provider':'tesseract'});slow=j['id'];wait(slow,'running')
   _,j=upload('flexible.tsv');queued=j['id'];check('queued cancellation',json.loads(request(f'/v1/extractions/{queued}/cancel','POST',b'')[1])['state']=='cancelled')
   check('running cancellation',json.loads(request(f'/v1/extractions/{slow}/cancel','POST',b'')[1])['state']=='cancelled')
   time.sleep(.2);check('cancel remains cancelled',status(slow)['state']=='cancelled')
@@ -128,13 +128,13 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
    tempfiles=[f.name for f in jobdir.iterdir() if '.tmp-' in f.name] if jobdir.exists() else []
   check('cancellation leaves no temp files',tempfiles==[])
   # DELETE of a running job must stop the isolated worker and remove retained data.
-  _,j=upload('scan.png',{'ocr':True});deleting=j['id'];wait(deleting,'running')
+  _,j=upload('scan.png',{'ocr':True,'ocr_provider':'tesseract'});deleting=j['id'];wait(deleting,'running')
   code,_=request(f'/v1/extractions/{deleting}','DELETE')
   if code==409:time.sleep(.4);code,_=request(f'/v1/extractions/{deleting}','DELETE')
   check('delete while running stops worker',code==204 and request(f'/v1/extractions/{deleting}')[0]==404)
-  _,j=upload('scan.png',{'ocr':True,'languages':'eng'});timeout=j['id'];check('enforced process timeout',wait(timeout)['state']=='failed')
+  _,j=upload('scan.png',{'ocr':True,'ocr_provider':'tesseract','languages':'eng'});timeout=j['id'];check('enforced process timeout',wait(timeout)['state']=='failed')
   # Crash/restart a running worker; recovery must rerun from safe persisted input/checkpoints.
-  _,j=upload('noisy.png',{'ocr':True});recover=j['id'];wait(recover,'running');time.sleep(.2)
+  _,j=upload('noisy.png',{'ocr':True,'ocr_provider':'tesseract'});recover=j['id'];wait(recover,'running');time.sleep(.2)
   p.kill();p.wait();p=start();v=wait(recover);check('crash restart recovers job',v['state']=='failed' and v['error']['code']=='limit_exceeded')
   check('delete removes job and data',request(f'/v1/extractions/{id}','DELETE')[0]==204 and request(f'/v1/extractions/{id}')[0]==404 and not (tmp/'data/jobs'/id).exists())
   # Landing page, listing, stats, JSONL, unit slicing, SSE, archive and signed webhooks.
@@ -283,13 +283,13 @@ with tempfile.TemporaryDirectory(prefix='doc-extractor-e2e-') as tmp:
     if request('/health/live',token=None,root=base2)[0]==200:break
    except OSError:pass
    time.sleep(.05)
-  _,j=upload('scan.png',{'ocr':True},token=None,root=base2);busy=j['id'];wait(busy,'running',root=base2)
+  _,j=upload('scan.png',{'ocr':True,'ocr_provider':'tesseract'},token=None,root=base2);busy=j['id'];wait(busy,'running',root=base2)
   _,j=upload('quoted.csv',token=None,root=base2);fast=j['id'];v=wait(fast,root=base2)
   check('second worker completes a job while one is busy',v['state']=='completed' and status(busy,root=base2)['state'] in ('running','queued'))
   check('private callback refused without opt-in',upload('quoted.csv',callback='http://127.0.0.1:9/hook',token=None,root=base2)[0]==400)
   # Machine-wide OCR budget: config2 sets ocr_threads=1, so even with two workers busy on two
   # different OCR jobs, at most one stub Tesseract may run across both worker processes.
-  _,j=upload('scan.png',{'ocr':True},token=None,root=base2);second_ocr=j['id']
+  _,j=upload('scan.png',{'ocr':True,'ocr_provider':'tesseract'},token=None,root=base2);second_ocr=j['id']
   for _ in range(40):
    if status(second_ocr,root=base2)['state']=='running':break
    time.sleep(.05)

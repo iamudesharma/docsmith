@@ -1,0 +1,35 @@
+# Render image with OCRia-nano-1 and a single-worker default for 512 MB instances. Build with:
+#   docker build -f Dockerfile.render -t doc-extractor-render .
+FROM rust:1.88-bookworm AS build
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY assets ./assets
+RUN cargo build --locked --release
+
+FROM debian:bookworm-slim
+ENV DEBIAN_FRONTEND=noninteractive \
+    HOME=/home/extractor \
+    PORT=10000
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        poppler-utils \
+        tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin \
+        python3 python3-venv \
+        libgomp1 procps ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /usr/sbin/nologin extractor
+WORKDIR /home/extractor
+USER extractor
+# Bake LiteParse and the OCRia-nano-1 weights into the image; runtime extraction never
+# downloads models. The cache lives under $HOME so the unprivileged user can read it.
+RUN python3 -m venv lit \
+    && ./lit/bin/pip install --no-cache-dir --disable-pip-version-check liteparse==2.21.1 \
+    && ./lit/bin/lit models pull ocria-nano
+COPY --from=build /app/target/release/doc-extractor /usr/local/bin/doc-extractor
+COPY --chown=extractor:extractor deploy/render.json deploy/render-2gb.json /home/extractor/
+ENV PATH=/home/extractor/lit/bin:$PATH \
+    DOC_OCRIA=/home/extractor/lit/bin/lit \
+    DOC_OCR_DPI=150
+EXPOSE 10000
+STOPSIGNAL SIGINT
+CMD ["sh", "-c", "exec doc-extractor serve --config \"${DOC_RENDER_CONFIG:-/home/extractor/render.json}\" --bind \"0.0.0.0:${PORT:-10000}\" --data-dir /tmp/data"]

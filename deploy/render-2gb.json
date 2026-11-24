@@ -1,0 +1,15 @@
+{
+  "limits": {
+    "workers": 2,
+    "pdf_workers": 1,
+    "ocr_threads": 2,
+    "queued_jobs": 8,
+    "upload_bytes": 33554432,
+    "page_pixels": 12000000,
+    "output_bytes": 134217728,
+    "timeout_seconds": 600,
+    "memory_bytes": 671088640,
+    "address_space_bytes": 2147483648,
+    "retention_seconds": 0
+  }
+}

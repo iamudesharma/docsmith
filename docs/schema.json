@@ -398,8 +398,9 @@
           "default": true
         },
         "ocr_provider": {
+          "description": "OCR backend: `ocria` (default; OCRia-nano-1 through the optional LiteParse `lit` CLI,\npreferred when installed and falling back to Tesseract otherwise), `tesseract`,\n`apple_vision` (macOS helper) or `smoldocling` (local VLM endpoint).",
           "type": "string",
-          "default": "tesseract"
+          "default": "ocria"
         },
         "parser": {
           "type": "string",

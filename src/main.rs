@@ -10,10 +10,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Serve {
-        #[arg(long, default_value = "127.0.0.1:8787", env = "DOC_BIND")]
-        bind: String,
-        #[arg(long, default_value = "data", env = "DOC_DATA_DIR")]
-        data_dir: PathBuf,
+        /// Overrides `bind` from --config when set (DOC_BIND).
+        #[arg(long, env = "DOC_BIND")]
+        bind: Option<String>,
+        /// Overrides `data_dir` from --config when set (DOC_DATA_DIR).
+        #[arg(long, env = "DOC_DATA_DIR")]
+        data_dir: Option<PathBuf>,
         #[arg(long)]
         config: Option<PathBuf>,
     },
@@ -25,6 +27,9 @@ enum Commands {
         parser: Option<String>,
         #[arg(long)]
         ocr: bool,
+        /// OCR backend: ocria (default), tesseract, apple_vision or smoldocling.
+        #[arg(long, value_parser = ["ocria", "ocria_nano", "liteparse", "tesseract", "apple_vision", "smoldocling"])]
+        ocr_provider: Option<String>,
         #[arg(long, default_value = "eng")]
         languages: String,
         #[arg(long)]
@@ -94,12 +99,14 @@ fn main() -> anyhow::Result<()> {
             let mut config = if let Some(path) = config {
                 serde_json::from_slice::<service::Config>(&std::fs::read(path)?)?
             } else {
-                service::Config {
-                    bind,
-                    data_dir,
-                    ..Default::default()
-                }
+                service::Config::default()
             };
+            if let Some(bind) = bind {
+                config.bind = bind;
+            }
+            if let Some(data_dir) = data_dir {
+                config.data_dir = data_dir;
+            }
             if let Ok(tokens) = std::env::var("DOC_TOKENS") {
                 config.tokens = serde_json::from_str(&tokens)?;
             }
@@ -119,6 +126,7 @@ fn main() -> anyhow::Result<()> {
             output,
             parser,
             ocr,
+            ocr_provider,
             languages,
             vision,
             interpret_diagrams,
@@ -136,6 +144,7 @@ fn main() -> anyhow::Result<()> {
                 Options {
                     parser: parser.unwrap_or_else(|| Options::default().parser),
                     ocr,
+                    ocr_provider: ocr_provider.unwrap_or_else(|| Options::default().ocr_provider),
                     languages,
                     vision,
                     interpret_diagrams,

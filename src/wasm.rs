@@ -155,7 +155,16 @@ fn validate_options_op(input: &Value) -> Result<Value> {
     if !["direct", "xberg"].contains(&opts.parser.as_str()) {
         errors.push(format!("unsupported parser '{}'", opts.parser));
     }
-    if !["tesseract", "apple_vision", "smoldocling"].contains(&opts.ocr_provider.as_str()) {
+    if ![
+        "tesseract",
+        "ocria",
+        "ocria_nano",
+        "liteparse",
+        "apple_vision",
+        "smoldocling",
+    ]
+    .contains(&opts.ocr_provider.as_str())
+    {
         errors.push(format!("unsupported ocr_provider '{}'", opts.ocr_provider));
     }
     if !["json", "markdown", "text"].contains(&opts.result_format.as_str()) {

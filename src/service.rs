@@ -1370,7 +1370,16 @@ pub fn validate_options(options: &Options) -> ApiResult<()> {
             "Unknown parser",
         ));
     }
-    if !["tesseract", "apple_vision", "smoldocling"].contains(&options.ocr_provider.as_str()) {
+    if ![
+        "tesseract",
+        "ocria",
+        "ocria_nano",
+        "liteparse",
+        "apple_vision",
+        "smoldocling",
+    ]
+    .contains(&options.ocr_provider.as_str())
+    {
         return Err(error(
             StatusCode::BAD_REQUEST,
             "invalid_options",
@@ -3879,7 +3888,7 @@ async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 pub fn capabilities() -> Value {
-    json!({"engine":ENGINE_VERSION,"xberg":{"configured":std::env::var("DOC_XBERG").is_ok(),"required_version":"1.3.8","mapping":"partial"},"native_formats":["txt","md","json","xml","html","csv","tsv","xlsx","xls","xlsm","xlsb","ods","docx","pptx","odt","odp","epub","eml","rtf","drawio","svg","mermaid","dot","plantuml","dbml","doctags","vsdx"],"pdf":{"available":providers::available("pdfinfo")&&providers::available("pdftotext")&&providers::available("pdfimages"),"backend":"poppler","tables":"unvalidated","page_geometry":true,"page_images":{"available":providers::available("pdftoppm"),"dpi":150},"vector_source_preserved":true},"ocr":{"tesseract":providers::available("tesseract"),"languages":providers::languages(),"apple_vision":cfg!(target_os="macos")&&std::env::var("DOC_APPLE_VISION").is_ok(),"smoldocling":std::env::var("DOC_SMOLDOCLING_URL").is_ok()||std::env::var("DOC_VLM_URL").is_ok(),"paddle_onnx":false},"vision":{"configured":std::env::var("DOC_VLM_URL").is_ok(),"model":std::env::var("DOC_VLM_MODEL").ok(),"automatic_downloads":false},"llm":{"configured":providers::llm_configured(),"model":std::env::var("DOC_LLM_MODEL").or_else(|_| std::env::var("DOC_VLM_MODEL")).ok(),"endpoint":"local-only"},"offline_default":true,"limitations":["Logical Word/ODT sections are not physical pages","Legacy DOC/PPT/VSD are unsupported","Visio/SmartArt source preserved; semantics unsupported","Text diagram parsers implement documented subsets","Spreadsheet formulas are not recalculated"]})
+    json!({"engine":ENGINE_VERSION,"xberg":{"configured":std::env::var("DOC_XBERG").is_ok(),"required_version":"1.3.8","mapping":"partial"},"native_formats":["txt","md","json","xml","html","csv","tsv","xlsx","xls","xlsm","xlsb","ods","docx","pptx","odt","odp","epub","eml","rtf","drawio","svg","mermaid","dot","plantuml","dbml","doctags","vsdx"],"pdf":{"available":providers::available("pdfinfo")&&providers::available("pdftotext")&&providers::available("pdfimages"),"backend":"poppler","tables":"unvalidated","page_geometry":true,"page_images":{"available":providers::available("pdftoppm"),"dpi":150},"vector_source_preserved":true},"ocr":{"default_provider":"ocria","tesseract":providers::available("tesseract"),"languages":providers::languages(),"apple_vision":cfg!(target_os="macos")&&std::env::var("DOC_APPLE_VISION").is_ok(),"smoldocling":std::env::var("DOC_SMOLDOCLING_URL").is_ok()||std::env::var("DOC_VLM_URL").is_ok(),"ocria_nano":providers::ocria_status(),"paddle_onnx":false},"vision":{"configured":std::env::var("DOC_VLM_URL").is_ok(),"model":std::env::var("DOC_VLM_MODEL").ok(),"automatic_downloads":false},"llm":{"configured":providers::llm_configured(),"model":std::env::var("DOC_LLM_MODEL").or_else(|_| std::env::var("DOC_VLM_MODEL")).ok(),"endpoint":"local-only"},"offline_default":true,"limitations":["Logical Word/ODT sections are not physical pages","Legacy DOC/PPT/VSD are unsupported","Visio/SmartArt source preserved; semantics unsupported","Text diagram parsers implement documented subsets","Spreadsheet formulas are not recalculated"]})
 }
 pub fn openapi() -> Value {
     let doc_schema = serde_json::to_value(schemars::schema_for!(Document)).unwrap();
@@ -4386,7 +4395,8 @@ pub fn worker_command(
         .stderr(std::process::Stdio::from(std::fs::File::create(
             dir.join("worker.log"),
         )?));
-    let memory = limits.memory_bytes;
+    #[cfg(target_os = "linux")]
+    let address_space = limits.address_space_bytes.unwrap_or(limits.memory_bytes);
     let cpu = limits.timeout_seconds;
     // Headroom above the checked output limit so oversized results fail with a clean error from
     // the size check instead of SIGXFSZ during the atomic temp write.
@@ -4410,14 +4420,13 @@ pub fn worker_command(
             #[cfg(target_os = "linux")]
             {
                 let lim = libc::rlimit {
-                    rlim_cur: memory as libc::rlim_t,
-                    rlim_max: memory as libc::rlim_t,
+                    rlim_cur: address_space as libc::rlim_t,
+                    rlim_max: address_space as libc::rlim_t,
                 };
                 if libc::setrlimit(libc::RLIMIT_AS, &lim) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
             }
-            let _ = memory;
             Ok(())
         });
     }
