@@ -22,7 +22,7 @@ pub(crate) fn informational_warning(message: &str) -> bool {
         || message.starts_with("Poppler reading order and text geometry retained")
 }
 
-fn provider_name(source: &str) -> String {
+pub(crate) fn provider_name(source: &str) -> String {
     let lower = source.to_ascii_lowercase();
     if lower.contains("tesseract") {
         "tesseract".into()
@@ -30,6 +30,8 @@ fn provider_name(source: &str) -> String {
         "apple_vision".into()
     } else if lower.contains("smoldocling") {
         "smoldocling".into()
+    } else if lower.contains("ocria") {
+        "ocria".into()
     } else {
         source.to_owned()
     }

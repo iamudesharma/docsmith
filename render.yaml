@@ -1,0 +1,22 @@
+# Render Blueprint: one always-current image of the extractor on the free plan.
+# Sync this repository in Render (New > Blueprint). Every push to the linked branch
+# rebuilds and redeploys the service automatically.
+services:
+  - type: web
+    name: doc-extractor
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile.render
+    dockerContext: .
+    healthCheckPath: /health/ready
+    autoDeployTrigger: commit
+    envVars:
+      # JSON map of bearer token -> tenant. Render prompts for it on first sync.
+      # Example: {"a7f3...":"app-a","c91d...":"app-b"}
+      - key: DOC_TOKENS
+        sync: false
+      - key: RUST_LOG
+        value: doc_extractor=info
+      - key: DOC_OCR_DPI
+        value: "150"

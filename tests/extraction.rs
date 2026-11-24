@@ -363,6 +363,7 @@ fn mixed_pdf_ocr_routes_images_and_suppresses_hidden_layer() {
     }
     let options = Options {
         ocr: true,
+        ocr_provider: "tesseract".into(),
         ..Default::default()
     };
     let d = fixture("mixed.pdf", options.clone());
@@ -386,6 +387,7 @@ fn image_needs_ocr_and_missing_language_is_partial() {
         "scan.png",
         Options {
             ocr: true,
+            ocr_provider: "tesseract".into(),
             languages: "unprovisioned".into(),
             ..Default::default()
         },
@@ -412,6 +414,37 @@ fn schema_has_required_contract() {
     assert!(spec["paths"]["/v1/extractions/{id}/cancel"].is_object());
 }
 
+/// OCRia-nano-1 is optional external tooling; the test only runs when `lit` with the pulled
+/// models is actually installed, like the Tesseract-gated cases above.
+#[test]
+fn ocria_nano_reads_scan_with_placed_boxes() {
+    if doc_extractor::providers::ocria_status()["available"] != serde_json::json!(true) {
+        return;
+    }
+    let out = doc_extractor::providers::ocr_blocks(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/scan.png"),
+        &Options {
+            ocr: true,
+            ..Default::default()
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let text = out
+        .blocks
+        .iter()
+        .map(|b| b.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(text.contains("Invoice"), "{text:?}");
+    for block in &out.blocks {
+        assert!(block.provenance.source.contains("OCRia-nano-1"));
+        let bounds = block.provenance.bounds.as_ref().expect("placed text");
+        assert!(bounds.x >= 0. && bounds.y >= 0.);
+        assert!(bounds.x + bounds.width <= 1200. && bounds.y + bounds.height <= 360.);
+    }
+}
+
 #[test]
 fn right_angle_ocr_maps_to_original_coordinates() {
     if !doc_extractor::providers::available("tesseract") {
@@ -421,6 +454,7 @@ fn right_angle_ocr_maps_to_original_coordinates() {
         "rotated.png",
         Options {
             ocr: true,
+            ocr_provider: "tesseract".into(),
             ..Default::default()
         },
     );
@@ -802,6 +836,7 @@ fn page_images_all_reuse_the_ocr_render() {
         dir.path(),
         Options {
             ocr: true,
+            ocr_provider: "tesseract".into(),
             page_images: "all".into(),
             // Page 2 is sparse and has no embedded image, so it exercises the OCR render path.
             pages: Some("2".into()),
@@ -1269,6 +1304,7 @@ fn sparse_text_pages_render_for_ocr_without_duplicating_native_text() {
     let dir = tempfile::tempdir().unwrap();
     let options = Options {
         ocr: true,
+        ocr_provider: "tesseract".into(),
         ..Default::default()
     };
     let limits = Limits {
@@ -1575,6 +1611,7 @@ fn oversized_ocr_images_are_downscaled_with_box_mapping() {
     .unwrap();
     let options = Options {
         ocr: true,
+        ocr_provider: "tesseract".into(),
         ..Default::default()
     };
     // scan.png is 1200x360 (432k pixels); 300k forces a downscale for OCR.
@@ -1626,6 +1663,7 @@ fn tesseract_words_are_grouped_into_readable_lines() {
         &path,
         &Options {
             ocr: true,
+            ocr_provider: "tesseract".into(),
             ..Default::default()
         },
         &Limits {
@@ -1666,6 +1704,7 @@ fn scanned_table_pages_promote_printed_grids_to_structured_tables() {
         dir.path(),
         Options {
             ocr: true,
+            ocr_provider: "tesseract".into(),
             languages: "eng+hin".into(),
             pages: Some("1".into()),
             ..Options::default()
@@ -1753,6 +1792,7 @@ fn refinement_recovers_formulas_stamps_and_cardinality() {
         dir.path(),
         Options {
             ocr: true,
+            ocr_provider: "tesseract".into(),
             languages: "eng+hin".into(),
             ocr_auto_rotate: true,
             pages: Some("3,5,6".into()),

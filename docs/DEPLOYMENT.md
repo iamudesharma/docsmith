@@ -12,6 +12,24 @@ tesseract --list-langs          # must list eng and hin
 # request OCR with {"languages":"eng+hin"}
 ```
 
+The default OCR backend is OCRia-nano-1, provisioned once through LiteParse (the weights are a
+detector/recogniser pipeline, not a standalone script):
+
+```sh
+pip install liteparse                 # or: npm i -g @llamaindex/liteparse / cargo install liteparse
+lit models pull ocria-nano            # ~75 MB incl. ONNX Runtime; verifies pinned sha256
+which lit                             # or set DOC_OCRIA=/absolute/path/to/lit
+# {"ocr":true} now uses OCRia; add "ocr_provider":"tesseract" to force the baseline
+```
+
+Models live in LiteParse's own cache (`~/.cache/liteparse/models`), never in the service data
+directory, and extraction never downloads them: a missing `lit` or unpulled models produce a
+warning and fall back to Tesseract. `GET /v1/capabilities` reports `ocr.ocria_nano.available`,
+`models_pulled` and the resolved executable/version. The weights have their own model licence
+(free for research/personal/small-organisation use; a commercial licence is required above its
+revenue/funding thresholds and for competing document-parsing products) — review it before
+shipping the default to customers.
+
 Training data licensing and checksums are listed in the vendor manifest.
 
 Build Apple Vision with `scripts/build-apple-vision.sh`, then export its absolute executable path as `DOC_APPLE_VISION`. The helper queries supported languages and rejects unsupported selections. It uses a CPU request and a decoded CGImage, avoiding observed local Vision GPU execution errors. Apple SDK/platform terms apply; this helper is unavailable on Linux.
@@ -72,6 +90,11 @@ The actual test host is **MacBookAir10,1, M1, 8 GB**, not the brief's M1 Pro 16 
   }
 }
 ```
+
+`memory_bytes` caps the sampled resident memory of each worker process tree. On Linux,
+`address_space_bytes` optionally overrides the per-process virtual address-space ceiling, which
+otherwise uses `memory_bytes`. Set both independently when a provider needs larger virtual
+mappings. Size worker concurrency against the container's total memory budget.
 
 ## Large inputs
 
